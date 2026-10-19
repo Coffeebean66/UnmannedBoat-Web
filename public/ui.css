@@ -1,0 +1,146 @@
+/* 设置页和响应式布局。基础组件颜色随styles.css主题变量切换。 */
+.modal-open{overflow:hidden}
+dialog{width:min(960px,calc(100% - 48px));max-width:none;max-height:90dvh;padding:0;border:1px solid var(--line);border-radius:16px;background:var(--panel);color:var(--text);box-shadow:0 30px 100px #071b3e40;overflow:hidden}
+dialog[open]{display:flex;flex-direction:column}
+dialog::backdrop{background:#0a1d3375;backdrop-filter:blur(4px)}
+.dialog-head{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:22px 26px;border-bottom:1px solid var(--line);flex:none}
+.dialog-head .card-icon{height:42px;width:42px}
+.dialog-head h2{font-size:19px;font-weight:650}
+.dialog-head .eyebrow{font-size:9px;margin-bottom:3px}
+.dialog-head button svg{height:15px;width:15px}
+.dialog-scroll{overflow:auto;padding:22px 26px;overscroll-behavior:contain;min-height:0}
+.settings-intro{padding:15px 18px;background:var(--soft);border:1px solid var(--line);border-radius:10px}
+.workflow{display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--text)}
+.workflow>span{display:flex;align-items:center;gap:6px}
+.workflow b{font-size:9px;background:var(--accent-soft);color:var(--accent);border-radius:5px;padding:3px 6px}
+.workflow i{font-style:normal;color:var(--faint)}
+.settings-intro p{font-size:10px;color:var(--muted);margin-top:10px}
+#parameterStatus{margin:14px 0 20px;font-size:12px;padding:12px 14px;border-radius:8px;border:1px solid var(--line);background:var(--soft);color:var(--muted);line-height:1.7}
+#parameterStatus[data-tone=success]{color:var(--success);background:var(--success-bg)}
+#parameterStatus[data-tone=danger]{color:var(--danger);background:var(--danger-bg)}
+#parameterStatus[data-tone=warning]{color:var(--warn);background:var(--warn-bg)}
+.parameter-fields{display:grid;gap:23px}
+.parameter-group{min-width:0;margin:0;padding:0;border:0}
+.parameter-group legend{display:flex;align-items:center;gap:8px;width:100%;font-size:13px;font-weight:650;padding:0;margin-bottom:11px}
+.parameter-group legend span{font-size:9px;font-weight:500;color:var(--faint);padding:2px 5px;background:var(--soft);border:1px solid var(--line);border-radius:4px}
+.parameter-group-note{font-size:11px;color:var(--muted);margin:-3px 0 12px}
+.parameter-group-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.parameter-field{display:grid;grid-template-columns:minmax(0,1fr) 105px;align-items:center;gap:8px 12px;border:1px solid var(--line);border-radius:8px;padding:13px;background:var(--panel)}
+.parameter-field>span{font-size:12px;font-weight:550;color:var(--text)}
+.parameter-field input,.parameter-field select{min-width:0;width:100%;border:1px solid var(--line-strong);padding:7px 8px;background:var(--soft);color:var(--text);font-size:12px;border-radius:6px;font-variant-numeric:tabular-nums}
+.parameter-field small{grid-column:1/-1;font-size:10px;line-height:1.65;color:var(--muted);overflow-wrap:anywhere}
+.parameter-field input:disabled,.parameter-field select:disabled{opacity:.55}
+.preset-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:28px 0 14px}
+.preset-heading h3{font-size:14px;margin-bottom:4px}
+.preset-heading .muted{font-size:11px}
+#presets{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.preset{border:1px solid var(--line);border-radius:10px;padding:15px;background:var(--soft);min-width:0}
+.preset-heading-line{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;font-weight:600;margin-bottom:6px}
+.preset-badge{font-size:9px;font-weight:500;color:var(--muted)}
+.preset.saved .preset-badge{color:var(--success)}
+.preset>small{display:block;font-size:10px;color:var(--muted);margin-bottom:15px;overflow-wrap:anywhere}
+.preset .button-row{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.preset .small-button{padding:6px 7px;font-size:10px}
+.export-actions{display:flex;gap:8px;flex-wrap:wrap;margin:22px 0 4px}
+.export-actions svg{width:15px;height:15px}
+.help-box{margin-top:18px;border-top:1px solid var(--line);padding-top:16px}
+.help-box p{font-size:12px;color:var(--muted);line-height:1.8;margin:10px 0}
+.help-box strong{color:var(--text);font-size:12px}
+.help-box details{border-bottom:1px solid var(--line);padding:9px 0;font-size:12px}
+.help-box summary{cursor:pointer}
+.dialog-actions{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:17px 26px;border-top:1px solid var(--line);background:var(--panel);box-shadow:0 -4px 20px #173b4c05;flex:none}
+.dialog-actions .button-row{justify-content:flex-end}
+@media(min-width:1600px){
+  .page{padding:38px 44px}.topbar{padding-left:44px;padding-right:44px}.grid{gap:24px}
+  .metric-main strong{font-size:48px}.card{padding:26px}.speed-card{padding-top:25px}
+  #map{height:320px}.chart-card canvas{height:310px}#boatCanvas{height:340px}
+}
+@media(max-width:1250px){
+  .sidebar{width:190px;padding-left:12px;padding-right:12px}.app-shell{margin-left:190px}
+  .brand{font-size:15px;gap:8px}.brand-mark{width:34px;height:38px}.brand-caption{font-size:8px}
+  .page{padding:24px}.topbar{padding:14px 24px}.breadcrumb strong,.breadcrumb i{display:none}
+  .hero{align-items:flex-start}.hero-stats>div{padding:0 13px;min-width:85px}.hero-stats strong{font-size:15px}
+  .card{padding:18px}.speed-card{padding-top:17px}.grid{gap:16px}
+  .metric-card .card-title{gap:10px;margin-bottom:18px}.metric-card .state{max-width:none}
+  .metric-main strong{font-size:36px}.card-title h2{font-size:13px}.card-icon{width:29px;height:29px}
+  .attitude-values{gap:5px}.attitude-values b{font-size:19px}.attitude-values span{font-size:8px}
+  .motor-dial,.motor-dial svg{width:72px;height:72px}.motor-main{gap:12px}.motor-values b{font-size:14px}
+  .wide-grid,.lower-grid{grid-template-columns:1fr 1fr}
+  .connection-route{padding:12px 10px;gap:4px}.connection-route span{font-size:10px}
+}
+@media(max-width:1050px){
+  .sidebar{width:74px;padding:22px 10px}.app-shell{margin-left:74px}
+  .brand{padding:0;justify-content:center}.brand>span:last-child,.workspace-label,.side-nav a>span:not([data-icon]),.sidebar-bottom{display:none}
+  .side-nav{margin-top:30px;gap:9px}.side-nav a{padding:14px 0;justify-content:center}.side-nav a svg{width:21px;height:21px}
+  .hero-stats{padding:14px 0}.hero h1{font-size:26px}
+}
+@media(max-width:860px){
+  .topbar{padding:12px 20px}.breadcrumb{font-size:11px;gap:6px}.breadcrumb>[data-icon]{display:none}
+  .toolbar{gap:6px}.toolbar button{padding:7px 10px}.toolbar .icon-button{padding:8px}.toolbar .badge{font-size:9px}
+  .page{padding:24px 20px}.hero{flex-wrap:wrap;gap:18px}.hero-stats{width:100%}.hero-stats>div{flex:1;max-width:none;padding:0 20px}
+  .metrics{grid-template-columns:1fr 1fr}.metric-card:first-child{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;column-gap:24px}
+  .speed-card .card-title,.speed-card .meter,.speed-card .card-foot{grid-column:1/-1}
+  .speed-card .metric-main{margin-bottom:8px}.speed-targets{align-items:center}.speed-card .card-foot{margin-top:14px}
+  .wide-grid,.lower-grid{grid-template-columns:1fr}
+  .motor-values{grid-template-columns:1fr 1fr;gap:12px}.motor-values>div:nth-child(3){padding-left:0;border-left:0}
+  .motor-dial,.motor-dial svg{width:60px;height:60px}.motor-main{gap:8px}.motor-rpm strong{font-size:26px}
+  .motor-output strong{font-size:18px}.motor-output{font-size:9px}
+  #boatCanvas{height:340px}.settings-callout{margin-top:0}
+  #map{height:300px}.chart-card canvas{height:280px}
+}
+@media(max-width:620px){
+  html{scroll-padding-top:115px}.sidebar{display:none}.app-shell{margin:0}
+  .topbar{position:relative;flex-wrap:wrap;padding:16px;gap:13px}
+  .breadcrumb{font-size:15px;font-weight:650;color:var(--text)}.breadcrumb>[data-icon]{display:inline-flex;color:var(--accent)}.breadcrumb svg{width:21px;height:21px}
+  .toolbar{width:100%;gap:7px;flex-wrap:wrap}.toolbar .icon-button{position:absolute;right:15px;top:12px}
+  .toolbar button{font-size:11px;min-height:35px;padding:7px 10px}.toolbar .badge{margin-right:auto;padding:5px 7px}
+  .toolbar .settings-button svg{display:none}.toolbar .primary svg{width:15px;height:15px}
+  .mobile-nav{display:flex;position:sticky;top:0;z-index:15;background:var(--panel);border-bottom:1px solid var(--line);padding:0 16px;gap:4px;justify-content:space-between}
+  .mobile-nav a{font-size:12px;color:var(--muted);padding:13px 8px;text-decoration:none;border-bottom:2px solid transparent;white-space:nowrap}
+  .mobile-nav a.active{color:var(--accent);border-bottom-color:var(--accent);font-weight:650}
+  .page{padding:24px 16px}.hero{margin-bottom:20px}.hero h1{font-size:25px;margin-top:5px}.hero .eyebrow{font-size:9px}
+  .hero-heading .muted{font-size:11px}.hero-stats{padding:13px 0}.hero-stats>div{padding:0 12px;min-width:0}.hero-stats strong{font-size:16px}.hero-stats span{font-size:9px}
+  .hero-stats span svg{display:none}.hero-stats>div:first-child{max-width:42%}
+  .metrics,.motors{grid-template-columns:1fr}.metric-card:first-child{display:flex;grid-column:auto}
+  .metric-main strong{font-size:43px}.metric-main{margin-top:3px;margin-bottom:15px}
+  .card{padding:20px}.speed-card{padding-top:19px}.card-title h2{font-size:14px}.card-icon{height:32px;width:32px}
+  .metric-card .card-title{flex-wrap:nowrap}.metric-card .state{max-width:48%;font-size:9px}
+  .metric-row{font-size:12px}.metric-row.small{font-size:10px}.coordinate-pair b{font-size:13px}
+  .attitude-values b{font-size:26px}.attitude-values span{font-size:10px}.attitude-values>div{padding:12px 10px}
+  .section-description{font-size:10px}.section-hint{display:none}.section-heading{margin:25px 0 13px}
+  .motor-values{grid-template-columns:repeat(4,minmax(0,1fr));gap:0}.motor-values>div:nth-child(3){padding-left:12px;border-left:1px solid var(--line)}
+  .motor-dial,.motor-dial svg{width:78px;height:78px}.motor-main{gap:14px}.motor-rpm strong{font-size:32px}.motor-output strong{font-size:23px}
+  .chart-card .card-title,.map-card .card-title{align-items:flex-start;gap:12px}.chart-card .button-row{margin-left:auto}
+  .chart-readouts b{font-size:15px}.chart-card canvas{height:235px}
+  .map-footer{font-size:9px}#map{height:270px}.map-controls{gap:10px}.map-controls .small-button{font-size:10px}
+  .track-legend{gap:4px}.track-legend>span{font-size:8px}
+  #boatCanvas{height:250px}.viewer-controls{gap:14px}.inline-controls{justify-content:space-between;width:100%}
+  .viewer-controls .button-row{width:100%;display:grid;grid-template-columns:repeat(3,1fr)}.viewer-controls .button-row button{padding:6px 7px;font-size:10px}
+  .connection-route{padding:15px}.connection-route span{font-size:11px}.diag-grid{gap:20px 14px}
+  .settings-callout{padding:12px;gap:8px}.settings-callout strong{font-size:11px}.settings-callout p{font-size:9px}
+  footer{font-size:9px;gap:8px;padding-top:22px}
+  dialog{width:calc(100% - 16px);max-height:94dvh;border-radius:12px}
+  .dialog-head{padding:16px;gap:10px}.dialog-head .card-icon{height:35px;width:35px}.dialog-head h2{font-size:17px}.dialog-head button{font-size:11px;padding:7px 10px}.dialog-head .eyebrow{font-size:8px}
+  .dialog-scroll{padding:16px}.settings-intro{padding:13px}.workflow{gap:7px;font-size:10px}.workflow i{display:none}.workflow b{padding:2px 5px}
+  .parameter-group-grid{grid-template-columns:1fr}.parameter-field{padding:12px}.parameter-field input,.parameter-field select{font-size:16px}
+  #presets{grid-template-columns:1fr}.preset{display:grid;grid-template-columns:1fr auto;gap:4px 8px;align-items:center;padding:13px}
+  .preset-heading-line{margin:0;justify-content:flex-start}.preset>small{margin:0;grid-column:1;grid-row:2}.preset .button-row{grid-column:2;grid-row:1/3}
+  .dialog-actions{flex-direction:column;align-items:stretch;padding:12px 16px;gap:9px}
+  .dialog-actions>.subtle{font-size:10px;min-height:28px;padding:4px}
+  .dialog-actions .button-row{display:grid;grid-template-columns:repeat(3,1fr)}.dialog-actions button{font-size:11px;padding:8px}
+  .export-actions{display:grid;grid-template-columns:1fr 1fr}.export-actions button{font-size:11px}.export-actions button:last-child{grid-column:1/-1}
+}
+@media(max-width:360px){
+  .toolbar{gap:5px}.toolbar button{padding:7px 8px;font-size:10px}.toolbar .badge{font-size:9px}
+  .mobile-nav{padding:0 12px;gap:0}.mobile-nav a{padding:12px 7px;font-size:11px}
+  .page{padding:20px 12px}.card{padding:16px}.speed-card{padding-top:15px}
+  .section-description{display:none}.card-title{gap:8px}.motor-main{gap:10px}.motor-dial,.motor-dial svg{width:64px;height:64px}
+  .motor-rpm strong{font-size:29px}.motor-values b{font-size:13px}.motor-values>div{padding-left:8px}.motor-values>div:nth-child(3){padding-left:8px}
+  .map-controls .switch-label{font-size:10px}.map-controls .button-row{gap:4px}
+  .attitude-values b{font-size:23px}.attitude-values span{font-size:9px}
+  .dialog-head .card-icon{display:none}.preset{grid-template-columns:1fr}.preset .button-row{grid-column:1;grid-row:3;margin-top:7px}
+}
+@media(prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  button,.meter i,.dial-value,.switch-track::after,.toast{transition:none}
+}
