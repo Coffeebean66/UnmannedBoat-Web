@@ -1,0 +1,5 @@
+/deployments/
+/.test-output/
+*.log
+*.pid
+node_modules/
