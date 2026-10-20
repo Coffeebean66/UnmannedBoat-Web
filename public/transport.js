@@ -10,6 +10,7 @@
     emit(name, detail) { this.dispatchEvent(new CustomEvent(name, {detail})); }
     get connected() { return !!(this.device?.gatt.connected && this.tx); }
     async connect() {
+      window.BoatAuth?.assertMonitor();
       if(this.busy || this.connected) return;
       if(!window.isSecureContext) throw Error('蓝牙需要 HTTPS 或本机 localhost 地址');
       if(!navigator.bluetooth) throw Error('当前浏览器不支持 Web Bluetooth，请使用支持蓝牙的 Chrome/Edge');
@@ -75,6 +76,7 @@
     async write(bytes, token, pending) {
       const rx=this.rx;
       for(let i=0;i<bytes.length;i+=20) {
+        window.BoatAuth?.assertManage();
         if(token!==this.generation||!this.connected||this.pending!==pending)throw Error('发送已取消');
         const chunk=bytes.slice(i,i+20);
         // 按特征实际属性选择写法，存在 API 方法不代表设备支持该写法。
@@ -85,7 +87,8 @@
         else throw Error('蓝牙特征不可写');
       }
     }
-    request(kind, values) {
+    async request(kind, values) {
+      if(window.BoatAuth)await window.BoatAuth.verifyManage();
       if(this.pending)return Promise.reject(Error('请等待当前参数操作完成'));
       if(!this.connected||!this.rx)return Promise.reject(Error('请先连接支持参数写入的设备'));
       const seq=this.sequence=(this.sequence+1)>>>0;
@@ -103,6 +106,7 @@
     }
     handleResponse(frame) {
       if(this.pending?.seq!==frame.requestSequence)return;
+      if(window.BoatAuth&&!window.BoatAuth.canManage){this.finish(Error('账户权限已变化，请重新登录管理员'));return;}
       this.finish(null,frame);
     }
     finish(error, frame) {

@@ -3,3 +3,10 @@
 *.log
 *.pid
 node_modules/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12

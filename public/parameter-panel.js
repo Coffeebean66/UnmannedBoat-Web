@@ -1,7 +1,7 @@
 /* 本地草稿、设备确认值、Flash 状态分别管理；遥测更新不重绘表单。 */
 class ParameterPanel {
   constructor(link, toast) {
-    this.link=link;this.toast=toast;this.confirmed=null;this.busy=false;
+    this.link=link;this.toast=toast;this.confirmed=null;this.localDraft=null;this.busy=false;
     this.config=window.BoatParameters;
     this.keys=Object.keys(this.config.ranges);
     this.storageKey='unmanned_boat_web_presets_v1';
@@ -74,20 +74,28 @@ class ParameterPanel {
   }
   fill(values) {this.inputs().forEach(el=>el.value=String(values[el.dataset.key]));}
   matches(values) {return this.confirmed&&this.keys.every(k=>values[k]===this.confirmed[k]);}
-  reset() {
-    this.confirmed=null;this.inputs().forEach(el=>el.value='');this.updateButtons();
-    this.status('请连接设备后点击“读取参数”','neutral');
+  reset(preserveDraft=false) {
+    if(preserveDraft&&this.confirmed){try{this.localDraft=this.form();}catch(_){this.localDraft={...this.confirmed};this.fill(this.localDraft);}}
+    this.confirmed=null;
+    if(!preserveDraft){this.localDraft=null;this.inputs().forEach(el=>el.value='');}
+    this.updateButtons();
+    this.status(this.link.readOnly?(this.link.parameterReadOnlyReason||'云端只读 · 请通过蓝牙操作设备参数；本地草稿可保存或导出'):this.link.source==='cloud'?'云端调参已就绪 · 点击“读取参数”获取设备确认值':'请连接设备后点击“读取参数”','neutral');
   }
   updateButtons() {
-    this.inputs().forEach(el=>el.disabled=this.busy||!this.confirmed);
-    for(const id of ['writeParameters','saveFlash'])document.getElementById(id).disabled=this.busy||!this.confirmed||!this.link.connected;
-    for(const id of ['fillTuning','exportParameters','copyParameters'])document.getElementById(id).disabled=this.busy||!this.confirmed;
-    document.getElementById('readParameters').disabled=this.busy||!this.link.connected;
+    const hasDraft=!!(this.confirmed||this.localDraft),readOnly=!!this.link.readOnly;
+    this.inputs().forEach(el=>el.disabled=this.busy||!hasDraft);
+    for(const id of ['writeParameters','saveFlash'])document.getElementById(id).disabled=readOnly||this.busy||!this.confirmed||!this.link.connected;
+    for(const id of ['exportParameters','copyParameters'])document.getElementById(id).disabled=this.busy||!hasDraft;
+    document.getElementById('fillTuning').disabled=readOnly||this.busy||!this.confirmed;
+    document.getElementById('readParameters').disabled=readOnly||this.busy||!this.link.connected;
     document.querySelectorAll('#presets button').forEach(el=>el.disabled=this.busy||
-      (el.dataset.action==='save'?!this.confirmed:!this.link.connected||!this.slots[Number(el.dataset.slot)]));
+      (el.dataset.action==='save'?!hasDraft:readOnly||!this.link.connected||!this.slots[Number(el.dataset.slot)]));
   }
   async command(kind, preset) {
+    window.BoatAuth?.assertManage();
+    if(this.link.readOnly)throw Error(this.link.parameterReadOnlyReason||'云端为只读监测，请切换蓝牙后读取、写入参数或操作 Flash');
     if(this.busy)throw Error('请等待当前操作完成');
+    const generation=this.link.generation;
     let values;
     if(kind!=='read') {
       if(!this.confirmed)throw Error('请先读取当前设备参数');
@@ -98,7 +106,10 @@ class ParameterPanel {
     this.busy=true;this.updateButtons();
     this.status(kind==='read'?'正在读取参数…':kind==='flash'?'正在写入 Flash，请保持供电…':'正在写入参数，等待 STM32 确认…',kind==='flash'?'warning':'neutral');
     try {
-      const frame=await this.link.request(kind,values),valid=this.valid(frame.parameters);
+      const frame=await this.link.request(kind,values);
+      // 云端单次令牌在下发时已消费；等待下个令牌不影响本次真实设备确认。
+      if(generation!==this.link.generation||(window.BoatAuth&&!window.BoatAuth.canManage))throw Error('连接已切换，请重新读取设备参数');
+      const valid=this.valid(frame.parameters);
       if(valid&&[0,1,3,4,5].includes(frame.status))this.confirmed={...frame.parameters};
       const errors={
         1:'参数被拒绝：超出设备安全范围',2:'设备不支持当前参数命令，请核对固件',
@@ -111,12 +122,18 @@ class ParameterPanel {
       this.fill(frame.parameters);
       this.status(kind==='flash'?'已保存到 Flash，下次上电自动恢复':kind==='read'?'读取成功 · 已载入20项设备参数':'写入成功 · 已在设备运行中生效，尚未写入 Flash','success');
     } catch(error) {
-      const tone=[3,5].includes(error.status)?'warning':'danger';
-      this.status(error.message,tone);throw error;
+      if(error.uncertain){
+        try{this.localDraft=this.form();}catch(_){if(this.confirmed)this.localDraft={...this.confirmed};}
+        this.confirmed=null;
+      }
+      const tone=error.uncertain||[3,5].includes(error.status)?'warning':'danger';
+      if(generation===this.link.generation&&(!window.BoatAuth||window.BoatAuth.canManage))this.status(error.message,tone);throw error;
     }
     finally {this.busy=false;this.updateButtons();}
   }
   tune() {
+    window.BoatAuth?.assertManage();
+    if(this.link.readOnly)throw Error(this.link.parameterReadOnlyReason||'请切换蓝牙后调整设备参数');
     if(!this.confirmed)throw Error('请先读取设备参数');
     // 建议只调整速度环，保留方向、差速、航向参数。
     this.fill({...this.form(),...this.config.tuning});
@@ -142,18 +159,20 @@ class ParameterPanel {
   async actSlot(i,action) {
     if(this.busy)throw Error('请等待当前参数操作完成');
     if(action==='save') {
-      if(!this.confirmed)throw Error('请先读取设备参数');
+      if(!this.confirmed&&!this.localDraft)throw Error('请先读取设备参数');
       const values=this.form(),next=this.slots.slice();next[i]={at:Date.now(),values};
       try{localStorage.setItem(this.storageKey,JSON.stringify(next));}catch(_){throw Error('浏览器本地存储不可用，预设未保存');}
       this.slots=next;this.renderSlots();this.updateButtons();this.status('已保存到浏览器预设 '+(i+1)+'；不代表已写入设备或 Flash','success');
     } else {
+      window.BoatAuth?.assertManage();
+      if(this.link.readOnly)throw Error(this.link.parameterReadOnlyReason||'云端为只读监测，请切换蓝牙后使用预设');
       const slot=this.slots[i];if(!slot||!this.valid(slot.values))throw Error('预设为空或无效');
       if(!this.confirmed)await this.command('read');
       this.fill(slot.values);await this.command('write',slot.values);
     }
   }
   exportText() {
-    if(!this.confirmed)throw Error('请先读取设备参数');
+    if(!this.confirmed&&!this.localDraft)throw Error('请先读取设备参数');
     const values=this.form();
     return BoatModules.parameterExport.formatParameterExport(values,!!this.matches(values)).replaceAll('小程序','网页');
   }
