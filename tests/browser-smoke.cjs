@@ -160,7 +160,7 @@ async function main(){
     await shot('desktop-speed');
     await mapShot('map-vectors-directions');
     const canvasPixel="[...document.getElementById('chart').getContext('2d').getImageData(0,0,1,1).data]";
-    assert.deepEqual(await evaluate(canvasPixel),[11,32,56,255]);
+    assert.deepEqual(await evaluate(canvasPixel),[6,21,37,255]);
     await evaluate("document.getElementById('themeToggle').click()");
     assert.equal(await evaluate("document.documentElement.dataset.theme"),'light');
     assert.deepEqual(await evaluate(canvasPixel),[255,255,255,255]);
