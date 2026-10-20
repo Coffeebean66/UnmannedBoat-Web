@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="zh-CN" data-theme="dark" data-account-state="pending">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -14,11 +14,14 @@
   <script defer src="utils-bundle.js"></script>
   <script defer src="parameter-data.js"></script>
   <script defer src="transport.js"></script>
+  <script defer src="account-auth.js"></script>
+  <script defer src="cloud-transport.js"></script>
   <script defer src="parameter-panel.js"></script>
   <script defer src="attitude-view.js"></script>
   <script defer src="ui.js"></script>
   <script defer src="map-velocity-view.js"></script>
   <script defer src="app.js"></script>
+  <script defer src="update-panel.js"></script>
 </head>
 <body>
   <a class="skip-link" href="#overview">跳到监测内容</a>
@@ -26,11 +29,13 @@
     <a class="brand" href="#overview"><span class="brand-mark" data-icon="boat"></span><span>无人船监测平台<span class="brand-caption">UNMANNED VESSEL MONITOR</span></span></a>
     <div class="topbar-context"><span class="title-dot"></span>航行监测中心<span class="topbar-divider"></span><time id="dashboardTime" aria-label="本地时间">--</time></div>
     <div class="toolbar">
+      <div id="accountControls" class="account-controls" hidden><span id="accountName" class="account-name" hidden></span><button id="accountLoginOpen" class="ghost">账户登录</button><button id="accountLogout" class="ghost" hidden>退出</button></div>
       <span id="connectionBadge" class="badge offline">未连接</span>
       <button id="connectButton" class="primary"><span data-icon="bluetooth"></span>选择蓝牙设备</button>
       <button id="disconnectButton" class="ghost" disabled>断开</button>
       <button id="themeToggle" class="icon-button" aria-label="切换到浅色主题" title="切换到浅色主题"><span data-icon="sun"></span></button>
       <button id="settingsToggle" class="settings-button"><span data-icon="settings"></span>设置</button>
+      <button id="updateToggle" class="update-button" aria-haspopup="dialog" aria-controls="updateDialog"><span data-icon="download"></span>更新<span id="updateBusyDot" class="update-busy-dot" hidden aria-label="正在更新"></span></button>
     </div>
   </header>
   <aside class="sidebar" aria-label="主导航">
@@ -44,15 +49,15 @@
       <a href="#diagnostics"><span data-icon="activity"></span><span>通信诊断</span><span class="nav-index">06</span></a>
     </nav>
     <section class="vessel-summary" aria-label="当前连接设备">
-      <div class="vessel-summary-heading">当前设备<span class="chip">T10</span></div>
+      <div class="vessel-summary-heading">当前设备<span id="sourceChip" class="chip">T10</span></div>
       <div class="vessel-emblem" data-icon="boat"></div>
-      <strong id="deviceName">--</strong><p>本地蓝牙 · 单船监测</p>
+      <strong id="deviceName">--</strong><p id="sourceDescription">本地蓝牙 · 单船监测</p>
       <dl><div><dt>有效数据帧</dt><dd id="frameCount">0</dd></div><div><dt>最近收帧</dt><dd id="linkAge">--</dd></div></dl>
     </section>
     <div class="sidebar-bottom">
-      <div class="side-note"><span data-icon="bluetooth"></span><div>本地蓝牙直连<p>T10 / 无人船电控</p></div></div>
+      <div id="sourceSideNote" class="side-note"><span data-icon="bluetooth"></span><div>本地蓝牙直连<p>T10 / 无人船电控</p></div></div>
       <button id="sidebarSettings" class="sidebar-setting"><span data-icon="settings"></span>参数设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.2.1</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.6.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -60,7 +65,19 @@
     <main class="page" id="overview" data-nav-section>
       <section class="hero">
         <div class="hero-heading"><h1>航行总览 <span>VESSEL OVERVIEW</span></h1><p id="connectionText" class="muted">连接 T10 蓝牙，开始查看无人船实时状态。</p></div>
-        <span class="hero-label"><span data-icon="radio"></span>本地实时监测 <i>/</i> WGS84</span>
+        <span id="heroSourceLabel" class="hero-label"><span data-icon="radio"></span>本地实时监测 <i>/</i> WGS84</span>
+      </section>
+      <div id="accountNotice" class="account-notice" hidden><span id="accountNoticeText">请登录后使用监测平台</span><div><button id="accountRetry" class="small-button" hidden>重试连接</button><button id="accountNoticeLogin" class="small-button primary">登录账户</button></div></div>
+      <section class="source-panel" aria-label="遥测数据源">
+        <label class="source-select">数据来源<select id="telemetrySource"><option value="bluetooth">本地蓝牙</option><option value="cloud">云端 MQTT</option></select></label>
+        <div id="cloudControls" class="cloud-controls" hidden>
+          <label class="cloud-device-label">无人船<select id="cloudDevice" aria-label="选择云端无人船"><option value="">等待设备列表</option></select></label>
+          <button id="cloudRefresh" class="small-button">刷新设备</button>
+          <button id="cloudLoginOpen" class="small-button">云端登录</button>
+          <button id="cloudLogout" class="small-button subtle" hidden>退出登录</button>
+          <span id="cloudStatus" class="muted" role="status">正在检查服务器配置…</span>
+        </div>
+        <p id="sourceHint" class="muted">蓝牙可查看遥测并调整参数；管理员可对支持云端调参的无人船远程设置参数。</p>
       </section>
       <section class="grid metrics" aria-label="关键航行数据">
         <article class="card kpi-card speed-card">
@@ -152,7 +169,7 @@
         <article id="diagnostics" class="card diagnostics-card" data-nav-section>
           <div class="card-title"><div class="title-with-icon"><span class="card-icon neutral" data-icon="activity"></span><h2>通信诊断</h2></div><span id="sbusStatus" class="state">遥控 --</span></div>
           <div class="diagnostics-body">
-          <div class="connection-route"><span><i data-icon="monitor"></i>浏览器</span><b>↔</b><span><i data-icon="bluetooth"></i>T10</span><b>↔</b><span><i data-icon="boat"></i>无人船</span></div>
+          <div id="connectionRoute" class="connection-route"><span><i data-icon="monitor"></i>浏览器</span><b>↔</b><span><i data-icon="bluetooth"></i>T10</span><b>↔</b><span><i data-icon="boat"></i>无人船</span></div>
           <div class="diag-grid">
             <span>解析帧<b id="parsedFrames">0</b></span><span>CRC 错误<b id="crcErrors">0</b></span>
             <span>缓存字节<b id="bufferedBytes">0</b></span><span>接收字节<b id="bytesReceived">0</b></span>
@@ -162,12 +179,20 @@
           <div class="settings-callout"><span class="card-icon teal" data-icon="settings"></span><div><strong>电控参数设置</strong><p>20 项参数 · 3 组预设 · Flash 保存</p></div><button id="settingsEntry" class="icon-button" title="进入参数设置" aria-label="进入参数设置"><span data-icon="arrow"></span></button></div>
           </div>
         </article>
-      <footer><span>UNMANNED VESSEL MONITOR <b>/</b> 无人船监测平台</span><span>Web v1.2.1 · 本地蓝牙直连</span></footer>
+      <footer><span>UNMANNED VESSEL MONITOR <b>/</b> 无人船监测平台</span><span>本地蓝牙 · MQTT 云端监测与调参</span></footer>
     </main>
   </div>
+  <dialog id="accountLoginDialog" class="account-login-dialog" aria-labelledby="accountLoginTitle">
+    <form id="accountLoginForm">
+      <div class="dialog-head"><div><p class="eyebrow">PLATFORM ACCOUNT</p><h2 id="accountLoginTitle">登录无人船监测平台</h2></div><button id="accountLoginClose" type="button" class="ghost" aria-label="关闭账户登录窗口">关闭</button></div>
+      <div class="account-login-body"><p class="muted">管理员可监测、通过蓝牙或云端调参和更新平台；访客可查看实时监测。密码仅用于本次登录，不保存在浏览器中。</p><label>账户<input id="accountUsername" type="text" autocomplete="username" required maxlength="64"></label><label>密码<input id="accountPassword" type="password" autocomplete="off" required maxlength="256"></label><p id="accountLoginError" class="muted" role="alert"></p></div>
+      <div class="dialog-actions"><button id="accountLoginSubmit" class="primary" type="submit">登录</button></div>
+    </form>
+  </dialog>
   <dialog id="settingsDialog" aria-labelledby="settingsTitle">
     <div class="dialog-head"><div class="title-with-icon"><span class="card-icon teal" data-icon="sliders"></span><div><p class="eyebrow">VESSEL SETTINGS</p><h2 id="settingsTitle">参数设置</h2></div></div><button id="settingsClose" class="ghost">返回监控<span data-icon="close"></span></button></div>
     <div class="dialog-scroll">
+      <p id="cloudReadOnlyNotice" class="cloud-readonly" hidden>云端调参需要管理员账户和支持该功能的固件；操作结果以设备响应为准。</p>
       <div class="settings-intro"><div class="workflow"><span><b>1</b>读取当前参数</span><i>→</i><span><b>2</b>调整并写入</span><i>→</i><span><b>3</b>调好后存入 Flash</span></div><p>方向修改和 Flash 保存需 CH6 低档、两路停稳且反馈正常满 1 秒。</p></div>
       <p id="parameterStatus" role="status" data-tone="neutral">尚未读取设备参数</p>
       <div id="parameterFields" class="parameter-fields"></div>
@@ -177,6 +202,31 @@
       <div id="parameterHelp" class="help-box" hidden></div>
     </div>
     <div class="dialog-actions"><button id="fillTuning" class="subtle">填入 2.5 m/s 建议</button><div class="button-row"><button id="readParameters">读取参数</button><button id="writeParameters" class="primary">写入参数</button><button id="saveFlash">写入 Flash</button></div></div>
+  </dialog>
+  <dialog id="cloudLoginDialog" class="cloud-login-dialog" aria-labelledby="cloudLoginTitle">
+    <form id="cloudLoginForm">
+      <div class="dialog-head"><h2 id="cloudLoginTitle">登录云端监测</h2><button id="cloudLoginClose" type="button" class="ghost" aria-label="关闭">关闭</button></div>
+      <div class="cloud-login-body"><p class="muted">输入服务器设置的监测访问密码。密码仅用于本次登录，不保存在浏览器中。</p><label>访问密码<input id="cloudPassword" type="password" autocomplete="off" required maxlength="256"></label><p id="cloudLoginError" class="muted" role="alert"></p></div>
+      <div class="dialog-actions"><button id="cloudLoginSubmit" class="primary" type="submit">登录</button></div>
+    </form>
+  </dialog>
+  <dialog id="updateDialog" class="update-dialog" aria-labelledby="updateTitle" aria-describedby="updateIntro">
+    <div class="dialog-head"><div class="title-with-icon"><span class="card-icon blue" data-icon="download"></span><div><p class="eyebrow">PLATFORM UPDATE</p><h2 id="updateTitle">更新监测平台</h2></div></div><button id="updateClose" type="button" class="ghost" aria-label="关闭更新窗口">关闭<span data-icon="close"></span></button></div>
+    <div class="dialog-scroll update-body">
+      <p id="updateIntro" class="muted">安装已推送到 GitHub main 分支的最新代码，并自动重启当前服务器上的监测服务。本地修改须先提交并推送，才会出现在更新中。</p>
+      <div class="update-repository"><span class="chip">main</span><a href="https://github.com/Coffeebean66/UnmannedBoat-Web" target="_blank" rel="noopener noreferrer">Coffeebean66 / UnmannedBoat-Web<span aria-hidden="true"> ↗</span></a></div>
+      <p id="updateStatus" class="update-status" role="status" aria-live="polite" data-tone="neutral">正在检查服务器更新配置…</p>
+      <form id="updateLoginForm" class="update-login" hidden>
+        <h3>管理员验证</h3><p class="muted">请输入服务器的更新管理密码，与云端监测访问密码独立。密码不会保存在浏览器中。</p>
+        <div class="update-login-row"><label for="updatePassword">更新管理密码<input id="updatePassword" type="password" autocomplete="off" maxlength="256" required></label><button id="updateLoginSubmit" class="primary" type="submit">登录</button></div>
+      </form>
+      <div id="updateDetails" hidden>
+        <dl class="update-versions"><div><dt>当前版本</dt><dd id="updateCurrentVersion">--</dd><span id="updateCurrentCommit" class="update-commit">尚未读取提交</span></div><div><dt>GitHub 最新提交</dt><dd id="updateLatestCommit">尚未检查</dd><span id="updateLatestVersion" class="update-commit">点击检查更新</span></div></dl>
+        <div id="updateProgress" class="update-progress" hidden><div class="update-progress-heading"><strong id="updatePhase">准备更新</strong><span id="updateJobState" class="chip">等待</span></div><div id="updateProgressTrack" class="update-progress-track" aria-hidden="true"><i></i></div><p id="updateJobMessage" class="muted"></p></div>
+        <p class="update-restart-note">更新并重启时，网页监控会短暂断开。任务在服务器后台继续，关闭窗口不会中止更新。</p>
+      </div>
+    </div>
+    <div class="dialog-actions update-actions"><button id="updateLogout" class="subtle" hidden>退出管理员</button><div class="button-row"><button id="updateCheck">检查更新</button><button id="updateStart" class="primary" disabled>更新并重启</button><button id="updateRefresh" class="primary" hidden>刷新到新版本</button></div></div>
   </dialog>
   <div id="toast" class="toast" role="status"></div>
   <noscript>请启用 JavaScript 后使用监测平台。</noscript>
