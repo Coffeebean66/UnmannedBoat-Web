@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="ui.css">
   <link rel="stylesheet" href="dashboard.css">
+  <link rel="stylesheet" href="artificial-horizon.css">
   <script defer src="vendor/leaflet/leaflet.js"></script>
   <script defer src="utils-bundle.js"></script>
   <script defer src="parameter-data.js"></script>
@@ -18,6 +19,7 @@
   <script defer src="cloud-transport.js"></script>
   <script defer src="parameter-panel.js"></script>
   <script defer src="attitude-view.js"></script>
+  <script defer src="artificial-horizon.js"></script>
   <script defer src="ui.js"></script>
   <script defer src="map-velocity-view.js"></script>
   <script defer src="app.js"></script>
@@ -57,7 +59,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="bluetooth"></span><div>本地蓝牙直连<p>T10 / 无人船电控</p></div></div>
       <button id="sidebarSettings" class="sidebar-setting"><span data-icon="settings"></span>参数设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.6.0</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.7.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -147,7 +149,14 @@
           </section>
           <section id="imuPanel" class="telemetry-panel" role="tabpanel" aria-labelledby="imuTab" tabindex="0" hidden>
             <div class="telemetry-status"><span id="imuStatus" class="state">等待数据</span><span>角度 deg · 角速度 rad/s</span></div>
-            <div class="attitude-values"><div><span>横滚 / Roll</span><b id="roll">--</b></div><div><span>俯仰 / Pitch</span><b id="pitch">--</b></div><div><span>偏航 / Yaw</span><b id="yaw">--</b></div></div>
+            <div class="imu-attitude">
+              <dl class="imu-euler-values" aria-label="IMU 欧拉角，单位度">
+                <div><dt><span>ROLL</span>横滚</dt><dd><b id="roll">--</b><small>°</small></dd></div>
+                <div><dt><span>PITCH</span>俯仰</dt><dd><b id="pitch">--</b><small>°</small></dd></div>
+                <div><dt><span>YAW</span>偏航</dt><dd><b id="yaw">--</b><small>°</small></dd></div>
+              </dl>
+              <div class="imu-horizon-panel"><div id="imuHorizon"></div><span class="imu-horizon-caption">人工地平仪</span></div>
+            </div>
             <dl class="telemetry-table gyro-table"><div><dt>X 角速度</dt><dd id="gyroX">--</dd></div><div><dt>Y 角速度</dt><dd id="gyroY">--</dd></div><div><dt>Z 角速度</dt><dd id="gyroZ">--</dd></div></dl>
             <div class="telemetry-meta"><span>序号 <b id="imuSequence">--</b></span><span>年龄 <b id="imuAge">--</b></span><span>时间 <b id="imuAlignment">--</b></span><span>航向 <b id="imuHeadingUpdate">--</b></span></div>
           </section>

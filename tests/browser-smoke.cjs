@@ -32,7 +32,7 @@ const mock='('+function(){
     for(const base of [14,38]){f.b[base]=7;f.b[base+1]=32;f.v.setUint16(base+2,2450,true);f.v.setUint16(base+4,1230,true);f.v.setUint32(base+12,1500,true);f.v.setUint32(base+8,10500,true);f.v.setInt16(base+18,120,true);f.v.setUint16(base+20,10,true);}f.finish();
     f=frame(2,40,2,3,seq);f.v.setInt16(14,Math.round((o.x??1.5)*1000),true);f.v.setInt16(16,Math.round((o.y??.4)*1000),true);f.v.setUint16(20,20,true);f.v.setInt32(26,311234567+seq*160,true);f.v.setInt32(30,1217654321,true);f.v.setUint16(34,Math.round((o.rtkHeading??359)*100),true);f.b[36]=o.rtkFlags??15;if(!o.skipVelocity)f.finish();
     f=frame(3,36,2,47,seq);f.v.setInt16(14,Math.round((o.target??1.8)*1000),true);f.v.setUint16(16,1552,true);f.v.setInt16(18,120,true);f.v.setUint16(20,20,true);f.v.setInt16(22,2000,true);f.v.setUint16(26,Math.round((o.targetHeading??1)*100),true);f.v.setUint16(28,Math.round((o.actualHeading??359)*100),true);f.v.setInt16(30,200,true);f.b[32]=o.mode??2;f.b[33]=o.headingFlags??3;if(!o.skipBoat)f.finish();
-    f=frame(4,36,1,3,seq);f.v.setInt16(14,120,true);f.v.setInt16(20,600,true);f.v.setInt16(22,-400,true);f.v.setInt16(24,3200,true);f.v.setUint16(26,20,true);f.b[32]=127;f.finish();
+    f=frame(4,36,1,3,seq);f.v.setInt16(14,120,true);f.v.setInt16(20,Math.round((o.roll??6)*100),true);f.v.setInt16(22,Math.round((o.pitch??-4)*100),true);f.v.setInt16(24,Math.round((o.yaw??32)*100),true);f.v.setUint16(26,o.imuAge??20,true);f.b[32]=o.imuFlags??127;if(!o.skipImu)f.finish();
   };
   window.startTelemetry=()=>{feedTelemetry();window.telemetryTimer=setInterval(feedTelemetry,100);};window.stopTelemetry=()=>clearInterval(telemetryTimer);
 }.toString()+')();';
@@ -64,6 +64,8 @@ async function main(){
     await send('Runtime.enable');await send('Page.enable');await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
     await send('Page.addScriptToEvaluateOnNewDocument',{source:mock});await send('Page.navigate',{url:'http://127.0.0.1:'+server.address().port});
     await until('!!window.boatMonitor && !!window.boatMonitor.viewer.renderer');assert.deepEqual(errors,[]);
+    assert.deepEqual(await evaluate("(()=>{const h=document.getElementById('imuHorizon');return {valid:h.dataset.valid,state:h.dataset.state,roll:h.dataset.roll,pitch:h.dataset.pitch};})()"),
+      {valid:'false',state:'waiting',roll:'--',pitch:'--'},'Initial neutral horizon is explicitly invalid before IMU data arrives');
     assert.equal(await evaluate("document.documentElement.dataset.theme"),'dark','Monitoring dashboard starts in dark mode');
     assert.equal(await evaluate("(()=>{const ids=[...document.querySelectorAll('[id]')].map(el=>el.id);return new Set(ids).size===ids.length;})()"),true,'Dashboard element IDs remain unique after rearranging panels');
     const assertDesktopLayout=async width=>{
@@ -100,8 +102,43 @@ async function main(){
       assert.deepEqual(await evaluate("['rtkTab','imuTab'].map(id=>document.getElementById(id).getAttribute('aria-selected'))"),[String(!imu),String(imu)],'Telemetry tab selection is exposed to assistive technology');
       assert.deepEqual(await evaluate("['rtkTab','imuTab'].map(id=>document.getElementById(id).tabIndex)"),imu?[-1,0]:[0,-1],'Only the selected telemetry tab is in the keyboard tab sequence');
     };
+    const assertImuLayout=async width=>{
+      const layout=await evaluate("(()=>{const values=document.querySelector('.imu-euler-values').getBoundingClientRect(),horizon=document.getElementById('imuHorizon').getBoundingClientRect(),svg=document.querySelector('#imuHorizon svg').getBoundingClientRect(),panel=document.getElementById('imuPanel').getBoundingClientRect();return {values:{left:values.left,right:values.right,top:values.top,bottom:values.bottom},horizon:{left:horizon.left,right:horizon.right,top:horizon.top,bottom:horizon.bottom},svg:{width:svg.width,height:svg.height},panel:{left:panel.left,right:panel.right},overflow:document.documentElement.scrollWidth>innerWidth};})()");
+      console.log('IMU layout '+width+': '+JSON.stringify(layout));
+      assert.ok(layout.values.right<=layout.horizon.left+1,'Euler readings stay on the left of the horizon at '+width);
+      assert.ok(layout.horizon.top<layout.values.bottom&&layout.horizon.bottom>layout.values.top,'Euler readings and horizon share the same row at '+width);
+      assert.ok(Math.abs(layout.svg.width-layout.svg.height)<.5,'Artificial horizon retains a circular aspect at '+width);
+      assert.ok(layout.svg.width>=100,'Artificial horizon remains readable at '+width);
+      assert.ok(layout.horizon.right<=layout.panel.right+1&&layout.values.left>=layout.panel.left-1,'IMU content fits its panel at '+width);
+      assert.equal(layout.overflow,false,'IMU page has no horizontal overflow at '+width);
+      assert.equal(await evaluate("[...document.querySelectorAll('.imu-euler-values dd')].every(row=>row.scrollWidth<=row.clientWidth&&row.lastElementChild.getBoundingClientRect().right<=row.getBoundingClientRect().right+1)"),true,'Euler numbers and degree units fit their left column at '+width);
+    };
+    const override=async values=>{await evaluate('window.telemetryOverrides='+JSON.stringify(values)+';feedTelemetry()');await wait(230);};
+    const horizonPose=()=>evaluate("(()=>{const host=document.getElementById('imuHorizon');return {valid:host.dataset.valid,state:host.dataset.state,roll:host.querySelector('.ah-roll-disc').getAttribute('transform'),pitch:host.querySelector('.ah-pitch-disc').getAttribute('transform')};})()");
     await assertTelemetryTab('rtk');
-    await evaluate("document.getElementById('imuTab').click()");await assertTelemetryTab('imu');await shot('desktop-imu');
+    await evaluate("document.getElementById('imuTab').click()");await assertTelemetryTab('imu');await assertImuLayout(1440);await shot('desktop-imu');
+    await override({roll:13,pitch:9,yaw:45});
+    assert.deepEqual(await horizonPose(),{valid:'true',state:'live',roll:'rotate(-13 120 120)',pitch:'translate(0 -18)'},'Live horizon follows the X-forward/Y-left/Z-up roll and pitch convention');
+    assert.deepEqual(await evaluate("['roll','pitch','yaw'].map(id=>document.getElementById(id).textContent)"),['13.00','9.00','45.00'],'Left column shows live roll, pitch and yaw');
+    const beforeYaw=await horizonPose();await override({roll:13,pitch:9,yaw:-145});
+    assert.deepEqual(await horizonPose(),beforeYaw,'Yaw changes update the number without rotating the artificial horizon');
+    assert.equal(await evaluate("document.getElementById('yaw').textContent"),'-145.00');
+    await override({roll:16,pitch:8,yaw:-21,imuFlags:95});
+    assert.equal((await horizonPose()).valid,'true','Fresh Euler angles remain usable when only the gyro validity bit is clear');
+    assert.equal(await evaluate("document.getElementById('gyroX').textContent"),'--');
+    const lastValid=await horizonPose();
+    await override({roll:-20,pitch:-15,imuFlags:63});
+    assert.deepEqual(await horizonPose(),{...lastValid,valid:'false',state:'stale'},'Invalid Euler angles freeze the last valid disc');
+    assert.equal(await evaluate("document.getElementById('roll').textContent"),'--');
+    assert.match(await evaluate("document.querySelector('#imuHorizon .ah-status').textContent"),/欧拉角无效.*保持最后姿态/);
+    await override({roll:-35,pitch:-25,imuAge:1000});
+    assert.deepEqual(await horizonPose(),{...lastValid,valid:'false',state:'stale'},'Expired source data cannot overwrite the last valid pose');
+    assert.match(await evaluate("document.querySelector('#imuHorizon .ah-status').textContent"),/过期.*保持最后姿态/);
+    await override({roll:-179.99,pitch:-89.99,yaw:-179.99});await assertImuLayout(1440);
+    await override({});const beforeMissingImu=await horizonPose();
+    await override({skipImu:true});await wait(1100);
+    assert.deepEqual(await horizonPose(),{...beforeMissingImu,valid:'false',state:'stale'},'A missing IMU stream expires while other telemetry continues');
+    await override({});
     await evaluate("document.getElementById('rtkTab').click()");await assertTelemetryTab('rtk');
     for(const [from,key,selected] of [['rtk','ArrowRight','imu'],['imu','ArrowRight','rtk'],['rtk','ArrowLeft','imu'],['imu','Home','rtk'],['rtk','End','imu']]){
       await evaluate('document.getElementById('+JSON.stringify(from+'Tab')+').dispatchEvent(new KeyboardEvent("keydown",{key:'+JSON.stringify(key)+',bubbles:true,cancelable:true}))');
@@ -116,7 +153,6 @@ async function main(){
     assert.equal(await evaluate(vector('target')+'.dataset.bearing'),'1');
     assert.ok(Math.abs(await evaluate('Number('+vector('actual')+'.dataset.bearing)')-75.06858282186246)<1e-8,'Actual direction follows east/north speed, not bow heading');
     assert.ok(Math.abs(await evaluate('Number('+vector('actual')+'.dataset.length)')-Math.hypot(1.5,.4)*28)<1e-8);
-    const override=async values=>{await evaluate('window.telemetryOverrides='+JSON.stringify(values)+';feedTelemetry()');await wait(230);};
     await evaluate("document.getElementById('mapVectorsToggle').click()");await until("!document.querySelector('.map-velocity-anchor')");
     assert.equal(await evaluate("document.getElementById('mapVectorsToggle').getAttribute('aria-pressed')"),'false');
     assert.equal(await evaluate("document.getElementById('mapVectorReadouts').hidden"),true);
@@ -164,7 +200,9 @@ async function main(){
     await evaluate("document.getElementById('themeToggle').click()");
     assert.equal(await evaluate("document.documentElement.dataset.theme"),'light');
     assert.deepEqual(await evaluate(canvasPixel),[255,255,255,255]);
-    await shot('desktop-light');await evaluate("document.getElementById('themeToggle').click()");
+    await shot('desktop-light');
+    await evaluate("document.getElementById('imuTab').click()");await assertImuLayout(1440);await shot('light-imu');
+    await evaluate("document.getElementById('rtkTab').click();document.getElementById('themeToggle').click()");
     await evaluate("document.getElementById('settingsToggle').click();document.getElementById('readParameters').click()");await until('!!boatMonitor.params.confirmed && !boatMonitor.params.busy');
     assert.equal(await evaluate("document.getElementById('parameterStatus').dataset.tone"),'success');
     assert.equal(await evaluate("document.getElementById('toast').parentElement.id"),'settingsDialog');
@@ -204,7 +242,23 @@ async function main(){
       await evaluate("document.getElementById('settingsClose').click();startTelemetry()");await wait(250);await shot('mobile-live-'+width);
       assert.ok(await evaluate('Number('+vector('target')+'.dataset.length)')>0,'Velocity arrows visible at '+width);
       assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,'Live page overflow at '+width);
+      await evaluate("document.getElementById('imuTab').click();document.getElementById('imuPanel').scrollIntoView({block:'center',behavior:'instant'})");
+      await assertTelemetryTab('imu');await assertImuLayout(width);
+      if(width===375||width===320)await viewportShot('mobile-imu-'+width);
+      await override({roll:-179.99,pitch:-89.99,yaw:-179.99});await assertImuLayout(width);
       if(width===375||width===320){
+        await viewportShot('mobile-imu-extreme-'+width);
+        await override({skipImu:true});
+        await until("document.querySelector('#imuHorizon .ah-status').textContent.includes('转发链路超时')");
+        assert.equal(await evaluate("(()=>{const status=document.querySelector('#imuHorizon .ah-status');return status.scrollWidth<=status.clientWidth;})()"),true,'Long stale IMU status wraps without clipping at '+width);
+        await assertImuLayout(width);await viewportShot('mobile-imu-stale-'+width);
+      }
+      await override({});
+      await evaluate("document.getElementById('rtkTab').click()");
+      if(width===375||width===320){
+        // 上面的 IMU 面板滚动可能仍让 3D 局部可见，先离屏再验证重新进入视口的恢复绘制。
+        await evaluate('window.scrollTo(0,document.documentElement.scrollHeight)');
+        await until('!boatMonitor.viewer.visible');
         assert.equal(await evaluate('boatMonitor.viewer.settings.animation'),false,'Mobile viewport restores a frame while animation remains paused');
         await evaluate("(()=>{const renderer=boatMonitor.viewer.renderer;if(!window.testAttitudeOriginalDraw)window.testAttitudeOriginalDraw=renderer.draw.bind(renderer);window.testAttitudeFrames={draws:0,colors:0,nonBlack:0};renderer.draw=(...args)=>{testAttitudeOriginalDraw(...args);const gl=renderer.gl,pixels=new Uint8Array(renderer.canvas.width*renderer.canvas.height*4),colors=new Set();gl.readPixels(0,0,renderer.canvas.width,renderer.canvas.height,gl.RGBA,gl.UNSIGNED_BYTE,pixels);let nonBlack=0;for(let i=0;i<pixels.length;i+=64){colors.add(pixels[i]+','+pixels[i+1]+','+pixels[i+2]);if(pixels[i]||pixels[i+1]||pixels[i+2])nonBlack++;}testAttitudeFrames={draws:testAttitudeFrames.draws+1,colors:colors.size,nonBlack};};document.getElementById('boatCanvas').scrollIntoView({block:'center',behavior:'instant'});})()");
         await until('boatMonitor.viewer.visible && boatMonitor.viewer.fresh && !!boatMonitor.viewer.pose && testAttitudeFrames.draws>0');
@@ -218,6 +272,8 @@ async function main(){
     }
     await evaluate("document.getElementById('disconnectButton').click()");assert.equal(await evaluate('boatMonitor.link.connected'),false);
     assert.equal(await evaluate("!!document.querySelector('.map-velocity-anchor')"),false,'Disconnect clears arrows immediately');
+    assert.deepEqual(await horizonPose(),{valid:'false',state:'waiting',roll:'rotate(0 120 120)',pitch:'translate(0 0)'},'Disconnect clears the old horizon pose and returns to an invalid neutral view');
+    assert.equal(await evaluate("document.getElementById('imuHorizon').dataset.roll"),'--');
     await evaluate("document.getElementById('connectButton').click()");await until('boatMonitor.link.connected');await evaluate('feedTelemetry()');await wait(250);
     assert.equal(await evaluate("document.getElementById('parsedFrames').textContent"),'4','Reconnect has only one listener');assert.deepEqual(errors,[]);
     await evaluate("document.getElementById('disconnectButton').click();document.getElementById('themeToggle').click();document.getElementById('mapVectorsToggle').click()");
@@ -229,7 +285,7 @@ async function main(){
     assert.equal(await evaluate("!!document.querySelector('.map-velocity-anchor')"),false,'Hidden arrows stay hidden when new data arrives');
     await evaluate("document.getElementById('mapVectorsToggle').click()");await until("!!document.querySelector('.map-velocity-anchor')");
     assert.deepEqual(errors,[]);
-    console.log('PASS: browser/WebGL, BLE split frames, parameters/Flash rejection/timeout, grouped settings, preset/theme persistence, map velocity vectors/direction/scale/reverse/overlap/zero/stale/pan/zoom/hide persistence, primary desktop map layout, unique element IDs, RTK/IMU tabs and keyboard navigation, map empty state, themed charts, stale values, animation freeze and mobile viewport restoration, reconnect, 320/375/640/768/1024/1440/1920px.');
+    console.log('PASS: browser/WebGL, BLE split frames, parameters/Flash rejection/timeout, grouped settings, preset/theme persistence, map velocity vectors/direction/scale/reverse/overlap/zero/stale/pan/zoom/hide persistence, primary desktop map layout, unique element IDs, RTK/IMU tabs and keyboard navigation, IMU left-readings/right-horizon layout, fresh Euler pose/axis directions/yaw independence/gyro independence/invalid-source freezing/expiry/disconnect reset, map empty state, themed charts, stale values, animation freeze and mobile viewport restoration, reconnect, 320/375/640/768/1024/1440/1920px.');
     console.log('Screenshots: '+output);
   }finally{socket?.close();browser.kill();await new Promise(resolve=>server.close(resolve));}
 }

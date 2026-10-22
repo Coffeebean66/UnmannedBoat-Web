@@ -45,6 +45,23 @@ test('RTK/IMU源超时、断连不显示旧数据；轨迹保持WGS84且断流�
   track.record({...frame.velocity,latitude:31.2},5000,true);
   assert.equal(track.segments.length,2);
 });
+test('人工地平仪原始角度保留精度，欧拉角独立有效且失效时不产生零姿态',()=>{
+  const frame={imu:{received:true,fresh:true,ageMs:20,gyroValid:false,eulerValid:true,
+    gyroRadps:[0,0,0],rollDegrees:12.345,pitchDegrees:-6.789,yawDegrees:32.123}};
+  const display=prepareImuDisplay(frame,0,50,true);
+  assert.equal(display.eulerFresh,true);
+  assert.equal(display.gyroFresh,false);
+  assert.equal(display.roll,'12.35');
+  assert.deepEqual([display.rollDegrees,display.pitchDegrees,display.yawDegrees],[12.345,-6.789,32.123]);
+  for(const view of [prepareImuDisplay(frame,0,1000,true),prepareImuDisplay(frame,0,50,false),
+    prepareImuDisplay({imu:{...frame.imu,eulerValid:false}},0,50,true),
+    prepareImuDisplay({imu:{...frame.imu,pitchDegrees:NaN}},0,50,true)]){
+    assert.equal(view.eulerFresh,false);
+    assert.equal(view.pitch,'--');
+    assert.deepEqual([view.rollDegrees,view.pitchDegrees,view.yawDegrees],[null,null,null]);
+  }
+});
+
 test('航向跨359°→1°曲线走最短角度',()=>{
   const boat={received:true,feedbackValid:true,ageMs:0,controlMode:2,speedLoop:true,headingValid:true,sbusValid:true,motorsValid:true,targetMps:1,actualMps:1,requestedMps:1,commonPercent:10,turnPercent:2,targetHeading:1,actualHeading:359,headingError:2};
   const first=createBoatChartSample({boat},0,0,true);

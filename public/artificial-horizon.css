@@ -1,0 +1,50 @@
+/* IMU 专用布局：左侧原始欧拉角，右侧 SVG 人工地平仪。 */
+.imu-attitude { display:grid; grid-template-columns:minmax(100px,.82fr) minmax(0,1.55fr); align-items:center; gap:9px; margin:9px 0 8px; }
+.imu-euler-values { display:grid; gap:5px; min-width:0; }
+.imu-euler-values>div { min-width:0; padding:6px 8px; border:1px solid var(--line); border-radius:5px; background:var(--soft); }
+.imu-euler-values dt { display:flex; align-items:baseline; flex-wrap:wrap; gap:5px; color:var(--muted); font-size:8px; }
+.imu-euler-values dt span { color:var(--accent); font-size:9px; font-weight:600; letter-spacing:.08em; }
+.imu-euler-values dd { display:flex; align-items:baseline; gap:3px; min-width:0; margin-top:2px; }
+.imu-euler-values b { font-size:20px; line-height:1.2; font-weight:600; font-variant-numeric:tabular-nums; letter-spacing:-.045em; }
+.imu-euler-values small { color:var(--faint); font-size:10px; }
+.imu-horizon-panel { min-width:0; text-align:center; }
+.imu-horizon-caption { display:block; margin-top:2px; font-size:8px; color:var(--faint); letter-spacing:.12em; }
+.ah-instrument { position:relative; width:100%; max-width:220px; margin:auto; }
+.ah-svg { display:block; width:100%; height:auto; overflow:visible; }
+.ah-face { fill:#101d2b; stroke:var(--line-strong); stroke-width:1; }
+.ah-sky { fill:#268aca; }
+.ah-ground { fill:#83583c; }
+.ah-horizon-line { stroke:#f4f8ff; stroke-width:2; }
+.ah-pitch-line { stroke:#fff; opacity:.9; }
+.ah-pitch-negative { stroke-dasharray:4 3; }
+.ah-pitch-label { fill:#fff; font-size:10px; font-weight:600; paint-order:stroke; stroke:#0002; stroke-width:2px; }
+.ah-roll-tick { stroke:#9eb3c9; }
+.ah-roll-major { stroke:#e4f1ff; }
+.ah-roll-label { fill:#b8ccdf; font-size:10px; }
+.ah-zero-index { fill:#e6f2ff; }
+.ah-bank-pointer { fill:#ffd36b; stroke:#332810; stroke-width:1; }
+.ah-aircraft { stroke:#ffd36b; stroke-width:4; fill:none; stroke-linecap:round; stroke-linejoin:round; filter:drop-shadow(0 1px 1px #0009); }
+.ah-bezel { fill:none; stroke:#a4c4dc; stroke-opacity:.45; stroke-width:1.5; }
+.ah-status { position:absolute; left:50%; bottom:19%; transform:translateX(-50%); width:max-content; max-width:86%; white-space:normal; overflow-wrap:anywhere; font-size:8px; line-height:1.6; padding:1px 5px; border:1px solid #ffd36b66; border-radius:3px; background:#15212de6; color:#ffd36b; }
+.ah-instrument[data-state="live"] .ah-status { display:none; }
+.ah-instrument:not([data-state="live"]) .ah-roll-disc { opacity:.45; }
+[data-theme="light"] .imu-euler-values { --soft:#f2f7fc; }
+[data-theme="light"] .ah-face { fill:#1c2c3d; stroke:#9bb0c4; }
+@media (min-width:1800px) {
+  .imu-attitude { gap:12px; }
+  .imu-euler-values b { font-size:24px; }
+  .imu-euler-values>div { padding:8px 10px; }
+}
+@media (max-width:520px) {
+  .imu-attitude { grid-template-columns:minmax(100px,.8fr) minmax(0,1.45fr); gap:12px; margin:10px 0; }
+  .imu-euler-values dt { font-size:9px; }
+  .imu-euler-values dt span { font-size:10px; }
+  .imu-euler-values b { font-size:24px; }
+  .imu-euler-values>div { padding:8px; }
+  .imu-horizon-caption { font-size:9px; }
+}
+@media (max-width:360px) {
+  .imu-attitude { grid-template-columns:100px minmax(0,1fr); gap:8px; }
+  .imu-euler-values b { font-size:20px; }
+  .imu-euler-values>div { padding:6px; }
+}

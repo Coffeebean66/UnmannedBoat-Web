@@ -6,6 +6,7 @@
   let toastTimer;
   function toast(message){$('toast').textContent=message;$('toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').classList.remove('show'),4500);}
   const params=new ParameterPanel(link,toast), viewer=new AttitudeView($('boatCanvas'));
+  const horizon=new BoatArtificialHorizon($('imuHorizon'));
   const wgs=(latitude,longitude)=>Number.isFinite(latitude)&&Number.isFinite(longitude)&&Math.abs(latitude)<=90&&Math.abs(longitude)<=180?{latitude,longitude}:null;
   const track=new M.boatTrack.BoatTrack(wgs);
   const state={latest:{},history:[],chartMode:'speed',lastReceived:null,deviceId:null,source:'bluetooth'};
@@ -149,6 +150,7 @@
     for(const key of ['roll','pitch','yaw','gyroX','gyroY','gyroZ'])set(key,imu[key]);
     for(const [id,key] of Object.entries({imuStatus:'status',imuSequence:'sequence',imuAge:'ageText',imuAlignment:'alignmentText',imuHeadingUpdate:'headingUpdateText'}))set(id,imu[key]);
     viewer.setTelemetry(imu);
+    horizon.setTelemetry(imu);
     renderMotor(x.status?.frame,x.status?.at||0,now);
     const stats=link.parser.getStats();
     for(const [id,key] of Object.entries({frameCount:'framesReceived',parsedFrames:'framesReceived',crcErrors:'crcErrors',bufferedBytes:'bufferedBytes',bytesReceived:'bytesReceived'}))set(id,stats[key]);
@@ -169,7 +171,8 @@
     if(frame.velocity){state.latest.velocity={frame,at};position(frame,at,now);}
     if(frame.imu){
       state.latest.imu={frame,at};
-      viewer.setTelemetry(M.imuDisplay.prepareImuDisplay(frame,at,now,link.connected));
+      const imu=M.imuDisplay.prepareImuDisplay(frame,at,now,link.connected);
+      viewer.setTelemetry(imu);horizon.setTelemetry(imu);
     }
   });
   function updateConnectionButtons() {
@@ -178,7 +181,7 @@
     $('disconnectButton').disabled=!link.connected&&!waiting&&!link.busy;
   }
   function clearLive() {
-    state.latest={};state.history=[];state.lastReceived=null;viewer.reset();track.stop();track.breakSegment();
+    state.latest={};state.history=[];state.lastReceived=null;viewer.reset();horizon.reset();track.stop();track.breakSegment();
     marker?.remove();marker=null;lastLocation=null;hadFix=false;setMapEmpty(true);
   }
   link.addEventListener('connection',({detail:c})=>{
@@ -310,5 +313,5 @@
   window.addEventListener('resize',()=>render());
   window.addEventListener('boat-theme-change',()=>{readChartPalette();render();});
   // 提供浏览器控制台诊断入口，界面不显示原始字节流。
-  window.boatMonitor={link,params,viewer,track,map,mapVectors};
+  window.boatMonitor={link,params,viewer,horizon,track,map,mapVectors};
 })();
