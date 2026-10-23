@@ -71,4 +71,5 @@ else
   echo "To recover, restore app to /opt/unmanned-boat-web, cloud-config to /etc/unmanned-boat-web and saved units to /etc/systemd/system; then daemon-reload and enable --now the services."
 fi
 echo "Node.js, Mosquitto packages, /var/lib/unmanned-boat-mqtt, Nginx and other sites were kept."
+echo "Persistent map settings under /var/lib/unmanned-boat-web, when present, were kept."
 echo "Updater helper, state and administrator credentials (when present) were saved under $backup; its dedicated account/group were kept for recovery."

@@ -102,6 +102,8 @@ After=network.target
 [Service]
 Type=simple
 DynamicUser=yes
+StateDirectory=unmanned-boat-web
+StateDirectoryMode=0750
 WorkingDirectory=$target
 ExecStart=$node_path $target/server.js
 Environment=HOST=$address

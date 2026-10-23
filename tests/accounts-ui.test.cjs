@@ -134,6 +134,7 @@ test('页面包括统一账户与角色说明，不将角色从URL或本地stora
   const html = fs.readFileSync(path.join(root, 'public/index.html'), 'utf8');
   const source = fs.readFileSync(path.join(root, 'public/account-auth.js'), 'utf8');
   for (const id of ['accountControls', 'accountName', 'accountLoginDialog', 'accountUsername', 'accountPassword', 'accountLogout']) assert.ok(html.includes('id="' + id + '"'));
-  assert.match(html, /data-account-state="pending"/); assert.match(html, /v1\.6\.0/);
+  assert.match(html, /data-account-state="pending"/);
+  assert.ok(html.includes('v' + require('../package.json').version), '页面显示当前网页包版本');
   assert.ok(!source.includes('localStorage')); assert.ok(!source.includes('sessionStorage')); assert.ok(!source.includes('location.search'));
 });

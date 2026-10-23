@@ -1,0 +1,378 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+
+const source = fs.readFileSync(require.resolve('../public/map-view'), 'utf8');
+const plain = value => JSON.parse(JSON.stringify(value));
+const configured = { provider: 'amap', version: '2.0', enabled: true, configured: true,
+  key: 'key with+characters', securityJsCode: 'test-security-code' };
+
+function fixture(config = configured) {
+  const listeners = new Map(), timers = new Map();
+  const scripts = [], maps = [], markers = [], lines = [], conversions = [], fetches = [];
+  let timerSequence = 0;
+  const node = tag => ({ tag, style: {}, children: [], className: '', events: {}, attributes: {},
+    appendChild(child) { this.children.push(child); },
+    addEventListener(name, callback) { this.events[name] = callback; },
+    setAttribute(name, value) { this.attributes[name] = value; },
+    remove() { this.removed = true; } });
+  const container = { ...node('div'), clientWidth: 400, clientHeight: 300 };
+  const document = {
+    documentElement: { dataset: { theme: 'dark' } },
+    getElementById(id) { return id === 'map' ? container : null; },
+    createElement: node,
+    head: { appendChild(script) {
+      scripts.push(script);
+      script.securityAtAppend = plain(window._AMapSecurityConfig);
+    } }
+  };
+  const window = {
+    document, AbortController,
+    fetch: async (url, options) => {
+      fetches.push({ url, options });
+      return { ok: true, json: async () => config };
+    },
+    setTimeout(fn, duration) { const id = ++timerSequence; timers.set(id, { fn, duration }); return id; },
+    clearTimeout(id) { timers.delete(id); },
+    addEventListener(name, fn) { listeners.set(name, fn); },
+    removeEventListener(name, fn) { if (listeners.get(name) === fn) listeners.delete(name); },
+    BoatModules: { mapCoordinates: { wgs84ToGcj02(latitude, longitude) {
+      conversions.push([latitude, longitude]);
+      return { latitude: latitude + .002, longitude: longitude + .004 };
+    } } }
+  };
+  function mapInstance(options) {
+    const events = new Map();
+    return {
+      options, zoom: options.zoom ?? 5,
+      on(name, fn) { events.set(name, fn); return this; },
+      off(name) { events.delete(name); return this; },
+      emit(name, value) { events.get(name)?.(value); },
+      setView(position, zoom, options) { this.center = position; this.zoom = zoom; this.viewOptions = options; return this; },
+      setZoomAndCenter(zoom, center, immediately) { this.zoom = zoom; this.center = center; this.immediately = immediately; },
+      setCenter(center) { this.center = center; },
+      getZoom() { return this.zoom; },
+      setZoom(zoom) { this.zoom = zoom; },
+      getSize() { return { width: 400, height: 300 }; },
+      panBy(...args) { this.pan = args; },
+      lngLatToContainer([lng, lat]) { return { x: lng * 10, y: lat * 10 }; },
+      latLngToContainerPoint([lat, lng]) { return { x: lng * 10, y: lat * 10 }; },
+      setMapStyle(style) { this.style = style; },
+      resize() { this.resized = true; this.emit('resize'); },
+      invalidateSize(options) { this.resized = options; this.emit('resize'); },
+      destroy() { this.destroyed = true; },
+      remove() { this.removed = true; }
+    };
+  }
+  const AMap = {
+    Map: function (_container, options) { const map = mapInstance(options); maps.push(map); return map; },
+    Pixel: function (x, y) { this.x = x; this.y = y; },
+    Marker: function (options) {
+      this.options = options; this.position = options.position;
+      this.setMap = map => { this.map = map; };
+      this.setPosition = position => { this.position = position; };
+      this.getContent = () => options.content;
+      markers.push(this);
+    },
+    Polyline: function (options) {
+      this.options = options;
+      this.setMap = map => { this.map = map; };
+      lines.push(this);
+    }
+  };
+  window.L = {
+    map(_container, options) { const map = mapInstance(options); maps.push(map); return map; },
+    tileLayer(url, options) {
+      const layer = { url, options, events: {},
+        on(name, fn) { this.events[name] = fn; return this; },
+        addTo(map) { this.map = map; return this; } };
+      window.tiles = layer;
+      return layer;
+    },
+    divIcon(options) { return options; },
+    marker(position, options) {
+      const element = node('div');
+      const marker = { position, options,
+        addTo(map) { this.map = map; return this; },
+        setLatLng(position) { this.position = position; return this; },
+        setOpacity(value) { this.opacity = value; return this; },
+        getElement() { return element; },
+        remove() { this.removed = true; } };
+      markers.push(marker);
+      return marker;
+    },
+    polyline(path, options) {
+      const line = { path, options,
+        addTo(map) { this.map = map; return this; }, remove() { this.removed = true; } };
+      lines.push(line);
+      return line;
+    }
+  };
+  vm.runInNewContext(source, { window, Map, Set, Date, Promise, module: { exports: {} } });
+  const view = new window.BoatMapView('map');
+  return { window, view, scripts, maps, markers, lines, conversions, timers, fetches, listeners, AMap,
+    finishSdk() {
+      window.AMap = AMap;
+      const callback = new URL(scripts.at(-1).src).searchParams.get('callback');
+      window[callback]();
+      return callback;
+    },
+    runTimer(duration) {
+      const entry = [...timers].find(([, timer]) => timer.duration === duration);
+      assert.ok(entry, 'timer ' + duration + ' exists');
+      timers.delete(entry[0]);
+      entry[1].fn();
+    } };
+}
+
+async function until(predicate) {
+  for (let i = 0; i < 30; i++) { if (predicate()) return; await Promise.resolve(); }
+  assert.fail('expected asynchronous phase was not reached');
+}
+
+async function readyAmap(f) {
+  const pending = f.view.initialize();
+  await until(() => f.scripts.length === 1);
+  f.finishSdk();
+  await pending;
+  assert.equal(f.view.ready, true);
+}
+
+test('unconfigured AMap retains explicit OSM status and raw WGS84 throughout', async () => {
+  const f = fixture({ enabled: false, configured: false, reason: '尚未配置 Key' });
+  await f.view.initialize();
+  assert.equal(f.view.ready, true);
+  assert.equal(f.view.provider, 'osm');
+  assert.match(f.view.status.message, /高德未配置.*OpenStreetMap.*WGS84/);
+  assert.equal(f.scripts.length, 0);
+  assert.equal(f.fetches[0].url, '/api/map/config');
+  assert.equal(f.fetches[0].options.credentials, 'same-origin');
+  assert.equal(f.fetches[0].options.cache, 'no-store');
+  const marker = f.view.createMarker({ latitude: 31, longitude: 121 });
+  assert.deepEqual(plain(marker.native.position), [31, 121]);
+  marker.setPosition({ latitude: 32, longitude: 122 }).setOpacity(.3);
+  assert.deepEqual(plain(marker.getLatLng()), { lat: 32, lng: 122 });
+  assert.equal(marker.native.opacity, .3);
+  f.view.setTrackLines([{ points: [{ latitude: 31, longitude: 121 }, { latitude: 32, longitude: 122 }], color: '#123456' }]);
+  assert.deepEqual(plain(f.lines[0].path), [[31, 121], [32, 122]]);
+  f.view.setView([33, 123], 16, { animate: false });
+  assert.deepEqual(plain(f.maps[0].center), [33, 123]);
+  assert.equal(f.conversions.length, 0);
+  f.window.tiles.events.tileerror();
+  assert.match(f.view.status.message, /高德未配置.*网络不可用/);
+  f.window.tiles.events.loading();
+  f.window.tiles.events.load();
+  assert.match(f.view.status.message, /高德未配置.*OpenStreetMap/);
+  f.view.destroy();
+  assert.equal(f.maps[0].removed, true);
+  assert.equal(marker.native.removed, true);
+  assert.equal(f.lines[0].removed, true);
+});
+
+test('official SDK loads only once after security code and initialization stays north-up 2D', async () => {
+  const f = fixture();
+  const first = f.view.initialize();
+  assert.equal(f.view.initialize(), first);
+  await until(() => f.scripts.length === 1);
+  const script = f.scripts[0], url = new URL(script.src);
+  assert.equal(url.origin, 'https://webapi.amap.com');
+  assert.equal(url.pathname, '/maps');
+  assert.equal(url.searchParams.get('v'), '2.0');
+  assert.equal(url.searchParams.get('key'), configured.key);
+  assert.equal(script.securityAtAppend.securityJsCode, configured.securityJsCode);
+  const callback = f.finishSdk();
+  await first;
+  assert.equal(f.view.provider, 'amap');
+  assert.equal(f.view.ready, true);
+  assert.equal(f.window[callback], undefined);
+  assert.equal(script.removed, true);
+  assert.equal(f.timers.size, 0);
+  assert.equal(f.maps[0].options.viewMode, '2D');
+  assert.equal(f.maps[0].options.rotation, 0);
+  assert.equal(f.maps[0].options.pitch, 0);
+  assert.equal(f.maps[0].options.rotateEnable, false);
+  assert.equal(f.maps[0].options.pitchEnable, false);
+  assert.equal(f.maps[0].style, 'amap://styles/darkblue');
+  const zoom = f.view._zoomControls;
+  assert.equal(zoom.children[0].attributes['aria-label'], '地图放大');
+  zoom.children[0].events.click({ stopPropagation() {} });
+  assert.equal(f.view.getZoom(), 6);
+  f.view.setZoom(20);
+  zoom.children[0].events.click({ stopPropagation() {} });
+  assert.equal(f.view.getZoom(), 20);
+  f.view.setZoom(3);
+  zoom.children[1].events.click({ stopPropagation() {} });
+  assert.equal(f.view.getZoom(), 3);
+  f.view.setTheme('light');
+  assert.equal(f.maps[0].style, 'amap://styles/normal');
+  f.view.destroy();
+  assert.equal(zoom.removed, true);
+});
+
+test('markers, track and center convert once without mutating raw WGS84 or SVG anchor', async () => {
+  const f = fixture();
+  await readyAmap(f);
+  f.conversions.length = 0;
+  const position = Object.freeze({ latitude: 31, longitude: 121 });
+  const marker = f.view.createMarker(position, { className: 'boat-pin', iconSize: [30, 30], iconAnchor: [15, 15] });
+  assert.deepEqual(plain(marker.native.position), [121.004, 31.002]);
+  assert.deepEqual(plain(marker.native.options.offset), { x: -15, y: -15 });
+  assert.equal(marker.native.options.anchor, 'top-left');
+  assert.deepEqual(plain(marker.getLatLng()), { lat: 31, lng: 121 });
+  assert.equal(f.conversions.length, 1);
+  const vector = f.view.createMarker(position, { className: 'map-velocity-anchor', html: '<svg></svg>',
+    iconSize: [0, 0], iconAnchor: [0, 0], zIndexOffset: 200, interactive: false });
+  assert.equal(vector.getElement().style.width, '0px');
+  assert.equal(vector.getElement().style.height, '0px');
+  assert.equal(vector.native.options.offset.x, 0);
+  assert.equal(vector.native.options.offset.y, 0);
+  assert.equal(vector.native.options.anchor, 'top-left');
+  assert.equal(vector.native.options.clickable, false);
+  assert.equal(vector.native.options.zIndex, 320);
+  assert.deepEqual(plain(marker.native.position), plain(vector.native.position));
+  vector.native.setOpacity = value => { vector.native.opacity = value; };
+  vector.setOpacity(.3);
+  assert.equal(vector.native.opacity, .3);
+  assert.equal(vector.getElement().style.opacity, undefined, 'native opacity is not multiplied by child opacity');
+  const next = Object.freeze({ latitude: 32, longitude: 122 });
+  marker.setPosition(next);
+  assert.deepEqual(plain(marker.native.position), [122.004, 32.002]);
+  assert.deepEqual(plain(marker.getLatLng()), { lat: 32, lng: 122 });
+  marker.setOpacity(.25);
+  assert.equal(marker.getElement().style.opacity, '0.25');
+  f.view.setTrackLines([{ points: [position, next], color: '#abcdef', width: 5 }]);
+  assert.deepEqual(plain(f.lines[0].options.path), [[121.004, 31.002], [122.004, 32.002]]);
+  assert.equal(f.lines[0].options.strokeWeight, 5);
+  assert.deepEqual(plain(f.view.lastTrackLines[0].points), [position, next]);
+  f.view.setView([31, 121], 16, { animate: false });
+  assert.deepEqual(plain(f.maps[0].center), [121.004, 31.002]);
+  assert.equal(f.maps[0].immediately, true);
+  const point = f.view.latLngToContainerPoint(marker.getLatLng());
+  assert.equal(point.x, 122.004 * 10);
+  assert.equal(point.y, 32.002 * 10);
+  assert.equal(f.conversions.length, 7, 'one conversion per marker creation/update, each line point, center, projection');
+  marker.remove();
+  assert.equal(marker.getElement(), null);
+  assert.equal(marker.native.map, null);
+  f.view.destroy();
+  assert.equal(f.lines[0].map, null);
+  assert.equal(vector.native.map, null);
+  assert.equal(f.maps[0].destroyed, true);
+});
+
+test('invalid coordinates never become zero or bridge missing track points', async () => {
+  const f = fixture();
+  await readyAmap(f);
+  assert.equal(f.view.project({ latitude: NaN, longitude: 121 }), null);
+  assert.equal(f.view.project({ latitude: 91, longitude: 121 }), null);
+  assert.equal(f.view.createMarker({ latitude: '31', longitude: 121 }), null);
+  const marker = f.view.createMarker([31, 121]);
+  marker.setPosition([Infinity, 122]);
+  assert.deepEqual(plain(marker.getLatLng()), { lat: 31, lng: 121 });
+  f.view.setTrackLines([{ points: [[31, 121], [32, 122], null, [33, 123], [34, 124]], color: '#fff' }]);
+  assert.equal(f.lines.length, 2);
+  assert.deepEqual(plain(f.lines[0].options.path), [[121.004, 31.002], [122.004, 32.002]]);
+  assert.deepEqual(plain(f.lines[1].options.path), [[123.004, 33.002], [124.004, 34.002]]);
+  f.view.setTrackLines([]);
+  assert.equal(f.lines[0].map, null);
+  assert.equal(f.lines[1].map, null);
+  f.view.destroy();
+});
+
+test('configured SDK error and timeout are visible and never fall back to OSM', async () => {
+  for (const fail of ['network', 'timeout']) {
+    const f = fixture();
+    const pending = f.view.initialize();
+    await until(() => f.scripts.length === 1);
+    const callback = new URL(f.scripts[0].src).searchParams.get('callback');
+    if (fail === 'network') f.scripts[0].onerror(); else f.runTimer(15000);
+    await pending;
+    assert.equal(f.view.provider, 'amap');
+    assert.equal(f.view.ready, false);
+    assert.match(f.view.status.message, /高德地图加载失败/);
+    assert.equal(f.view.status.tone, 'error');
+    assert.equal(f.maps.length, 0);
+    assert.equal(f.window.tiles, undefined);
+    assert.equal(f.scripts[0].removed, true);
+    assert.equal(f.window[callback], undefined);
+    assert.equal(f.timers.size, 0);
+    f.view.destroy();
+  }
+});
+
+test('pagehide cancels in-flight config or SDK and never resurrects a map', async () => {
+  {
+    const f = fixture();
+    let respond;
+    f.window.fetch = (_url, options) => {
+      f.signal = options.signal;
+      return new Promise(resolve => { respond = resolve; });
+    };
+    const pending = f.view.initialize();
+    await until(() => !!respond);
+    f.listeners.get('pagehide')();
+    await pending;
+    assert.equal(f.signal.aborted, true);
+    respond({ ok: true, json: async () => configured });
+    await until(() => f.timers.size === 0);
+    await Promise.resolve();
+    assert.equal(f.view.ready, false);
+    assert.equal(f.scripts.length, 0);
+    assert.equal(f.maps.length, 0);
+  }
+  {
+    const f = fixture();
+    const pending = f.view.initialize();
+    await until(() => f.scripts.length === 1);
+    const callback = new URL(f.scripts[0].src).searchParams.get('callback');
+    const lateCallback = f.window[callback];
+    f.listeners.get('pagehide')();
+    await pending;
+    f.window.AMap = f.AMap;
+    lateCallback();
+    assert.equal(f.view.ready, false);
+    assert.equal(f.maps.length, 0);
+    assert.equal(f.window[callback], undefined);
+    assert.equal(f.scripts[0].removed, true);
+    assert.equal(f.timers.size, 0);
+  }
+});
+
+test('config error/timeout stays explicit and ready event/resize lifecycle is stable', async () => {
+  const failed = fixture();
+  failed.window.fetch = async () => ({ ok: false, status: 401 });
+  await failed.view.initialize();
+  assert.equal(failed.view.ready, false);
+  assert.match(failed.view.status.message, /HTTP 401/);
+  assert.equal(failed.scripts.length, 0);
+  failed.view.destroy();
+  const timeout = fixture();
+  timeout.window.fetch = () => new Promise(() => {});
+  const pending = timeout.view.initialize();
+  timeout.runTimer(5000);
+  await pending;
+  assert.equal(timeout.view.ready, false);
+  assert.match(timeout.view.status.message, /配置请求超时/);
+  timeout.view.destroy();
+  const f = fixture();
+  let ready = 0, resize = 0, drag = 0;
+  const resizeListener = () => resize++;
+  f.view.on('ready', () => ready++).on('resize', resizeListener).on('dragstart', () => drag++);
+  await readyAmap(f);
+  assert.equal(ready, 1);
+  assert.deepEqual(plain(f.view.getSize()), { x: 400, y: 300 });
+  f.view.invalidateSize();
+  f.maps[0].emit('dragstart');
+  assert.equal(resize, 1);
+  assert.equal(drag, 1);
+  f.view.off('resize', resizeListener).invalidateSize();
+  assert.equal(resize, 1);
+  f.view.setZoom(18).panBy([10, -5]);
+  assert.equal(f.view.getZoom(), 18);
+  assert.deepEqual(f.maps[0].pan, [10, -5]);
+  f.view.destroy();
+  f.view.destroy();
+  assert.equal(f.view.ready, false);
+  assert.equal(f.listeners.size, 0);
+});

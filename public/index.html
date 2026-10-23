@@ -11,6 +11,8 @@
   <link rel="stylesheet" href="ui.css">
   <link rel="stylesheet" href="dashboard.css">
   <link rel="stylesheet" href="artificial-horizon.css">
+  <link rel="stylesheet" href="map-view.css">
+  <link rel="stylesheet" href="map-settings.css">
   <script defer src="vendor/leaflet/leaflet.js"></script>
   <script defer src="utils-bundle.js"></script>
   <script defer src="parameter-data.js"></script>
@@ -21,7 +23,9 @@
   <script defer src="attitude-view.js"></script>
   <script defer src="artificial-horizon.js"></script>
   <script defer src="ui.js"></script>
+  <script defer src="map-view.js"></script>
   <script defer src="map-velocity-view.js"></script>
+  <script defer src="map-settings.js"></script>
   <script defer src="app.js"></script>
   <script defer src="update-panel.js"></script>
 </head>
@@ -59,7 +63,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="bluetooth"></span><div>本地蓝牙直连<p>T10 / 无人船电控</p></div></div>
       <button id="sidebarSettings" class="sidebar-setting"><span data-icon="settings"></span>参数设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.7.0</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.9.1</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -119,14 +123,15 @@
           <div class="card-title"><div class="title-with-icon"><span data-icon="map"></span><h2>船位与航行轨迹</h2><span class="panel-caption">NAVIGATION</span></div><button id="mapCenter" class="small-button"><span data-icon="location"></span>回到船位</button></div>
           <div class="map-stage">
             <div id="map" aria-label="无人船位置地图"></div>
-            <div class="map-layer-label"><span data-icon="layers"></span>电子地图<span class="map-layer-divider"></span>WGS84</div>
+            <div class="map-layer-label"><span data-icon="layers"></span><span id="mapLayerName">地图加载中</span><span class="map-layer-divider"></span><span id="mapCoordinateSystem">WGS84</span></div>
             <div class="map-north" aria-label="地图上方为正北"><b>N</b><span>↑</span></div>
-            <div id="mapEmpty" class="map-empty"><div class="radar-rings" aria-hidden="true"></div><span data-icon="location"></span><strong>等待有效定位</strong><span>接收到 RTK 数据后显示船位</span></div>
+            <div id="mapEmpty" class="map-empty"><div class="radar-rings" aria-hidden="true"></div><span data-icon="location"></span><strong>正在加载地图</strong><span>正在准备底图，无需等待船位定位</span></div>
+            <p id="mapFixStatus" class="map-fix-status" role="status" hidden>等待有效定位 · 可拖动、缩放地图</p>
           </div>
           <div class="map-controls"><div class="button-row"><button id="trackStart" class="small-button primary">开始追踪</button><button id="trackClear" class="small-button subtle">清除痕迹</button><button id="mapVectorsToggle" class="small-button" aria-pressed="true" aria-controls="mapVectorReadouts">隐藏速度箭头</button></div><label class="switch-label"><input type="checkbox" id="mapFollow" checked><span class="switch-track"></span>跟随船位</label></div>
           <div class="vector-info"><div id="mapVectorReadouts" class="map-vector-readouts"><span class="target"><i></i>目标 <b id="mapVectorTarget">--</b></span><span class="actual"><i></i>实际 <b id="mapVectorActual">--</b></span></div><p id="mapVectorStatus" class="map-vector-status">仅在速度 / 角度闭环显示</p></div>
           <div class="map-track-info"><p id="trackStatus" class="muted">追踪未开启</p><div class="track-legend" id="trackLegend"></div></div>
-          <div class="map-footer"><span id="mapStatus">等待有效定位 · WGS84</span><span id="mapCoordinate">--</span></div>
+          <div class="map-footer"><span id="mapStatus">正在加载地图配置</span><span title="RTK 原始经纬度，WGS84 坐标">RTK 原始坐标 <span id="mapCoordinate">--</span></span></div>
         </article>
         <div class="telemetry-rail">
         <article id="attitude" class="card attitude-card" data-nav-section>
@@ -199,8 +204,24 @@
     </form>
   </dialog>
   <dialog id="settingsDialog" aria-labelledby="settingsTitle">
-    <div class="dialog-head"><div class="title-with-icon"><span class="card-icon teal" data-icon="sliders"></span><div><p class="eyebrow">VESSEL SETTINGS</p><h2 id="settingsTitle">参数设置</h2></div></div><button id="settingsClose" class="ghost">返回监控<span data-icon="close"></span></button></div>
+    <div class="dialog-head"><div class="title-with-icon"><span class="card-icon teal" data-icon="sliders"></span><div><p class="eyebrow">PLATFORM & VESSEL SETTINGS</p><h2 id="settingsTitle">平台与电控设置</h2></div></div><button id="settingsClose" class="ghost">返回监控<span data-icon="close"></span></button></div>
     <div class="dialog-scroll">
+      <section id="mapSettings" class="map-settings" aria-labelledby="mapSettingsTitle" hidden>
+        <div class="map-settings-heading"><div class="map-settings-title"><span class="card-icon blue" data-icon="map"></span><div><h3 id="mapSettingsTitle">平台地图设置</h3><p>AMAP · 仅保存在服务器</p></div></div><a class="map-settings-guide" href="https://github.com/Coffeebean66/UnmannedBoat-Web/blob/main/AMAP_SETUP.md" target="_blank" rel="noopener noreferrer">申请与配置教程 ↗</a></div>
+        <p class="map-settings-description">使用高德“Web端（JS API）”的 Key 与安全密钥 securityJsCode。两项一起清空并保存可停用高德，继续使用 OpenStreetMap。此设置无需连接无人船。</p>
+        <p id="mapSettingsAccess" class="map-settings-access" hidden></p>
+        <form id="mapSettingsForm" autocomplete="off" hidden>
+          <div class="map-settings-source"><span>当前配置来源</span><b id="mapSettingsSource">尚未读取</b></div>
+          <div class="map-settings-fields">
+            <label for="amapKey">Web端 JS API Key<input id="amapKey" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="32" placeholder="32 位 Key" aria-describedby="amapKeyHint" disabled><small id="amapKeyHint">请勿使用 Web服务、Android 或小程序 Key。</small></label>
+            <label for="amapSecurityCode">安全密钥 securityJsCode<input id="amapSecurityCode" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="32" placeholder="32 位安全密钥" aria-describedby="amapCodeHint" disabled><small id="amapCodeHint">与上方 Key 属于同一个高德应用。</small></label>
+          </div>
+          <div class="map-settings-actions"><button id="mapSettingsRead" type="button" class="subtle" title="重新读取会替换尚未保存的输入">重新读取配置</button><button id="mapSettingsSave" type="submit" class="primary" disabled>保存地图配置</button><button id="mapSettingsReload" type="button" hidden>刷新页面应用</button></div>
+          <p id="mapSettingsRefreshNote" class="map-settings-refresh-note" hidden>刷新会中断当前页面的蓝牙或云端监测连接，并清空本次页面轨迹；刷新后请重新连接。保存本身不会断开连接。</p>
+        </form>
+        <p id="mapSettingsStatus" class="map-settings-status" role="status" aria-live="polite" data-tone="neutral">尚未读取平台地图配置。</p>
+      </section>
+      <h3 class="device-settings-heading">无人船电控参数<span>读取、写入与 Flash 保存需要设备在线</span></h3>
       <p id="cloudReadOnlyNotice" class="cloud-readonly" hidden>云端调参需要管理员账户和支持该功能的固件；操作结果以设备响应为准。</p>
       <div class="settings-intro"><div class="workflow"><span><b>1</b>读取当前参数</span><i>→</i><span><b>2</b>调整并写入</span><i>→</i><span><b>3</b>调好后存入 Flash</span></div><p>方向修改和 Flash 保存需 CH6 低档、两路停稳且反馈正常满 1 秒。</p></div>
       <p id="parameterStatus" role="status" data-tone="neutral">尚未读取设备参数</p>

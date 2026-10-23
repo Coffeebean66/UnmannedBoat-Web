@@ -7,10 +7,11 @@
   function toast(message){$('toast').textContent=message;$('toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').classList.remove('show'),4500);}
   const params=new ParameterPanel(link,toast), viewer=new AttitudeView($('boatCanvas'));
   const horizon=new BoatArtificialHorizon($('imuHorizon'));
+  const mapSettings=new BoatMapSettingsPanel();
   const wgs=(latitude,longitude)=>Number.isFinite(latitude)&&Number.isFinite(longitude)&&Math.abs(latitude)<=90&&Math.abs(longitude)<=180?{latitude,longitude}:null;
   const track=new M.boatTrack.BoatTrack(wgs);
   const state={latest:{},history:[],chartMode:'speed',lastReceived:null,deviceId:null,source:'bluetooth'};
-  let map,marker,mapVectors,trackLayer,trackRevision=-1,lastLocation,hadFix=false;
+  let map,marker,mapVectors,trackRevision=-1,lastLocation,hadFix=false;
   let chartPalette;
   const set=(id,value)=>{const text=value==null?'--':String(value);if($(id).textContent!==text)$(id).textContent=text;};
   function readChartPalette() {
@@ -21,11 +22,20 @@
       actual:style.getPropertyValue('--chart-actual').trim()
     };
   }
-  function setMapEmpty(visible,title='等待有效定位',description='接收到 RTK 数据后显示船位') {
-    if(!window.L){visible=true;title='地图组件不可用';description='RTK 经纬度仍会显示在船况卡片中';}
-    $('mapEmpty').hidden=!visible;
-    $('mapEmpty').querySelector('strong').textContent=title;
-    $('mapEmpty').querySelector('span:last-child').textContent=description;
+  function updateMapAvailability(fixFresh) {
+    if(fixFresh==null) {
+      const latest=state.latest.velocity;
+      fixFresh=M.velocityDisplay.prepareVelocityDisplay(latest?.frame,latest?.at||0,performance.now(),link.connected).fixFresh;
+    }
+    // 底图就绪与船位有效性分别判断，等待定位时也允许浏览、平移和缩放地图。
+    const ready=!!map?.ready;
+    $('mapEmpty').hidden=ready;
+    $('mapFixStatus').hidden=!ready||fixFresh;
+    set('mapFixStatus',hadFix?'定位已失效 · 等待新定位':'等待有效定位 · 可拖动、缩放地图');
+    if(!ready) {
+      $('mapEmpty').querySelector('strong').textContent=map?.status?.tone==='error'?'地图加载失败':'正在加载地图';
+      $('mapEmpty').querySelector('span:last-child').textContent=map?.status?.message||'正在准备底图，无需等待船位定位';
+    }
   }
   for(let i=1;i<=2;i++) {
     const card=document.createElement('article');card.className='card motor';
@@ -96,39 +106,51 @@
     set('chartSummary','目标 '+summary.target+unit+' · 实际 '+summary.actual+unit+' · 误差 '+summary.error+unit+(heading?'（目标−实际，取最短角差）':'（实际−目标）'));
   }
   function setupMap() {
-    if(!window.L){set('mapStatus','地图组件不可用 · WGS84 坐标仍可查看');setMapEmpty(true,'地图组件不可用','RTK 经纬度仍会显示在船况卡片中');return;}
-    map=L.map('map',{zoomControl:true}).setView([31.23,121.47],5);
-    trackLayer=L.layerGroup().addTo(map);
-    const tiles=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>'});
-    tiles.on('loading',()=>tiles.failed=false).on('tileerror',()=>{tiles.failed=true;set('mapStatus','底图网络不可用，坐标与轨迹仍有效');})
-      .on('load',()=>{if(!tiles.failed)set('mapStatus','OpenStreetMap · WGS84');}).addTo(map);
+    map=new BoatMapView('map');
+    map.on('status',status=>{set('mapStatus',status.message);updateMapLabels();updateMapAvailability();});
     map.on('dragstart',()=>$('mapFollow').checked=false);
-    // 栅格断点和遥测标签都可能改变地图容器尺寸，及时重算瓦片及箭头锚点。
-    const mapResize=new ResizeObserver(()=>map.invalidateSize({pan:false,animate:false}));
+    // 栅格断点和遥测标签会改变容器尺寸，由地图门面更新底图与箭头锚点。
+    const mapResize=new ResizeObserver(()=>map.invalidateSize());
     mapResize.observe($('map'));
-    window.addEventListener('pagehide',()=>mapResize.disconnect(),{once:true});
+    window.addEventListener('pagehide',()=>{mapResize.disconnect();map.destroy();},{once:true});
     $('trackLegend').innerHTML=M.boatTrack.TRACK_SPEED_LEGEND.map(i=>'<span><i style="background:'+i.color+'"></i>'+i.label+(i.id==='unknown'?'':' m/s')+'</span>').join('');
+    map.initialize().then(()=>{
+      updateMapLabels();trackRevision=-1;
+      const latest=state.latest.velocity;
+      if(latest)position(latest.frame,latest.at,performance.now());
+      updateMapAvailability();
+      render();
+    }).catch(()=>{set('mapStatus','地图初始化失败，RTK 原始数据仍可查看');updateMapAvailability();});
+  }
+  function updateMapLabels() {
+    const amap=map?.provider==='amap';
+    set('mapLayerName',amap?'高德地图':map?.provider==='osm'?'OpenStreetMap':'地图加载中');
+    set('mapCoordinateSystem',amap?'GCJ-02':'WGS84');
+    const source=link.source==='cloud'?'云端实时监测':'本地实时监测';
+    set('heroSourceLabel',source+' / '+(amap?'高德地图':map?.provider==='osm'?'OpenStreetMap':'地图加载中'));
   }
   function position(frame,at,now) {
     const view=M.velocityDisplay.prepareVelocityDisplay(frame,at,now,link.connected),v=frame?.velocity;
     if(view.fixFresh) {
       lastLocation=[v.latitude,v.longitude];
-      setMapEmpty(false);
-      if(map) {
-        if(!marker)marker=L.marker(lastLocation,{icon:L.divIcon({className:'boat-pin',html:'<span>▲</span>',iconSize:[30,30],iconAnchor:[15,15]})}).addTo(map);
-        marker.setLatLng(lastLocation).setOpacity(1);
+      if(map?.ready) {
+        // 所有地图输入仍为 WGS84；只由地图门面统一转换，避免船位和轨迹重复偏移。
+        const fix={latitude:v.latitude,longitude:v.longitude};
+        const firstMapFix=!marker;
+        if(!marker)marker=map.createMarker(fix,{className:'boat-pin',html:'<span>▲</span>',iconSize:[30,30],iconAnchor:[15,15]});
+        marker.setPosition(fix);marker.setOpacity(1);
         const arrow=marker.getElement()?.firstElementChild;if(arrow)arrow.style.transform='rotate('+(view.headingFresh?v.headingDegrees:0)+'deg)';
-        if($('mapFollow').checked)map.setView(lastLocation,hadFix?map.getZoom():16,{animate:false});
+        if($('mapFollow').checked)map.setView(lastLocation,firstMapFix?16:map.getZoom(),{animate:false});
       }
       hadFix=true;
       track.record(v,now,true);
-    } else {track.breakSegment();marker?.setOpacity(.3);setMapEmpty(!hadFix);}
+    } else {track.breakSegment();marker?.setOpacity(.3);}
+    updateMapAvailability(view.fixFresh);
     renderTrack(view.fixFresh);
   }
   function renderTrack(fresh) {
-    if(trackLayer&&trackRevision!==track.revision) {
-      trackLayer.clearLayers();
-      for(const line of track.polylines())L.polyline(line.points.map(p=>[p.latitude,p.longitude]),{color:line.color,weight:4}).addTo(trackLayer);
+    if(map?.ready&&trackRevision!==track.revision) {
+      map.setTrackLines(track.polylines());
       trackRevision=track.revision;
     }
     set('trackStatus',(track.active?(fresh?'正在追踪':'等待有效定位'):'已停止')+' · '+track.pointCount+'点'+(track.truncated?' · 已裁剪最早轨迹':''));
@@ -143,7 +165,8 @@
     const v=M.velocityDisplay.prepareVelocityDisplay(x.velocity?.frame,x.velocity?.at||0,now,link.connected);
     for(const [id,key] of Object.entries({velocityStatus:'status',velocityPlanar:'planar',velocityX:'x',velocityY:'y',latitude:'latitude',longitude:'longitude',rtkHeading:'heading',velocityAge:'ageText',velocitySequence:'sequence',rtkAlignment:'alignmentText',fixStatus:'fixStatus'}))set(id,v[key]);
     set('mapCoordinate',v.fixFresh?v.latitude+', '+v.longitude:'--（无有效定位）');
-    if(!v.fixFresh){track.breakSegment();marker?.setOpacity(.3);setMapEmpty(!hadFix);}
+    if(!v.fixFresh){track.breakSegment();marker?.setOpacity(.3);}
+    updateMapAvailability(v.fixFresh);
     renderTrack(v.fixFresh);
     mapVectors.render(M.mapVelocity.prepareMapVelocity(x.boat?.frame,x.boat?.at||0,x.velocity?.frame,x.velocity?.at||0,now,link.connected));
     const imu=M.imuDisplay.prepareImuDisplay(x.imu?.frame,x.imu?.at||0,now,link.connected);
@@ -182,7 +205,7 @@
   }
   function clearLive() {
     state.latest={};state.history=[];state.lastReceived=null;viewer.reset();horizon.reset();track.stop();track.breakSegment();
-    marker?.remove();marker=null;lastLocation=null;hadFix=false;setMapEmpty(true);
+    marker?.remove();marker=null;lastLocation=null;hadFix=false;updateMapAvailability(false);
   }
   link.addEventListener('connection',({detail:c})=>{
     $('connectionBadge').textContent=c.connected?'已连接':'未连接';
@@ -215,9 +238,9 @@
   on('trackStart',()=>{track.active?track.stop():track.start();const x=state.latest.velocity;position(x?.frame,x?.at||0,performance.now());render();});
   on('trackClear',()=>{track.clear();render();});
   on('mapVectorsToggle',()=>mapVectors.toggle());
-  on('mapCenter',()=>{if(lastLocation&&map)map.setView(lastLocation,16);else toast('尚无有效定位');});
-  $('mapFollow').onchange=()=>{if($('mapFollow').checked&&lastLocation&&map)map.setView(lastLocation,16);};
-  const openSettings=()=>{window.BoatAuth?.assertManage();$('settingsDialog').showModal();};
+  on('mapCenter',()=>{if(!map?.ready)toast('地图尚未就绪，请查看地图底部提示');else if(lastLocation)map.setView(lastLocation,16);else toast('尚无有效定位');});
+  $('mapFollow').onchange=()=>{if($('mapFollow').checked&&lastLocation&&map?.ready)map.setView(lastLocation,16);};
+  const openSettings=()=>{window.BoatAuth?.assertManage();$('settingsDialog').showModal();mapSettings.open();};
   on('settingsToggle',openSettings);
   on('settingsEntry',openSettings);
   on('sidebarSettings',openSettings);
@@ -276,7 +299,7 @@
     const source=$('telemetrySource').value;link.select(source);
     const remote=source==='cloud';$('cloudControls').hidden=!remote;$('cloudReadOnlyNotice').hidden=!remote;
     set('sourceChip',remote?'MQTT':'T10');set('sourceDescription',remote?'云端 MQTT · 只读监测':'本地蓝牙 · 单船监测');
-    set('heroSourceLabel',remote?'云端实时监测 / WGS84':'本地实时监测 / WGS84');
+    updateMapLabels();
     set('sourceSideNote',remote?'MQTT 云端监测 · 网口上云':'本地蓝牙直连 · T10 / 无人船电控');
     $('connectButton').textContent=remote?'连接云端无人船':'选择蓝牙设备';
     $('connectionRoute').textContent=remote?'无人船 → 网口 → MQTT Broker → 服务器 → 浏览器':'浏览器 ↔ T10 ↔ 无人船';
@@ -308,10 +331,10 @@
     }
     if(!document.hidden)render();
   });
-  window.addEventListener('pagehide',()=>{clearInterval(timer);clearInterval(cloudTimer);viewer.stop();link.disconnect();});
+  window.addEventListener('pagehide',()=>{clearInterval(timer);clearInterval(cloudTimer);viewer.stop();mapSettings.destroy();link.disconnect();});
   window.addEventListener('pageshow',event=>{if(event.persisted)location.reload();});
   window.addEventListener('resize',()=>render());
-  window.addEventListener('boat-theme-change',()=>{readChartPalette();render();});
+  window.addEventListener('boat-theme-change',()=>{readChartPalette();map?.setTheme(document.documentElement.dataset.theme);render();});
   // 提供浏览器控制台诊断入口，界面不显示原始字节流。
-  window.boatMonitor={link,params,viewer,horizon,track,map,mapVectors};
+  window.boatMonitor={link,params,viewer,horizon,track,map,mapVectors,mapSettings};
 })();

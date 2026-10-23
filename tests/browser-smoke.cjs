@@ -37,7 +37,8 @@ const mock='('+function(){
   window.startTelemetry=()=>{feedTelemetry();window.telemetryTimer=setInterval(feedTelemetry,100);};window.stopTelemetry=()=>clearInterval(telemetryTimer);
 }.toString()+')();';
 async function main(){
-  const server=createServer();await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  // 默认烟测固定验证无 Key 回退，避免开发机环境变量意外触发真实 SDK 请求。
+  const server=createServer({env:{...process.env,BOAT_CLOUD_ENABLED:'0',BOAT_AMAP_KEY:'',BOAT_AMAP_SECURITY_CODE:''}});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const profile=fs.mkdtempSync(path.join(output,'chrome-')),errors=[];
   const browser=spawn(process.env.CHROME_PATH||'C:/Program Files/Google/Chrome/Application/chrome.exe',['--headless','--no-first-run','--no-default-browser-check','--use-angle=swiftshader','--enable-unsafe-swiftshader','--remote-debugging-port=0','--user-data-dir='+profile],{windowsHide:true,stdio:'ignore'});
   browser.on('error',error=>errors.push(error.message));let socket;
@@ -61,9 +62,15 @@ async function main(){
       const clip=await evaluate("(()=>{const r=document.querySelector('.map-stage').getBoundingClientRect();return {x:scrollX+r.left,y:scrollY+r.top,width:r.width,height:r.height,scale:1};})()");
       const r=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:true,clip});fs.writeFileSync(path.join(output,name+'.png'),Buffer.from(r.data,'base64'));
     };
-    await send('Runtime.enable');await send('Page.enable');await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
+    await send('Runtime.enable');await send('Page.enable');
+    // 地图覆盖物与布局测试不依赖外网瓦片；离线提示本身也须不影响遥测。
+    await send('Network.enable');await send('Network.setBlockedURLs',{urls:['https://tile.openstreetmap.org/*']});
+    await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
     await send('Page.addScriptToEvaluateOnNewDocument',{source:mock});await send('Page.navigate',{url:'http://127.0.0.1:'+server.address().port});
     await until('!!window.boatMonitor && !!window.boatMonitor.viewer.renderer');assert.deepEqual(errors,[]);
+    await until("boatMonitor.map?.ready && boatMonitor.map.provider==='osm'");
+    assert.match(await evaluate("document.getElementById('mapStatus').textContent"),/未配置/,'Missing AMap credentials are explained');
+    assert.match(await evaluate("document.getElementById('mapStatus').textContent"),/OpenStreetMap|OSM/,'Missing AMap credentials retain the existing map');
     assert.deepEqual(await evaluate("(()=>{const h=document.getElementById('imuHorizon');return {valid:h.dataset.valid,state:h.dataset.state,roll:h.dataset.roll,pitch:h.dataset.pitch};})()"),
       {valid:'false',state:'waiting',roll:'--',pitch:'--'},'Initial neutral horizon is explicitly invalid before IMU data arrives');
     assert.equal(await evaluate("document.documentElement.dataset.theme"),'dark','Monitoring dashboard starts in dark mode');
@@ -81,7 +88,18 @@ async function main(){
     await send('Emulation.setDeviceMetricsOverride',{width:1920,height:1080,deviceScaleFactor:1,mobile:false});await wait(300);
     await assertDesktopLayout(1920);await shot('desktop-wide-empty');
     await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});await wait(300);
-    assert.equal(await evaluate("document.getElementById('mapEmpty').hidden"),false,'Waiting map has an empty state');
+    assert.equal(await evaluate("document.getElementById('mapEmpty').hidden"),true,'A ready map remains visible before the first fix');
+    assert.equal(await evaluate("document.getElementById('mapFixStatus').hidden"),false,'Waiting for a fix uses a small map hint');
+    assert.match(await evaluate("document.getElementById('mapFixStatus').textContent"),/等待有效定位/);
+    assert.equal(await evaluate("getComputedStyle(document.getElementById('mapFixStatus')).pointerEvents"),'none','Fix hint never intercepts map gestures');
+    assert.equal(await evaluate("!!document.querySelector('.boat-pin,.map-velocity-anchor')"),false,'No synthetic boat or vectors appear before a valid fix');
+    assert.equal(await evaluate('boatMonitor.map.getZoom()'),5,'Map keeps its existing default zoom without a fix');
+    await evaluate('boatMonitor.map.setZoom(6);void 0');await until('boatMonitor.map.getZoom()===6');
+    const waitingPoint=await evaluate('boatMonitor.map.latLngToContainerPoint([31.23,121.47])');
+    await evaluate('boatMonitor.map.panBy([40,20],{animate:false});void 0');
+    const pannedWaitingPoint=await evaluate('boatMonitor.map.latLngToContainerPoint([31.23,121.47])');
+    assert.ok(Math.hypot(pannedWaitingPoint.x-waitingPoint.x,pannedWaitingPoint.y-waitingPoint.y)>10,'Map pans normally without a fix');
+    await evaluate('boatMonitor.map.setView([31.23,121.47],5,{animate:false});void 0');
     assert.deepEqual(await evaluate("[...document.querySelectorAll('.parameter-group')].map(group=>group.querySelectorAll('input,select').length)"),[10,7,3]);
     assert.equal(await evaluate("new Set([...document.querySelectorAll('#parameterFields [data-key]')].map(input=>input.dataset.key)).size"),20);
     assert.equal(await evaluate("document.querySelectorAll('#presets .preset.empty').length"),3);
@@ -92,7 +110,8 @@ async function main(){
     assert.equal(await evaluate("document.getElementById('chartTarget').textContent"),'1.800 m/s');
     assert.equal(await evaluate("document.getElementById('chartActual').textContent"),'1.552 m/s');
     assert.equal(await evaluate("document.getElementById('chartError').textContent"),'-0.248 m/s');
-    assert.equal(await evaluate("document.getElementById('mapEmpty').hidden"),true,'Live position replaces the empty state');
+    assert.equal(await evaluate("document.getElementById('mapEmpty').hidden"),true,'Live position remains on the ready map');
+    assert.equal(await evaluate("document.getElementById('mapFixStatus').hidden"),true,'A valid fix clears the waiting hint');
     assert.equal(await evaluate("document.getElementById('motor1Voltage').textContent"),'24.50');
     assert.ok(await evaluate("parseFloat(document.getElementById('motor1Dial').style.strokeDasharray)>0"));
     assert.equal(await evaluate("boatMonitor.track.segments[0][0].longitude"),121.7654321);assert.ok(await evaluate('boatMonitor.track.pointCount>=2'));
@@ -184,6 +203,8 @@ async function main(){
     assert.equal(await evaluate('getComputedStyle('+vector('actual')+").display!=='none'"),true);
     await override({mode:0});assert.equal(await evaluate("!!document.querySelector('.map-velocity-anchor')"),false,'Open loop hides both arrows');
     await override({rtkFlags:14});assert.equal(await evaluate("!!document.querySelector('.map-velocity-anchor')"),false,'Invalid fix hides both arrows');
+    assert.equal(await evaluate("document.getElementById('mapEmpty').hidden"),true,'Invalid fix does not cover the ready map');
+    assert.equal(await evaluate("document.getElementById('mapFixStatus').hidden"),false,'Invalid fix is explained by the corner hint');
     await override({});
     await evaluate("document.getElementById('mapFollow').checked=false;boatMonitor.map.panBy([40,20],{animate:false});boatMonitor.map.setZoom(17,{animate:false});void 0");
     assert.equal(await evaluate("(()=>{const el=boatMonitor.mapVectors.marker.getElement().getBoundingClientRect(),rect=document.getElementById('map').getBoundingClientRect(),point=boatMonitor.map.latLngToContainerPoint(boatMonitor.mapVectors.marker.getLatLng());return Math.abs(el.left-rect.left-point.x)<1&&Math.abs(el.top-rect.top-point.y)<1;})()"),true,'Arrows stay anchored to the boat through pan and zoom');
@@ -231,6 +252,7 @@ async function main(){
     for(const id of ['boatActual','roll','motor1Rpm','chartActual','chartTarget','chartError'])assert.equal(await evaluate('document.getElementById('+JSON.stringify(id)+').textContent'),'--');
     assert.equal(await evaluate("parseFloat(document.getElementById('motor1Dial').style.strokeDasharray)"),0);
     assert.equal(await evaluate("document.getElementById('mapEmpty').hidden"),true,'Expired position retains the recorded track for review');
+    assert.equal(await evaluate("document.getElementById('mapFixStatus').hidden"),false,'Expired position shows a non-blocking fix hint');
     assert.equal(await evaluate("!!document.querySelector('.map-velocity-anchor')"),false,'Stale telemetry removes velocity arrows');
     for(const width of [1024,768,640,375,320]){
       await send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:true});await evaluate('window.scrollTo(0,0)');await wait(300);
@@ -272,6 +294,8 @@ async function main(){
     }
     await evaluate("document.getElementById('disconnectButton').click()");assert.equal(await evaluate('boatMonitor.link.connected'),false);
     assert.equal(await evaluate("!!document.querySelector('.map-velocity-anchor')"),false,'Disconnect clears arrows immediately');
+    assert.equal(await evaluate("document.getElementById('mapEmpty').hidden"),true,'Disconnect leaves the ready map and track available');
+    assert.equal(await evaluate("document.getElementById('mapFixStatus').hidden"),false,'Disconnect returns the waiting hint without covering the map');
     assert.deepEqual(await horizonPose(),{valid:'false',state:'waiting',roll:'rotate(0 120 120)',pitch:'translate(0 0)'},'Disconnect clears the old horizon pose and returns to an invalid neutral view');
     assert.equal(await evaluate("document.getElementById('imuHorizon').dataset.roll"),'--');
     await evaluate("document.getElementById('connectButton').click()");await until('boatMonitor.link.connected');await evaluate('feedTelemetry()');await wait(250);
@@ -285,8 +309,10 @@ async function main(){
     assert.equal(await evaluate("!!document.querySelector('.map-velocity-anchor')"),false,'Hidden arrows stay hidden when new data arrives');
     await evaluate("document.getElementById('mapVectorsToggle').click()");await until("!!document.querySelector('.map-velocity-anchor')");
     assert.deepEqual(errors,[]);
-    console.log('PASS: browser/WebGL, BLE split frames, parameters/Flash rejection/timeout, grouped settings, preset/theme persistence, map velocity vectors/direction/scale/reverse/overlap/zero/stale/pan/zoom/hide persistence, primary desktop map layout, unique element IDs, RTK/IMU tabs and keyboard navigation, IMU left-readings/right-horizon layout, fresh Euler pose/axis directions/yaw independence/gyro independence/invalid-source freezing/expiry/disconnect reset, map empty state, themed charts, stale values, animation freeze and mobile viewport restoration, reconnect, 320/375/640/768/1024/1440/1920px.');
+    console.log('PASS: browser/WebGL, BLE split frames, parameters/Flash rejection/timeout, grouped settings, preset/theme persistence, map velocity vectors/direction/scale/reverse/overlap/zero/stale/pan/zoom/hide persistence, map use without a fix and non-blocking fix hints, primary desktop map layout, unique element IDs, RTK/IMU tabs and keyboard navigation, IMU left-readings/right-horizon layout, fresh Euler pose/axis directions/yaw independence/gyro independence/invalid-source freezing/expiry/disconnect reset, themed charts, stale values, animation freeze and mobile viewport restoration, reconnect, 320/375/640/768/1024/1440/1920px.');
     console.log('Screenshots: '+output);
   }finally{socket?.close();browser.kill();await new Promise(resolve=>server.close(resolve));}
 }
-main().catch(error=>{console.error(error);process.exitCode=1;});
+if(require.main===module)main().catch(error=>{console.error(error);process.exitCode=1;});
+// 地图供应商集成测试复用同一份 BLE 字节流，避免两套测试协议发生偏差。
+module.exports={mock};

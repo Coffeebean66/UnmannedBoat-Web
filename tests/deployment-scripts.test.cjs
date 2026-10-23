@@ -71,6 +71,7 @@ test('Linux upgrade preserves cloud secrets and default removal keeps recovery f
   f.write('etc/unmanned-boat-web/runtime.env','BOAT_CLOUD_ENABLED=1\nsecret-fixture\n');
   f.write('etc/systemd/system/unmanned-boat-mqtt.service','# Owned by unmanned-boat-cloud-v1\n');
   let result=f.run('deploy.sh',['7890','127.0.0.1']);assert.equal(result.status,0,result.stdout+result.stderr);
+  assert.match(fs.readFileSync(f.unit,'utf8'),/^StateDirectory=unmanned-boat-web$/m);
   assert.equal(fs.readFileSync(path.join(f.target,'server/helper.js'),'utf8'),'// runtime module');
   assert.equal(fs.readFileSync(path.join(f.directory,'etc/unmanned-boat-web/runtime.env'),'utf8'),'BOAT_CLOUD_ENABLED=1\nsecret-fixture\n');
   result=f.run('remove.sh');assert.equal(result.status,0,result.stdout+result.stderr);assert.equal(fs.existsSync(f.target),false);
