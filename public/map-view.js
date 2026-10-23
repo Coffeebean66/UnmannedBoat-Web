@@ -4,6 +4,7 @@
 
   const SDK_TIMEOUT_MS = 15000;
   const CONFIG_TIMEOUT_MS = 5000;
+  const PROVIDER_PREFERENCE = 'boat.map.provider';
   let callbackSequence = 0;
 
   function fix(value) {
@@ -18,6 +19,7 @@
     constructor(containerId = 'map') {
       this.container = typeof containerId === 'string' ? scope.document.getElementById(containerId) : containerId;
       this.ready = false;
+      this.switching = false;
       this.provider = 'osm';
       this.status = { message: '正在准备地图', tone: 'loading' };
       this.map = null;
@@ -51,6 +53,32 @@
       this._emit('status', this.status);
     }
 
+    _setSwitching(value) {
+      this.switching = value;
+      this._emit('switching', value);
+    }
+
+    _readPreference() {
+      try { return scope.localStorage?.getItem(PROVIDER_PREFERENCE); } catch (_) { return null; }
+    }
+
+    _osmStatus() {
+      return (this.config?.configured ? '' : '高德未配置 · ') + 'OpenStreetMap · WGS84';
+    }
+
+    _mapReadyStatus() {
+      this._setStatus(this.provider === 'amap' ? '高德地图 · GCJ-02（RTK 原始 WGS84）' : this._osmStatus(),
+        this.provider === 'amap' ? 'success' : 'neutral');
+    }
+
+    _requireAmap(config) {
+      if (config.enabled !== true || config.configured !== true ||
+          typeof config.key !== 'string' || !config.key.trim() ||
+          typeof config.securityJsCode !== 'string' || !config.securityJsCode.trim()) {
+        throw new Error('高德地图尚未配置，请管理员在“设置 → 平台地图设置”填写 Key 与安全密钥');
+      }
+    }
+
     initialize() {
       if (!this._initialization) this._initialization = this._initialize();
       return this._initialization;
@@ -58,30 +86,28 @@
 
     async _initialize() {
       if (this._destroyed) return this;
+      this._setSwitching(true);
       this._setStatus('正在读取地图配置', 'loading');
       try {
         if (!this.container) throw new Error('找不到地图容器');
         const config = await this._loadConfig();
         if (this._destroyed) return this;
-        if (config.enabled === true && config.configured === true) {
+        this.config = config;
+        if (config.enabled === true && config.configured === true && this._readPreference() !== 'osm') {
           this.provider = 'amap';
-          if (typeof config.key !== 'string' || !config.key.trim() ||
-              typeof config.securityJsCode !== 'string' || !config.securityJsCode.trim()) {
-            throw new Error('高德地图配置不完整，请检查 Key 与安全密钥');
-          }
+          this._requireAmap(config);
           this._setStatus('正在加载高德地图', 'loading');
           await this._loadSdk(config);
           if (this._destroyed) return this;
           this._createAmap();
           this.ready = true;
-          this._setStatus('高德地图 · GCJ-02（RTK 原始 WGS84）', 'success');
         } else {
           this.provider = 'osm';
           this.configurationReason = config.reason || '尚未填写高德 Key 与安全密钥';
           this._createOsm();
           this.ready = true;
-          this._setStatus('高德未配置 · OpenStreetMap · WGS84', 'neutral');
         }
+        this._mapReadyStatus();
         this._emit('ready', this);
       } catch (error) {
         if (!this._destroyed) {
@@ -89,8 +115,59 @@
           this._setStatus((this.provider === 'amap' ? '高德地图加载失败：' : '地图不可用：') +
             (error?.message || '未知错误') + '；RTK 原始经纬度仍可查看', 'error');
         }
-      }
+      } finally { this._setSwitching(false); }
       return this;
+    }
+
+    async switchProvider(provider) {
+      if (provider !== 'amap' && provider !== 'osm') throw new Error('不支持的地图类型');
+      if (this._destroyed || this.switching) return false;
+      if (this.ready && provider === this.provider) return true;
+      this._setSwitching(true);
+      const previous = this.provider;
+      let viewport, tracks, rebuilding = false;
+      try {
+        // 高德鉴权及 SDK 在旧地图仍可用时准备，失败不会清空现有船位和轨迹。
+        this._setStatus('正在切换至' + (provider === 'amap' ? '高德地图' : ' OpenStreetMap'), 'loading');
+        if (provider === 'amap') {
+          const config = await this._loadConfig();
+          if (this._destroyed) return false;
+          this._requireAmap(config);
+          this.config = config;
+          await this._loadSdk(config);
+        }
+        if (this._destroyed) return false;
+        viewport = { center: this.getCenter(), zoom: this.getZoom() };
+        tracks = this.lastTrackLines;
+        rebuilding = true;
+        this._disposeMap(true);
+        this.provider = provider;
+        this._restoreMap(viewport, tracks);
+        try { scope.localStorage?.setItem(PROVIDER_PREFERENCE, provider); } catch (_) {}
+        this._mapReadyStatus();
+        this._emit('providerchange', { provider });
+        this._emit('resize');
+        return true;
+      } catch (error) {
+        if (this._destroyed) return false;
+        if (rebuilding) {
+          this._disposeMap(true);
+          this.provider = previous;
+          try { this._restoreMap(viewport, tracks); } catch (_) { this._disposeMap(true); }
+        }
+        this._setStatus('地图切换失败：' + (error?.message || '未知错误') +
+          (this.ready ? '；继续使用' + (this.provider === 'amap' ? '高德地图' : ' OpenStreetMap') : ''),
+          this.ready ? 'warning' : 'error');
+        throw error;
+      } finally { this._setSwitching(false); }
+    }
+
+    _restoreMap(viewport, tracks) {
+      if (this.provider === 'amap') this._createAmap(); else this._createOsm();
+      this.ready = true;
+      if (viewport.center) this.setView(viewport.center, Math.max(3, Math.min(this.provider === 'amap' ? 20 : 19, viewport.zoom)), { animate: false });
+      for (const marker of this._markers) marker._mount();
+      this.setTrackLines(tracks);
     }
 
     _loadConfig() {
@@ -167,8 +244,9 @@
       });
       this._bindMap('dragstart', event => this._emit('dragstart', event));
       this._bindMap('resize', event => this._emit('resize', event));
+      const currentMap = this.map;
       this._bindMap('error', () => {
-        if (!this._destroyed) this._setStatus('高德底图加载异常，请检查网络、Key 和域名白名单；RTK 原始经纬度仍可查看', 'warning');
+        if (!this._destroyed && this.map === currentMap) this._setStatus('高德底图加载异常，请检查网络、Key 和域名白名单；RTK 原始经纬度仍可查看', 'warning');
       });
       this.setTheme(scope.document.documentElement?.dataset.theme);
       this._createZoomControls();
@@ -199,15 +277,16 @@
       this.map = scope.L.map(this.container, { zoomControl: true }).setView([31.23, 121.47], 5);
       this._bindMap('dragstart', event => this._emit('dragstart', event));
       this._bindMap('resize', event => this._emit('resize', event));
+      const currentMap = this.map;
       this._tiles = scope.L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>'
       });
       this._tiles.on('loading', () => { this._tileFailed = false; })
         .on('tileerror', () => {
           this._tileFailed = true;
-          if (!this._destroyed) this._setStatus('高德未配置 · OSM 底图网络不可用，坐标与轨迹仍有效', 'warning');
+          if (!this._destroyed && this.map === currentMap) this._setStatus((this.config?.configured ? '' : '高德未配置 · ') + 'OSM 底图网络不可用，坐标与轨迹仍有效', 'warning');
         }).on('load', () => {
-          if (!this._destroyed && !this._tileFailed) this._setStatus('高德未配置 · OpenStreetMap · WGS84', 'neutral');
+          if (!this._destroyed && this.map === currentMap && !this._tileFailed) this._setStatus(this._osmStatus(), 'neutral');
         }).addTo(this.map);
     }
 
@@ -223,63 +302,83 @@
     createMarker(value, options = {}) {
       const raw = fix(value);
       if (!this.ready || !raw) return null;
-      const point = this.project(raw);
       const element = scope.document.createElement('div');
       element.className = options.className || '';
       element.innerHTML = options.html || '';
       const size = options.iconSize || [30, 30], anchor = options.iconAnchor || [15, 15];
-      let native;
-      if (this.provider === 'amap') {
-        element.style.width = size[0] + 'px';
-        element.style.height = size[1] + 'px';
-        const x = anchor[0] ? -anchor[0] : 0, y = anchor[1] ? -anchor[1] : 0;
-        const offset = scope.AMap.Pixel ? new scope.AMap.Pixel(x, y) : { x, y };
-        native = new scope.AMap.Marker({
-          position: [point.longitude, point.latitude], content: element, offset, anchor: 'top-left',
-          zIndex: 120 + (options.zIndexOffset || 0), clickable: options.interactive !== false, bubble: true
-        });
-        native.setMap(this.map);
-      } else {
-        native = scope.L.marker([point.latitude, point.longitude], {
-          icon: scope.L.divIcon({ className: options.className || '', html: options.html || '', iconSize: size, iconAnchor: anchor }),
-          interactive: options.interactive !== false, keyboard: options.interactive !== false,
-          zIndexOffset: options.zIndexOffset || 0
-        }).addTo(this.map);
-      }
       const view = this;
-      let removed = false;
+      let native, nativeProvider, attached = false, removed = false, opacity = 1;
       const wrapper = {
-        native, position: raw, mapPosition: point,
+        native: null, position: raw, mapPosition: null,
+        _mount() {
+          if (removed || !view.ready) return;
+          const point = this.mapPosition = view.project(this.position);
+          nativeProvider = view.provider;
+          if (nativeProvider === 'amap') {
+            element.style.width = size[0] + 'px';
+            element.style.height = size[1] + 'px';
+            const x = anchor[0] ? -anchor[0] : 0, y = anchor[1] ? -anchor[1] : 0;
+            const offset = scope.AMap.Pixel ? new scope.AMap.Pixel(x, y) : { x, y };
+            native = new scope.AMap.Marker({
+              position: [point.longitude, point.latitude], content: element, offset, anchor: 'top-left',
+              zIndex: 120 + (options.zIndexOffset || 0), clickable: options.interactive !== false, bubble: true
+            });
+            this.native = native;
+            native.setMap(view.map);
+          } else {
+            native = scope.L.marker([point.latitude, point.longitude], {
+              icon: scope.L.divIcon({ className: options.className || '', html: element.innerHTML, iconSize: size, iconAnchor: anchor }),
+              interactive: options.interactive !== false, keyboard: options.interactive !== false,
+              zIndexOffset: options.zIndexOffset || 0
+            });
+            this.native = native;
+            native.addTo(view.map);
+          }
+          attached = true;
+          if (typeof native.setOpacity === 'function' && element.style.opacity) element.style.opacity = '';
+          if (opacity !== 1) this.setOpacity(opacity);
+        },
+        _detach() {
+          if (!native) return;
+          const current = this.getElement();
+          if (typeof current?.innerHTML === 'string') element.innerHTML = current.innerHTML;
+          if (nativeProvider === 'amap') native.setMap(null); else native.remove();
+          attached = false;
+        },
         setPosition(value) {
           const next = fix(value);
           if (removed || !next) return this;
           this.position = next;
           this.mapPosition = view.project(next);
-          if (view.provider === 'amap') native.setPosition([this.mapPosition.longitude, this.mapPosition.latitude]);
-          else native.setLatLng([this.mapPosition.latitude, this.mapPosition.longitude]);
+          if (attached) {
+            if (nativeProvider === 'amap') native.setPosition([this.mapPosition.longitude, this.mapPosition.latitude]);
+            else native.setLatLng([this.mapPosition.latitude, this.mapPosition.longitude]);
+          }
           return this;
         },
         setLatLng(value) { return this.setPosition(value); },
         getLatLng() { return { lat: this.position.latitude, lng: this.position.longitude }; },
-        setOpacity(opacity) {
-          if (!removed) {
-            if (typeof native.setOpacity === 'function') native.setOpacity(opacity);
+        setOpacity(value) {
+          opacity = value;
+          if (!removed && attached) {
+            if (typeof native.setOpacity === 'function') native.setOpacity(value);
             else {
               const node = this.getElement();
-              if (node) node.style.opacity = String(opacity);
+              if (node) node.style.opacity = String(value);
             }
           }
           return this;
         },
-        getElement() { return removed ? null : view.provider === 'amap' ? element : native.getElement(); },
+        getElement() { return removed || !attached ? null : nativeProvider === 'amap' ? element : native.getElement(); },
         remove() {
           if (removed) return;
+          this._detach();
           removed = true;
-          if (view.provider === 'amap') native.setMap(null); else native.remove();
           view._markers.delete(this);
         }
       };
       this._markers.add(wrapper);
+      wrapper._mount();
       return wrapper;
     }
 
@@ -331,6 +430,23 @@
       return this;
     }
 
+    getCenter() {
+      const center = this.map?.getCenter?.();
+      const point = fix(center ? { latitude: center.lat ?? center.getLat?.(), longitude: center.lng ?? center.getLng?.() } : null);
+      if (!point || this.provider !== 'amap') return point;
+      // 仅为保留用户平移后的视野作近似反算；RTK 记录始终保留原始 WGS84。
+      let raw = { ...point };
+      for (let i = 0; i < 6; i++) {
+        const projected = this.project(raw);
+        const latitudeError = projected.latitude - point.latitude;
+        const longitudeError = projected.longitude - point.longitude;
+        raw.latitude -= latitudeError;
+        raw.longitude -= longitudeError;
+        if (Math.max(Math.abs(latitudeError), Math.abs(longitudeError)) < 1e-8) break;
+      }
+      return raw;
+    }
+
     getZoom() { return this.map?.getZoom() ?? 5; }
     setZoom(zoom) { if (this.ready && Number.isFinite(zoom)) this.map.setZoom(zoom); return this; }
 
@@ -370,14 +486,17 @@
       return this;
     }
 
-    _disposeMap() {
+    _disposeMap(preserveMarkers = false) {
       this.ready = false;
-      for (const marker of this._markers) marker.remove();
+      for (const marker of this._markers) {
+        if (preserveMarkers) marker._detach(); else marker.remove();
+      }
       this._clearTrackLines();
       for (const [name, callback] of this._mapEvents) this.map?.off?.(name, callback);
       this._mapEvents = [];
       this._zoomControls?.remove();
       this._zoomControls = null;
+      this._tiles?.off?.();
       if (this.provider === 'amap') this.map?.destroy?.(); else this.map?.remove?.();
       this.map = null;
       this._tiles = null;

@@ -29,6 +29,7 @@ const fakeSdk='('+function(){
     add(overlay){for(const item of Array.isArray(overlay)?overlay:[overlay])item.setMap(this);return this;}
     remove(overlay){for(const item of Array.isArray(overlay)?overlay:[overlay])item.setMap(null);return this;}
     getZoom(){return this.map.getZoom();}
+    getCenter(){const p=this.map.getCenter();return {lng:p.lng,lat:p.lat,getLng:()=>p.lng,getLat:()=>p.lat};}
     setZoom(zoom){this.map.setZoom(zoom,{animate:false});return this;}
     setCenter(center){this.map.setView(coord(center),this.getZoom(),{animate:false});return this;}
     setZoomAndCenter(zoom,center){this.map.setView(coord(center),zoom,{animate:false});return this;}
@@ -62,7 +63,7 @@ const fakeSdk='('+function(){
 
 async function browserSession(server,mode,run){
   const profile=fs.mkdtempSync(path.join(output,'amap-chrome-')),errors=[],sdkRequests=[],configRequests=[],settingsRequests=[];
-  const failures={settingsRead:false,settingsWrite:false};
+  const failures={settingsRead:false,settingsWrite:false,sdk:false};
   const browser=spawn(process.env.CHROME_PATH||'C:/Program Files/Google/Chrome/Application/chrome.exe',[
     '--headless','--no-first-run','--no-default-browser-check','--use-angle=swiftshader','--enable-unsafe-swiftshader',
     '--remote-debugging-port=0','--user-data-dir='+profile
@@ -88,7 +89,7 @@ async function browserSession(server,mode,run){
         const url=new URL(request.request.url);
         if(url.hostname==='webapi.amap.com'){
           sdkRequests.push(url.href);
-          void (mode==='sdk-failed'
+          void (mode==='sdk-failed'||failures.sdk
             ?send('Fetch.failRequest',{requestId:request.requestId,errorReason:'Failed'})
             :send('Fetch.fulfillRequest',{requestId:request.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'text/javascript; charset=utf-8'}],body:Buffer.from(fakeSdk).toString('base64')}))
             .catch(error=>errors.push(error.message));
@@ -246,6 +247,84 @@ async function settingsBrowser(){
   });
 }
 
+// 使用真实按钮切换提供方，验证切换过程不会重置遥测链路或原始 WGS84 轨迹。
+async function providerSwitchBrowser(){
+  await withServer({BOAT_AMAP_KEY:testKey,BOAT_AMAP_SECURITY_CODE:testCode},'provider-switch',async context=>{
+    const {evaluate,until,send,viewportShot,sdkRequests,failures}=context;
+    await until("boatMonitor.map?.ready && boatMonitor.map.provider==='amap'");
+    assert.match(await evaluate("document.getElementById('mapProviderToggle').textContent"),/OSM/,'AMap offers a direct switch to OSM');
+    await startTelemetry(context);
+    await until('boatMonitor.track.pointCount>=2 && !!document.querySelector(".map-velocity-anchor")');
+    await evaluate("stopTelemetry();document.getElementById('trackStart').click();document.getElementById('mapFollow').checked=false;boatMonitor.map.setZoom(17);boatMonitor.map.panBy([70,30],{animate:false});window.providerSwitchStates=[];boatMonitor.map.on('switching',()=>providerSwitchStates.push({busy:boatMonitor.map.switching,disabled:document.getElementById('mapProviderToggle').disabled}));void 0");
+    const trackBefore=await evaluate('({segments:boatMonitor.track.segments,pointCount:boatMonitor.track.pointCount,lines:boatMonitor.map.lastTrackLines})');
+    const centerBefore=await evaluate('boatMonitor.map.getCenter()');
+    const assertPreserved=async provider=>{
+      await evaluate('feedTelemetry()');await wait(250);
+      assert.equal(await evaluate('boatMonitor.link.connected'),true,'Switching keeps the telemetry connection on '+provider);
+      assert.equal(await evaluate("document.getElementById('mapEmpty').hidden"),true,'The new base layer is visible on '+provider);
+      assert.equal(await evaluate('boatMonitor.map.getZoom()'),17,'Switching retains the user-selected zoom on '+provider);
+      const center=await evaluate('boatMonitor.map.getCenter()');
+      assert.ok(Math.abs(center.latitude-centerBefore.latitude)<1e-6&&Math.abs(center.longitude-centerBefore.longitude)<1e-6,'Switching retains the manually panned viewport on '+provider);
+      assert.equal(await evaluate("document.getElementById('mapFollow').checked"),false,'Switching retains the follow setting on '+provider);
+      assert.deepEqual(await evaluate('({segments:boatMonitor.track.segments,pointCount:boatMonitor.track.pointCount,lines:boatMonitor.map.lastTrackLines})'),trackBefore,'Switching retains raw track points and speed-colored line definitions on '+provider);
+      assert.equal(await evaluate("document.querySelectorAll('.boat-pin').length"),1,'Exactly one boat marker is visible on '+provider);
+      assert.equal(await evaluate("document.querySelectorAll('.map-velocity-anchor').length"),1,'Exactly one velocity overlay is visible on '+provider);
+      const position=await evaluate("(()=>{const marker=boatMonitor.mapVectors.marker;return {raw:marker.getLatLng(),display:marker.mapPosition,lat:Number(document.getElementById('latitude').textContent),lng:Number(document.getElementById('longitude').textContent),expected:BoatModules.mapCoordinates.wgs84ToGcj02(Number(document.getElementById('latitude').textContent),Number(document.getElementById('longitude').textContent))};})()");
+      assert.equal(position.raw.lat,position.lat,'Facade and displayed latitude stay WGS84 on '+provider);
+      assert.equal(position.raw.lng,position.lng,'Facade and displayed longitude stay WGS84 on '+provider);
+      const expected=provider==='amap'?position.expected:{latitude:position.lat,longitude:position.lng};
+      assert.ok(Math.abs(position.display.latitude-expected.latitude)<2e-7&&Math.abs(position.display.longitude-expected.longitude)<2e-7,'The new provider projects raw coordinates exactly once on '+provider);
+    };
+    await evaluate("document.getElementById('mapProviderToggle').click()");
+    await until("boatMonitor.map.ready && !boatMonitor.map.switching && boatMonitor.map.provider==='osm'");
+    assert.equal(await evaluate("localStorage.getItem('boat.map.provider')"),'osm','Selecting OSM is saved in this browser');
+    assert.match(await evaluate("document.getElementById('mapProviderToggle').textContent"),/高德/,'OSM offers a direct switch to AMap');
+    await assertPreserved('osm');
+    await evaluate("document.getElementById('mapProviderToggle').click()");
+    await until("boatMonitor.map.ready && !boatMonitor.map.switching && boatMonitor.map.provider==='amap'");
+    await assertPreserved('amap');
+    assert.equal(sdkRequests.length,1,'Switching back reuses the already loaded official SDK');
+    assert.equal(await evaluate("localStorage.getItem('boat.map.provider')"),'amap','Selecting AMap is saved in this browser');
+    assert.equal(await evaluate('providerSwitchStates.some(state=>state.busy&&state.disabled)'),true,'Switching disables the button while provider work is in progress');
+    assert.equal(await evaluate("document.getElementById('mapProviderToggle').disabled"),false,'The map switch button becomes available after switching');
+    for(const width of [1440,375,320]){
+      await send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:width<600});await wait(200);
+      assert.equal(await evaluate("(()=>{const button=document.getElementById('mapProviderToggle'),r=button.getBoundingClientRect(),controls=button.closest('.map-controls').getBoundingClientRect();return document.documentElement.scrollWidth<=innerWidth&&r.width>0&&r.left>=controls.left-1&&r.right<=controls.right+1;})()"),true,'Provider switch fits the map controls at '+width+'px');
+      await evaluate("document.getElementById('mapProviderToggle').scrollIntoView({block:'center',behavior:'instant'})");
+      await viewportShot('map-provider-switch-'+width);
+    }
+    await evaluate("document.getElementById('mapProviderToggle').click()");
+    await until("boatMonitor.map.ready && !boatMonitor.map.switching && boatMonitor.map.provider==='osm'");
+    await evaluate('window.beforeMapReload=true');await send('Page.reload');
+    await until("!window.beforeMapReload && window.boatMonitor?.map?.ready && boatMonitor.map.provider==='osm'");
+    assert.equal(sdkRequests.length,1,'Reloading a remembered OSM selection does not load the AMap SDK');
+    assert.equal(await evaluate("document.getElementById('mapEmpty').hidden"),true,'Remembered OSM is usable before a new location fix');
+    failures.sdk=true;
+    await evaluate("window.originalOsmMap=boatMonitor.map.map;document.getElementById('mapProviderToggle').click()");
+    await until("document.getElementById('toast').classList.contains('show') && !boatMonitor.map.switching");
+    assert.equal(await evaluate("boatMonitor.map.ready && boatMonitor.map.provider==='osm' && boatMonitor.map.map===originalOsmMap"),true,'A failed SDK request keeps the original usable OSM map');
+    assert.equal(await evaluate("localStorage.getItem('boat.map.provider')"),'osm','A failed switch does not change the saved selection');
+    failures.sdk=false;
+    await evaluate("document.getElementById('mapProviderToggle').click()");
+    await until("boatMonitor.map.ready && !boatMonitor.map.switching && boatMonitor.map.provider==='amap'");
+    await evaluate('window.beforeMapReload=true');await send('Page.reload');
+    await until("!window.beforeMapReload && window.boatMonitor?.map?.ready && boatMonitor.map.provider==='amap'");
+    assert.equal(await evaluate("localStorage.getItem('boat.map.provider')"),'amap','Reloading retains a remembered AMap selection');
+    console.log('PASS: map provider button switches AMap/OSM without losing connection, raw WGS84 track or overlays; preferences survive reload; busy and 320/375/1440px layouts verified (simulated SDK).');
+  });
+  await withServer({},'provider-unconfigured',async context=>{
+    const {evaluate,until,sdkRequests}=context;
+    await until("boatMonitor.map?.ready && boatMonitor.map.provider==='osm'");
+    await evaluate("window.originalOsmMap=boatMonitor.map.map;document.getElementById('mapProviderToggle').click()");
+    await until("document.getElementById('toast').classList.contains('show') && !document.getElementById('mapProviderToggle').disabled");
+    assert.match(await evaluate("document.getElementById('toast').textContent"),/高德|Key/,'Missing credentials explain how to enable AMap');
+    assert.equal(await evaluate("boatMonitor.map.ready && boatMonitor.map.provider==='osm' && boatMonitor.map.map===originalOsmMap"),true,'Missing credentials retain the running OSM map');
+    assert.equal(await evaluate("document.getElementById('mapEmpty').hidden"),true,'Missing credentials do not cover the available base layer');
+    assert.equal(sdkRequests.length,0,'Missing credentials never request the SDK');
+    console.log('PASS: an unconfigured AMap selection explains missing credentials and leaves the current OSM map usable.');
+  });
+}
+
 async function main(){
   const configured={BOAT_AMAP_KEY:testKey,BOAT_AMAP_SECURITY_CODE:testCode};
   await withServer(configured,'configured',async context=>{
@@ -348,9 +427,17 @@ async function main(){
     assert.notEqual(await evaluate("document.getElementById('latitude').textContent"),'--','Coordinates remain readable when map fails');
     assert.equal(await evaluate("document.getElementById('mapEmpty').hidden"),false,'Map failure remains visible while coordinates arrive');
     if(mode==='sdk-failed')await shot('amap-sdk-failure');
-    console.log('PASS: '+mode+' is isolated from other monitoring widgets.');
+    assert.match(await evaluate("document.getElementById('mapProviderToggle').textContent"),/OSM/,'A failed initial map offers direct OSM recovery');
+    await evaluate("document.getElementById('mapProviderToggle').click()");
+    await until("boatMonitor.map.ready && !boatMonitor.map.switching && boatMonitor.map.provider==='osm'");
+    assert.equal(await evaluate("document.getElementById('mapEmpty').hidden"),true,'Manual OSM recovery removes the map failure overlay after '+mode);
+    assert.equal(await evaluate('boatMonitor.link.connected'),true,'Manual OSM recovery preserves the telemetry connection after '+mode);
+    await until("!!document.querySelector('.boat-pin') && !!document.querySelector('.map-velocity-anchor')");
+    assert.equal(await evaluate("document.getElementById('boatActual').textContent"),'1.552','Telemetry keeps updating after manual OSM recovery');
+    console.log('PASS: '+mode+' is isolated from other monitoring widgets and the switch button restores OSM without disconnecting telemetry.');
   });
+  await providerSwitchBrowser();
   if(!process.argv.includes('--map-only'))await settingsBrowser();
   console.log('Screenshots: '+output+' (AMap images use an explicitly labelled simulated SDK).');
 }
-(process.argv.includes('--settings-only')?settingsBrowser():main()).catch(error=>{console.error(error);process.exitCode=1;});
+(process.argv.includes('--settings-only')?settingsBrowser():process.argv.includes('--switch-only')?providerSwitchBrowser():main()).catch(error=>{console.error(error);process.exitCode=1;});

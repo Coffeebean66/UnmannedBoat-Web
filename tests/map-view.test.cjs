@@ -8,9 +8,10 @@ const plain = value => JSON.parse(JSON.stringify(value));
 const configured = { provider: 'amap', version: '2.0', enabled: true, configured: true,
   key: 'key with+characters', securityJsCode: 'test-security-code' };
 
-function fixture(config = configured) {
+function fixture(config = configured, preferences = {}) {
   const listeners = new Map(), timers = new Map();
   const scripts = [], maps = [], markers = [], lines = [], conversions = [], fetches = [];
+  const storage = new Map(Object.entries(preferences));
   let timerSequence = 0;
   const node = tag => ({ tag, style: {}, children: [], className: '', events: {}, attributes: {},
     appendChild(child) { this.children.push(child); },
@@ -29,6 +30,10 @@ function fixture(config = configured) {
   };
   const window = {
     document, AbortController,
+    localStorage: {
+      getItem(key) { return storage.get(key) ?? null; },
+      setItem(key, value) { storage.set(key, String(value)); }
+    },
     fetch: async (url, options) => {
       fetches.push({ url, options });
       return { ok: true, json: async () => config };
@@ -40,18 +45,24 @@ function fixture(config = configured) {
     BoatModules: { mapCoordinates: { wgs84ToGcj02(latitude, longitude) {
       conversions.push([latitude, longitude]);
       return { latitude: latitude + .002, longitude: longitude + .004 };
+    }, gcj02ToWgs84(latitude, longitude) {
+      return { latitude: latitude - .002, longitude: longitude - .004 };
     } } }
   };
-  function mapInstance(options) {
+  function mapInstance(options, provider) {
     const events = new Map();
     return {
-      options, zoom: options.zoom ?? 5,
+      options, provider, center: options.center, zoom: options.zoom ?? 5,
       on(name, fn) { events.set(name, fn); return this; },
       off(name) { events.delete(name); return this; },
       emit(name, value) { events.get(name)?.(value); },
       setView(position, zoom, options) { this.center = position; this.zoom = zoom; this.viewOptions = options; return this; },
       setZoomAndCenter(zoom, center, immediately) { this.zoom = zoom; this.center = center; this.immediately = immediately; },
       setCenter(center) { this.center = center; },
+      getCenter() {
+        const [first, second] = this.center || [];
+        return provider === 'amap' ? { lng: first, lat: second } : { lat: first, lng: second };
+      },
       getZoom() { return this.zoom; },
       setZoom(zoom) { this.zoom = zoom; },
       getSize() { return { width: 400, height: 300 }; },
@@ -66,7 +77,7 @@ function fixture(config = configured) {
     };
   }
   const AMap = {
-    Map: function (_container, options) { const map = mapInstance(options); maps.push(map); return map; },
+    Map: function (_container, options) { const map = mapInstance(options, 'amap'); maps.push(map); return map; },
     Pixel: function (x, y) { this.x = x; this.y = y; },
     Marker: function (options) {
       this.options = options; this.position = options.position;
@@ -82,7 +93,7 @@ function fixture(config = configured) {
     }
   };
   window.L = {
-    map(_container, options) { const map = mapInstance(options); maps.push(map); return map; },
+    map(_container, options) { const map = mapInstance(options, 'osm'); maps.push(map); return map; },
     tileLayer(url, options) {
       const layer = { url, options, events: {},
         on(name, fn) { this.events[name] = fn; return this; },
@@ -93,6 +104,7 @@ function fixture(config = configured) {
     divIcon(options) { return options; },
     marker(position, options) {
       const element = node('div');
+      element.innerHTML = options.icon.html;
       const marker = { position, options,
         addTo(map) { this.map = map; return this; },
         setLatLng(position) { this.position = position; return this; },
@@ -111,7 +123,7 @@ function fixture(config = configured) {
   };
   vm.runInNewContext(source, { window, Map, Set, Date, Promise, module: { exports: {} } });
   const view = new window.BoatMapView('map');
-  return { window, view, scripts, maps, markers, lines, conversions, timers, fetches, listeners, AMap,
+  return { window, view, scripts, maps, markers, lines, conversions, timers, fetches, listeners, AMap, storage,
     finishSdk() {
       window.AMap = AMap;
       const callback = new URL(scripts.at(-1).src).searchParams.get('callback');
@@ -375,4 +387,186 @@ test('config error/timeout stays explicit and ready event/resize lifecycle is st
   f.view.destroy();
   assert.equal(f.view.ready, false);
   assert.equal(f.listeners.size, 0);
+});
+
+test('saved OSM preference overrides configured AMap and switching preserves live map state', async () => {
+  const f = fixture(configured, { 'boat.map.provider': 'osm' });
+  await f.view.initialize();
+  assert.equal(f.view.provider, 'osm');
+  assert.equal(f.scripts.length, 0, 'saved OSM starts without requesting the AMap SDK');
+  const oldMap = f.view.map;
+  const marker = f.view.createMarker([31, 121], { html: '<svg>initial</svg>', iconSize: [0, 0], iconAnchor: [0, 0] });
+  const oldMarker = marker.native;
+  marker.setPosition([32, 122]).setOpacity(.35);
+  marker.getElement().innerHTML = '<svg>live heading</svg>';
+  f.view.setTrackLines([{ points: [[31, 121], [32, 122]], color: '#abcdef', width: 5 }]);
+  const oldLine = f.lines[0];
+  oldMap.setView([33, 123], 16);
+  const switching = [], changed = [];
+  f.view.on('switching', value => switching.push(value));
+  f.view.on('providerchange', value => changed.push(value));
+  const pending = f.view.switchProvider('amap');
+  await until(() => f.scripts.length === 1);
+  assert.equal(f.view.switching, true);
+  assert.equal(f.view.ready, true, 'existing map remains usable while SDK is loading');
+  assert.equal(f.view.map, oldMap);
+  assert.equal(oldMap.removed, undefined);
+  assert.equal(f.storage.get('boat.map.provider'), 'osm');
+  const duplicate = f.view.switchProvider('amap');
+  const competing = f.view.switchProvider('osm');
+  assert.equal(f.scripts.length, 1, 'concurrent button presses cannot start another switch');
+  f.finishSdk();
+  await pending;
+  await Promise.all([duplicate, competing]);
+  assert.equal(f.view.provider, 'amap');
+  assert.equal(f.view.ready, true);
+  assert.equal(f.view.switching, false);
+  assert.equal(oldMap.removed, true);
+  assert.equal(oldMarker.removed, true);
+  assert.equal(oldLine.removed, true);
+  assert.notEqual(marker.native, oldMarker, 'wrapper is stable while native marker is rebuilt');
+  assert.deepEqual(plain(marker.getLatLng()), { lat: 32, lng: 122 });
+  assert.deepEqual(plain(marker.native.position), [122.004, 32.002]);
+  assert.equal(marker.getElement().innerHTML, '<svg>live heading</svg>');
+  assert.equal(marker.getElement().style.opacity, '0.35');
+  assert.deepEqual(plain(f.lines.at(-1).options.path), [[121.004, 31.002], [122.004, 32.002]]);
+  assert.equal(f.lines.at(-1).options.strokeColor, '#abcdef');
+  assert.equal(f.lines.at(-1).options.strokeWeight, 5);
+  assert.deepEqual(plain(f.view.map.center), [123.004, 33.002]);
+  assert.equal(f.view.getZoom(), 16);
+  assert.equal(f.storage.get('boat.map.provider'), 'amap');
+  assert.equal(changed.length, 1);
+  assert.ok(switching.length >= 2, 'start and completion are observable by the UI');
+  marker.setPosition([34, 124]).setOpacity(.5);
+  assert.deepEqual(plain(marker.native.position), [124.004, 34.002], 'existing marker handle updates the new native marker');
+  marker.remove();
+  assert.equal(marker.native.map, null);
+  f.view.destroy();
+});
+
+test('AMap to OSM converts the dragged viewport back to WGS84 without moving raw telemetry', async () => {
+  const f = fixture();
+  await readyAmap(f);
+  const marker = f.view.createMarker([31, 121], { html: '<svg>boat</svg>' });
+  marker.setOpacity(.2);
+  const oldMarker = marker.native, oldMap = f.view.map;
+  oldMap.setZoomAndCenter(15, [123.004, 33.002]);
+  await f.view.switchProvider('osm');
+  assert.equal(f.view.provider, 'osm');
+  assert.equal(f.view.ready, true);
+  assert.equal(oldMap.destroyed, true);
+  assert.equal(oldMarker.map, null);
+  assert.deepEqual(plain(f.view.map.center), [33, 123]);
+  assert.equal(f.view.getZoom(), 15);
+  assert.deepEqual(plain(marker.native.position), [31, 121]);
+  assert.deepEqual(plain(marker.getLatLng()), { lat: 31, lng: 121 });
+  assert.equal(marker.native.opacity, .2);
+  assert.equal(marker.getElement().innerHTML, '<svg>boat</svg>');
+  assert.equal(f.storage.get('boat.map.provider'), 'osm');
+  await f.view.switchProvider('amap');
+  assert.deepEqual(plain(f.view.map.center), [123.004, 33.002]);
+  assert.equal(f.scripts.length, 1, 'a loaded SDK is reused when returning to AMap');
+  assert.deepEqual(plain(marker.native.position), [121.004, 31.002]);
+  f.view.destroy();
+});
+
+test('unconfigured AMap and failed SDK switches keep the current map and successful preference', async () => {
+  const unconfigured = fixture({ enabled: false, configured: false });
+  await unconfigured.view.initialize();
+  const available = unconfigured.view.map;
+  await assert.rejects(unconfigured.view.switchProvider('amap'), /Key/);
+  assert.equal(unconfigured.view.provider, 'osm');
+  assert.equal(unconfigured.view.map, available);
+  assert.equal(unconfigured.view.ready, true);
+  assert.equal(unconfigured.view.switching, false);
+  assert.equal(unconfigured.scripts.length, 0);
+  assert.equal(unconfigured.storage.has('boat.map.provider'), false);
+  unconfigured.view.destroy();
+  for (const fail of ['network', 'timeout']) {
+    const f = fixture(configured, { 'boat.map.provider': 'osm' });
+    await f.view.initialize();
+    const map = f.view.map;
+    const marker = f.view.createMarker([31, 121]);
+    const native = marker.native;
+    let changes = 0;
+    f.view.on('providerchange', () => changes++);
+    const pending = f.view.switchProvider('amap');
+    await until(() => f.scripts.length === 1);
+    if (fail === 'network') f.scripts[0].onerror(); else f.runTimer(15000);
+    await assert.rejects(pending, /SDK/);
+    assert.equal(f.view.provider, 'osm');
+    assert.equal(f.view.map, map);
+    assert.equal(f.view.ready, true);
+    assert.equal(f.view.switching, false);
+    assert.equal(marker.native, native);
+    assert.equal(map.removed, undefined);
+    assert.equal(f.storage.get('boat.map.provider'), 'osm');
+    assert.equal(changes, 0);
+    assert.equal(f.timers.size, 0);
+    f.view.destroy();
+  }
+});
+
+test('native map creation failure rolls back the old provider, content, viewport and preference', async () => {
+  const f = fixture(configured, { 'boat.map.provider': 'osm' });
+  await f.view.initialize();
+  const marker = f.view.createMarker([31, 121]);
+  marker.setOpacity(.4);
+  marker.getElement().innerHTML = '<svg>current</svg>';
+  f.view.setTrackLines([{ points: [[31, 121], [32, 122]], color: '#123456' }]);
+  f.view.map.setView([33, 123], 14);
+  const pending = f.view.switchProvider('amap');
+  await until(() => f.scripts.length === 1);
+  f.AMap.Map = function () { throw new Error('native map creation failed'); };
+  f.finishSdk();
+  await assert.rejects(pending, /native map creation failed/);
+  assert.equal(f.view.provider, 'osm');
+  assert.equal(f.view.ready, true);
+  assert.equal(f.view.switching, false);
+  assert.equal(f.storage.get('boat.map.provider'), 'osm');
+  assert.deepEqual(plain(f.view.map.center), [33, 123]);
+  assert.equal(f.view.getZoom(), 14);
+  assert.deepEqual(plain(marker.native.position), [31, 121]);
+  assert.equal(marker.native.opacity, .4);
+  assert.equal(marker.getElement().innerHTML, '<svg>current</svg>');
+  assert.deepEqual(plain(f.lines.at(-1).path), [[31, 121], [32, 122]]);
+  f.view.destroy();
+});
+
+test('destroy cancels an in-flight provider switch and late SDK callbacks cannot resurrect it', async () => {
+  const f = fixture(configured, { 'boat.map.provider': 'osm' });
+  await f.view.initialize();
+  const map = f.view.map;
+  const pending = f.view.switchProvider('amap');
+  await until(() => f.scripts.length === 1);
+  const callback = new URL(f.scripts[0].src).searchParams.get('callback');
+  const lateCallback = f.window[callback];
+  f.view.destroy();
+  await pending;
+  f.window.AMap = f.AMap;
+  lateCallback();
+  assert.equal(map.removed, true);
+  assert.equal(f.view.ready, false);
+  assert.equal(f.view.map, null);
+  assert.equal(f.view.switching, false);
+  assert.equal(f.maps.length, 1);
+  assert.equal(f.storage.get('boat.map.provider'), 'osm');
+  assert.equal(f.window[callback], undefined);
+  assert.equal(f.timers.size, 0);
+  await f.view.switchProvider('amap');
+  assert.equal(f.maps.length, 1);
+});
+
+test('storage restrictions cannot prevent initialization or an otherwise successful switch', async () => {
+  const f = fixture();
+  f.window.localStorage = {
+    getItem() { throw new Error('storage is blocked'); },
+    setItem() { throw new Error('storage is blocked'); }
+  };
+  await readyAmap(f);
+  await f.view.switchProvider('osm');
+  assert.equal(f.view.provider, 'osm');
+  assert.equal(f.view.ready, true);
+  assert.equal(f.view.switching, false);
+  f.view.destroy();
 });

@@ -210,7 +210,10 @@ async function main(){
     assert.equal(await evaluate("(()=>{const el=boatMonitor.mapVectors.marker.getElement().getBoundingClientRect(),rect=document.getElementById('map').getBoundingClientRect(),point=boatMonitor.map.latLngToContainerPoint(boatMonitor.mapVectors.marker.getLatLng());return Math.abs(el.left-rect.left-point.x)<1&&Math.abs(el.top-rect.top-point.y)<1;})()"),true,'Arrows stay anchored to the boat through pan and zoom');
     await evaluate("document.getElementById('mapFollow').checked=true;boatMonitor.map.setZoom(16,{animate:false});void 0");
     for(const source of ['skipBoat','skipVelocity']){
-      await override({[source]:true});await wait(1100);
+      await until("!!document.querySelector('.map-velocity-anchor')");
+      await override({[source]:true});
+      // 超时由 200 ms 的渲染周期更新，等待实际清除而非卡在 1 秒边界附近。
+      await until("!document.querySelector('.map-velocity-anchor')");
       assert.equal(await evaluate("!!document.querySelector('.map-velocity-anchor')"),false,source+' expires without reusing a stale vector');
       await override({});
     }

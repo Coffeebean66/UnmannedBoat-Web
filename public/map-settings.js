@@ -193,7 +193,7 @@
         this._applyData(data);
         if (method === 'PUT') {
           this.needsRefresh = true;
-          this._notice(data.configured ? '地图配置已保存。点击“刷新页面应用”后使用高德地图。' : '已保存停用配置。点击“刷新页面应用”后使用 OpenStreetMap。', 'success');
+          this._notice(data.configured ? '地图配置已保存。点击“刷新页面应用”加载新配置；可在地图下方切换高德 / OSM。' : '已保存停用配置。点击“刷新页面应用”后使用 OpenStreetMap。', 'success');
         } else this._notice(data.configured ? '已读取地图配置。修改后保存，再刷新页面应用。' : '已读取配置。填写 Web端（JS API）Key 与安全密钥后保存；未配置时继续使用 OpenStreetMap。');
         return true;
       } catch (error) {

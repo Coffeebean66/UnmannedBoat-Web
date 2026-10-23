@@ -108,6 +108,8 @@
   function setupMap() {
     map=new BoatMapView('map');
     map.on('status',status=>{set('mapStatus',status.message);updateMapLabels();updateMapAvailability();});
+    map.on('switching',()=>updateMapLabels());
+    map.on('providerchange',()=>{updateMapLabels();render();});
     map.on('dragstart',()=>$('mapFollow').checked=false);
     // 栅格断点和遥测标签会改变容器尺寸，由地图门面更新底图与箭头锚点。
     const mapResize=new ResizeObserver(()=>map.invalidateSize());
@@ -126,6 +128,12 @@
     const amap=map?.provider==='amap';
     set('mapLayerName',amap?'高德地图':map?.provider==='osm'?'OpenStreetMap':'地图加载中');
     set('mapCoordinateSystem',amap?'GCJ-02':'WGS84');
+    const button=$('mapProviderToggle');
+    const nextOsm=amap||!map?.ready;
+    button.disabled=!map||map.switching;
+    button.setAttribute('aria-busy',String(!!map?.switching));
+    set('mapProviderToggle',map?.switching?'正在切换…':nextOsm?'切换至 OSM':'切换至高德');
+    button.title=nextOsm?'切换为 OpenStreetMap，保留轨迹和船位':'切换为高德地图；需管理员先配置 Key 与安全密钥';
     const source=link.source==='cloud'?'云端实时监测':'本地实时监测';
     set('heroSourceLabel',source+' / '+(amap?'高德地图':map?.provider==='osm'?'OpenStreetMap':'地图加载中'));
   }
@@ -238,6 +246,10 @@
   on('trackStart',()=>{track.active?track.stop():track.start();const x=state.latest.velocity;position(x?.frame,x?.at||0,performance.now());render();});
   on('trackClear',()=>{track.clear();render();});
   on('mapVectorsToggle',()=>mapVectors.toggle());
+  on('mapProviderToggle',async()=>{
+    const switched=await map.switchProvider(map.provider==='amap'||!map.ready?'osm':'amap');
+    if(switched)toast('已切换至'+(map.provider==='amap'?'高德地图':' OpenStreetMap'));
+  });
   on('mapCenter',()=>{if(!map?.ready)toast('地图尚未就绪，请查看地图底部提示');else if(lastLocation)map.setView(lastLocation,16);else toast('尚无有效定位');});
   $('mapFollow').onchange=()=>{if($('mapFollow').checked&&lastLocation&&map?.ready)map.setView(lastLocation,16);};
   const openSettings=()=>{window.BoatAuth?.assertManage();$('settingsDialog').showModal();mapSettings.open();};
