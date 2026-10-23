@@ -6,18 +6,24 @@ const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),cryp
 // 它们用于官方浏览器 SDK，不能替代平台账户密码；应在高德控制台限制可用域名。
 const CREDENTIAL=/^[a-fA-F0-9]{32}$/;
 const VECTOR_HOSTS=['https://vdata.amap.com',...Array.from({length:4},(_,i)=>'https://vdata0'+(i+1)+'.amap.com')];
+// 真实 JS API 请求的样式服务和已观察到的瓦片分片，保持精确域名白名单。
+const STYLE_HOSTS=['https://o4.amap.com','https://custyle.amap.com'];
+const JSAPI_DATA_HOSTS=[1,2,3,4,5].map(shard=>'https://jsapi-data'+shard+'.amap.com');
 const TILE_HOSTS=['webrd','webst'].flatMap(prefix=>Array.from({length:4},(_,i)=>'https://'+prefix+'0'+(i+1)+'.is.autonavi.com'));
-const MAP_IMAGES=['https://webapi.amap.com','https://a.amap.com',...VECTOR_HOSTS,...TILE_HOSTS].join(' ');
+const MAP_IMAGES=['https://webapi.amap.com','https://a.amap.com','https://o4.amap.com',...VECTOR_HOSTS,...TILE_HOSTS].join(' ');
 
-// 官方在线 SDK、矢量数据与瓦片域名逐项放行；不开放通用域名或动态代码执行权限。
-// JS API 2.0 使用 Blob Worker 绘制地图，因此单独声明 worker-src。
+// 官方 JS API 2.0 会执行动态 JS / WebAssembly 及内联尺寸检测脚本，
+// 也会通过 restapi 的 JSONP 脚本和 jsapi 的 XHR 初始化地图，缺项会使底图空白。
+// 动态执行权限仅因 SDK 兼容而开启；外部资源仍逐域放行，并单独禁止 HTML 内联事件。
+// Blob Worker 只在 worker-src 放行，不扩展到普通外部脚本或任意 HTTPS 域名。
 const MAP_CONTENT_SECURITY_POLICY=[
   "default-src 'self'",
-  "script-src 'self' https://webapi.amap.com https://a.amap.com",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https://webapi.amap.com https://a.amap.com https://restapi.amap.com https://mapplugin.amap.com",
+  "script-src-attr 'none'",
   "style-src 'self' 'unsafe-inline' https://webapi.amap.com",
   // 未配置高德时前端保留 OSM 底图回退，仅允许其明确的瓦片域名。
   "img-src 'self' data: blob: https://tile.openstreetmap.org "+MAP_IMAGES,
-  "connect-src 'self' https://webapi.amap.com https://restapi.amap.com https://a.amap.com "+VECTOR_HOSTS.join(' ')+' '+TILE_HOSTS.join(' '),
+  "connect-src 'self' https://webapi.amap.com https://restapi.amap.com https://jsapi.amap.com https://a.amap.com https://mapplugin.amap.com "+[...VECTOR_HOSTS,...TILE_HOSTS,...STYLE_HOSTS,...JSAPI_DATA_HOSTS].join(' '),
   "font-src 'self' https://webapi.amap.com",
   "worker-src 'self' blob:",
   "frame-ancestors 'none'",

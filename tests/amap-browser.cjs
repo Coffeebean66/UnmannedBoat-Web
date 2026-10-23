@@ -11,7 +11,7 @@ const testKey='a'.repeat(32),testCode='b'.repeat(32);
 
 // 只模拟门面实际调用的公开 AMap API；投影与 DOM 定位交给本地 Leaflet。
 const fakeSdk='('+function(){
-  const calls=window.amapTestCalls={maps:[],markers:[],polylines:[],security:window._AMapSecurityConfig?.securityJsCode};
+  const calls=window.amapTestCalls={maps:[],markers:[],polylines:[],events:[],security:window._AMapSecurityConfig?.securityJsCode};
   const coord=p=>Array.isArray(p)?[p[1],p[0]]:[p.lat,p.lng];
   class Pixel{constructor(x,y){this.x=x;this.y=y;}getX(){return this.x;}getY(){return this.y;}}
   class Map{
@@ -24,7 +24,19 @@ const fakeSdk='('+function(){
         .setView(coord(options.center||[121.47,31.23]),options.zoom||5);
       const label=L.control({position:'bottomleft'});label.onAdd=()=>{const node=document.createElement('div');node.style.cssText='background:#061525;color:#c7dbe7;padding:4px 8px;font:11px sans-serif';node.textContent='高德 SDK 模拟测试 · 非真实底图';return node;};label.addTo(this.map);
     }
-    on(name,fn){this.map.on(name,fn);return this;}
+    on(name,fn){
+      this.map.on(name,fn);
+      // 真实 SDK 先构造 Map，底图/渲染器完成后才异步通知 complete。
+      if(name==='complete'&&!this.completeScheduled){
+        this.completeScheduled=true;
+        this.completeTimer=setTimeout(()=>{
+          if(this.destroyed||window.amapTestMode==='map-incomplete')return;
+          const event=window.amapTestMode==='map-error'?'error':'complete';
+          calls.events.push(event);this.map.fire(event,{type:event,message:event==='error'?'Simulated map renderer failure':undefined});
+        },window.amapTestMode==='map-delayed'?650:100);
+      }
+      return this;
+    }
     off(name,fn){this.map.off(name,fn);return this;}
     add(overlay){for(const item of Array.isArray(overlay)?overlay:[overlay])item.setMap(this);return this;}
     remove(overlay){for(const item of Array.isArray(overlay)?overlay:[overlay])item.setMap(null);return this;}
@@ -38,7 +50,7 @@ const fakeSdk='('+function(){
     lngLatToContainer(point){const p=this.map.latLngToContainerPoint(coord(point));return new Pixel(p.x,p.y);}
     setMapStyle(style){this.style=style;return this;}
     resize(){this.map.invalidateSize({pan:false,animate:false});return this;}
-    destroy(){this.map.remove();}
+    destroy(){this.destroyed=true;clearTimeout(this.completeTimer);this.map.remove();}
   }
   class Marker{
     constructor(options){this.options=options;this.position=[...options.position];this.content=options.content;this.map=null;calls.markers.push(this);}
@@ -91,7 +103,7 @@ async function browserSession(server,mode,run){
           sdkRequests.push(url.href);
           void (mode==='sdk-failed'||failures.sdk
             ?send('Fetch.failRequest',{requestId:request.requestId,errorReason:'Failed'})
-            :send('Fetch.fulfillRequest',{requestId:request.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'text/javascript; charset=utf-8'}],body:Buffer.from(fakeSdk).toString('base64')}))
+            :send('Fetch.fulfillRequest',{requestId:request.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'text/javascript; charset=utf-8'}],body:Buffer.from('window.amapTestMode='+JSON.stringify(mode)+';'+fakeSdk).toString('base64')}))
             .catch(error=>errors.push(error.message));
         }else if(url.pathname==='/api/map/settings'){
           settingsRequests.push({method:request.request.method,body:request.request.postData});
@@ -122,7 +134,7 @@ async function browserSession(server,mode,run){
       if(result.exceptionDetails)throw Error(result.exceptionDetails.exception?.description||result.exceptionDetails.text);
       return result.result.value;
     };
-    const until=async(expression)=>{for(let i=0;i<160;i++){if(await evaluate(expression))return;await wait(50);}throw Error('Condition timed out: '+expression+'\n'+errors.join('\n'));};
+    const until=async(expression,timeout=8000)=>{for(let i=0;i<Math.ceil(timeout/50);i++){if(await evaluate(expression))return;await wait(50);}throw Error('Condition timed out: '+expression+'\n'+errors.join('\n'));};
     const shot=async(name)=>{
       const result=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
       fs.writeFileSync(path.join(output,name+'.png'),Buffer.from(result.data,'base64'));
@@ -417,10 +429,24 @@ async function main(){
     assert.equal(await evaluate('boatMonitor.track.pointCount'),trackPoints,'Disconnect retains the recorded track');
     console.log('PASS: AMap browser contract, SDK URL/security order, WGS84 data/GCJ02 display, track/boat/vector alignment, map use without a fix and non-blocking hints, navigation, IMU, stale/hide and mobile (simulated SDK).');
   });
-  for(const mode of ['sdk-failed','config-failed'])await withServer(configured,mode,async context=>{
+  await withServer(configured,'map-delayed',async context=>{
+    const {evaluate,until}=context;
+    await until("window.amapTestCalls?.maps.length===1 && boatMonitor.map.switching");
+    assert.equal(await evaluate('boatMonitor.map.ready'),false,'Constructing AMap does not mark the base layer ready');
+    assert.notEqual(await evaluate('boatMonitor.map.status.tone'),'success','AMap does not report success before complete');
+    assert.equal(await evaluate("document.getElementById('mapEmpty').hidden"),false,'Loading overlay remains until map rendering completes');
+    assert.equal(await evaluate("document.getElementById('mapProviderToggle').disabled"),true,'The switch button stays busy until complete');
+    await until("boatMonitor.map.ready && !boatMonitor.map.switching");
+    assert.equal(await evaluate('amapTestCalls.events.includes("complete")'),true,'The SDK complete event releases the ready state');
+    assert.equal(await evaluate("document.getElementById('mapEmpty').hidden"),true,'The completed map removes the loading overlay');
+    console.log('PASS: AMap reports readiness only after the asynchronous complete event, with accurate loading and button states.');
+  });
+  for(const mode of ['sdk-failed','config-failed','map-incomplete','map-error'])await withServer(configured,mode,async context=>{
     const {evaluate,until,sdkRequests,shot}=context;
-    await until("!boatMonitor.map.ready && /失败|不可用|超时/.test(document.getElementById('mapStatus').textContent)");
-    assert.equal(sdkRequests.length,mode==='sdk-failed'?1:0,'No SDK request follows failed config');
+    await until("!boatMonitor.map.ready && !boatMonitor.map.switching && /失败|不可用|超时/.test(document.getElementById('mapStatus').textContent)",25000);
+    assert.equal(sdkRequests.length,mode==='config-failed'?0:1,'No SDK request follows failed config');
+    if(mode==='map-incomplete')assert.match(await evaluate("document.getElementById('mapStatus').textContent"),/超时/,'Missing complete produces an explicit rendering timeout');
+    if(mode==='map-error')assert.equal(await evaluate('amapTestCalls.events.includes("error")'),true,'A renderer error event rejects initialization');
     await startTelemetry(context);await wait(250);
     assert.equal(await evaluate("document.getElementById('boatActual').textContent"),'1.552','Map failure does not stop boat telemetry');
     assert.equal(await evaluate("document.getElementById('imuHorizon').dataset.valid"),'true','Map failure does not stop IMU');

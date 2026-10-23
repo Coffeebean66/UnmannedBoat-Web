@@ -53,16 +53,29 @@ test('地图 API 是只读配置入口，没有任意 URL 转发或修改接口'
   assert.equal((await request('/api/map/proxy?url=https://evil.test')).status,404);
 });
 
-test('CSP 仅放行明确高德资源域名和 Blob Worker，保持脚本执行及站点边界限制',async t=>{
+test('CSP 兼容真实高德 SDK 初始化，同时限制外部资源、内联事件和站点边界',async t=>{
   const request=await fixture(t);const response=await request('/');
   assert.equal(response.headers['content-security-policy'],MAP_CONTENT_SECURITY_POLICY);
   const directives=new Map(MAP_CONTENT_SECURITY_POLICY.split('; ').map(value=>{const [name,...sources]=value.split(' ');return [name,sources];}));
-  assert.ok(directives.get('script-src').includes('https://webapi.amap.com'));
+  // 真实 SDK 的 WebGL/WASM 初始化、尺寸检测和 JSONP 均需要这些能力；
+  // 仅能构造 AMap.Map 的模拟 SDK 不足以覆盖原来的空白底图故障。
+  const scripts=directives.get('script-src');
+  for(const source of ["'unsafe-inline'","'unsafe-eval'","'wasm-unsafe-eval'",'https://webapi.amap.com','https://restapi.amap.com','https://mapplugin.amap.com'])assert.ok(scripts.includes(source),source);
+  assert.equal(directives.has('script-src-elem'),false,'script elements must inherit the compatible script-src policy');
+  assert.deepEqual(directives.get('script-src-attr'),["'none'"],'SDK compatibility must not enable HTML event attributes');
+  assert.ok(directives.get('connect-src').includes('https://jsapi.amap.com'));
+  for(const source of ['https://o4.amap.com','https://custyle.amap.com','https://mapplugin.amap.com',...[1,2,3,4,5].map(shard=>'https://jsapi-data'+shard+'.amap.com')])assert.ok(directives.get('connect-src').includes(source),source);
   assert.ok(directives.get('connect-src').includes('https://vdata.amap.com'));
   assert.ok(directives.get('img-src').includes('https://webrd01.is.autonavi.com'));
   assert.ok(directives.get('img-src').includes('https://tile.openstreetmap.org'));
+  assert.ok(directives.get('img-src').includes('https://o4.amap.com'),'the SDK loads its sprite sheets as images as well as its style over XHR');
   assert.deepEqual(directives.get('worker-src'),["'self'",'blob:']);
   assert.deepEqual(directives.get('frame-ancestors'),["'none'"]);
-  assert.doesNotMatch(MAP_CONTENT_SECURITY_POLICY,/\*|unsafe-eval/);
-  assert.equal(directives.get('script-src').includes("'unsafe-inline'"),false);
+  assert.deepEqual(directives.get('object-src'),["'none'"]);
+  assert.deepEqual(directives.get('base-uri'),["'self'"]);
+  assert.deepEqual(directives.get('default-src'),["'self'"]);
+  assert.doesNotMatch(MAP_CONTENT_SECURITY_POLICY,/\*/);
+  for(const sources of directives.values())assert.equal(sources.includes('https:'),false,'no unrestricted HTTPS source');
+  assert.deepEqual(scripts.filter(source=>source.startsWith('http')),['https://webapi.amap.com','https://a.amap.com','https://restapi.amap.com','https://mapplugin.amap.com']);
+  for(const source of ['blob:','data:','https://evil.test'])assert.equal(scripts.includes(source),false,source);
 });

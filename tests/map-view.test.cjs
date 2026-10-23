@@ -8,8 +8,9 @@ const plain = value => JSON.parse(JSON.stringify(value));
 const configured = { provider: 'amap', version: '2.0', enabled: true, configured: true,
   key: 'key with+characters', securityJsCode: 'test-security-code' };
 
-function fixture(config = configured, preferences = {}) {
+function fixture(config = configured, preferences = {}, behavior = {}) {
   const listeners = new Map(), timers = new Map();
+  const documentListeners = new Map();
   const scripts = [], maps = [], markers = [], lines = [], conversions = [], fetches = [];
   const storage = new Map(Object.entries(preferences));
   let timerSequence = 0;
@@ -21,6 +22,14 @@ function fixture(config = configured, preferences = {}) {
   const container = { ...node('div'), clientWidth: 400, clientHeight: 300 };
   const document = {
     documentElement: { dataset: { theme: 'dark' } },
+    addEventListener(name, fn) {
+      if (!documentListeners.has(name)) documentListeners.set(name, new Set());
+      documentListeners.get(name).add(fn);
+    },
+    removeEventListener(name, fn) {
+      documentListeners.get(name)?.delete(fn);
+      if (documentListeners.get(name)?.size === 0) documentListeners.delete(name);
+    },
     getElementById(id) { return id === 'map' ? container : null; },
     createElement: node,
     head: { appendChild(script) {
@@ -53,9 +62,21 @@ function fixture(config = configured, preferences = {}) {
     const events = new Map();
     return {
       options, provider, center: options.center, zoom: options.zoom ?? 5,
-      on(name, fn) { events.set(name, fn); return this; },
-      off(name) { events.delete(name); return this; },
-      emit(name, value) { events.get(name)?.(value); },
+      on(name, fn) {
+        if (!events.has(name)) events.set(name, new Set());
+        events.get(name).add(fn);
+        if (provider === 'amap' && name === 'complete' && behavior.autoComplete !== false && !this.completionScheduled) {
+          this.completionScheduled = true;
+          Promise.resolve().then(() => this.emit('complete'));
+        }
+        return this;
+      },
+      off(name, fn) {
+        if (fn) events.get(name)?.delete(fn); else events.delete(name);
+        return this;
+      },
+      emit(name, value) { for (const fn of [...(events.get(name) || [])]) fn(value); },
+      listenerCount(name) { return events.get(name)?.size || 0; },
       setView(position, zoom, options) { this.center = position; this.zoom = zoom; this.viewOptions = options; return this; },
       setZoomAndCenter(zoom, center, immediately) { this.zoom = zoom; this.center = center; this.immediately = immediately; },
       setCenter(center) { this.center = center; },
@@ -123,7 +144,10 @@ function fixture(config = configured, preferences = {}) {
   };
   vm.runInNewContext(source, { window, Map, Set, Date, Promise, module: { exports: {} } });
   const view = new window.BoatMapView('map');
-  return { window, view, scripts, maps, markers, lines, conversions, timers, fetches, listeners, AMap, storage,
+  return { window, view, scripts, maps, markers, lines, conversions, timers, fetches, listeners, documentListeners, AMap, storage,
+    emitDocument(name, event) {
+      for (const fn of [...(documentListeners.get(name) || [])]) fn(event);
+    },
     finishSdk() {
       window.AMap = AMap;
       const callback = new URL(scripts.at(-1).src).searchParams.get('callback');
@@ -569,4 +593,211 @@ test('storage restrictions cannot prevent initialization or an otherwise success
   assert.equal(f.view.ready, true);
   assert.equal(f.view.switching, false);
   f.view.destroy();
+});
+
+test('AMap initialization waits for rendered complete instead of treating SDK or construction as ready', async () => {
+  const f = fixture(configured, {}, { autoComplete: false });
+  let ready = 0, finished = false;
+  f.view.on('ready', () => ready++);
+  const pending = f.view.initialize().then(() => { finished = true; });
+  await until(() => f.scripts.length === 1);
+  f.finishSdk();
+  await until(() => f.maps.length === 1 && f.maps[0].listenerCount('complete') > 0);
+  assert.equal(f.view.provider, 'amap');
+  assert.equal(f.view.ready, false);
+  assert.equal(ready, 0);
+  assert.equal(finished, false);
+  assert.notEqual(f.view.status.tone, 'success');
+  f.maps[0].emit('complete');
+  await pending;
+  assert.equal(f.view.ready, true);
+  assert.equal(ready, 1);
+  assert.equal(finished, true);
+  assert.equal(f.view.status.tone, 'success');
+  assert.equal(f.timers.size, 0);
+  f.maps[0].emit('complete');
+  assert.equal(ready, 1, 'repeated complete cannot emit ready twice');
+  f.view.destroy();
+  assert.equal(f.maps[0].listenerCount('complete'), 0);
+});
+
+test('AMap render error or timeout leaves an explicit failure that can recover by switching to OSM', async () => {
+  for (const fail of ['error', 'timeout']) {
+    const f = fixture(configured, {}, { autoComplete: false });
+    let ready = 0;
+    f.view.on('ready', () => ready++);
+    const pending = f.view.initialize();
+    await until(() => f.scripts.length === 1);
+    f.finishSdk();
+    await until(() => f.maps.length === 1 && f.maps[0].listenerCount('complete') > 0);
+    const map = f.maps[0];
+    if (fail === 'error') map.emit('error', { message: 'render failed' }); else f.runTimer(15000);
+    await pending;
+    assert.equal(f.view.ready, false);
+    assert.equal(f.view.switching, false);
+    assert.equal(f.view.status.tone, 'error');
+    assert.match(f.view.status.message, /高德地图加载失败/);
+    assert.equal(ready, 0);
+    assert.equal(map.destroyed, true);
+    assert.equal(map.listenerCount('complete'), 0);
+    assert.equal(map.listenerCount('error'), 0);
+    assert.equal(f.timers.size, 0);
+    map.emit('complete');
+    assert.equal(f.view.ready, false, 'late complete cannot erase render failure');
+    await f.view.switchProvider('osm');
+    assert.equal(f.view.provider, 'osm');
+    assert.equal(f.view.ready, true);
+    assert.equal(f.storage.get('boat.map.provider'), 'osm');
+    f.view.destroy();
+  }
+});
+
+test('switching to AMap remains pending and cannot save its preference until rendered complete', async () => {
+  const f = fixture(configured, { 'boat.map.provider': 'osm' }, { autoComplete: false });
+  await f.view.initialize();
+  let changed = 0, finished = false;
+  f.view.on('providerchange', () => changed++);
+  const pending = f.view.switchProvider('amap').then(() => { finished = true; });
+  await until(() => f.scripts.length === 1);
+  f.finishSdk();
+  await until(() => f.maps.length === 2 && f.maps[1].listenerCount('complete') > 0);
+  assert.equal(f.view.switching, true);
+  assert.equal(f.view.ready, false);
+  assert.equal(finished, false);
+  assert.equal(changed, 0);
+  assert.equal(f.storage.get('boat.map.provider'), 'osm');
+  f.maps[1].emit('complete');
+  await pending;
+  assert.equal(f.view.switching, false);
+  assert.equal(f.view.ready, true);
+  assert.equal(finished, true);
+  assert.equal(changed, 1);
+  assert.equal(f.storage.get('boat.map.provider'), 'amap');
+  assert.equal(f.timers.size, 0);
+  f.view.destroy();
+});
+
+test('AMap render failure during a switch rolls back the usable map and does not save a failed selection', async () => {
+  for (const fail of ['error', 'timeout']) {
+    const f = fixture(configured, { 'boat.map.provider': 'osm' }, { autoComplete: false });
+    await f.view.initialize();
+    const marker = f.view.createMarker([31, 121]);
+    marker.setOpacity(.4);
+    marker.getElement().innerHTML = '<svg>current</svg>';
+    f.view.setTrackLines([{ points: [[31, 121], [32, 122]], color: '#123456' }]);
+    f.view.map.setView([33, 123], 14);
+    let changed = 0;
+    f.view.on('providerchange', () => changed++);
+    const pending = f.view.switchProvider('amap');
+    const rejected = assert.rejects(pending);
+    await until(() => f.scripts.length === 1);
+    f.finishSdk();
+    await until(() => f.maps.length === 2 && f.maps[1].listenerCount('complete') > 0);
+    const failedMap = f.maps[1];
+    assert.equal(f.view.switching, true);
+    assert.equal(f.storage.get('boat.map.provider'), 'osm');
+    if (fail === 'error') failedMap.emit('error', { message: 'render failed' }); else f.runTimer(15000);
+    await rejected;
+    assert.equal(f.view.provider, 'osm');
+    assert.equal(f.view.ready, true);
+    assert.equal(f.view.switching, false);
+    assert.equal(f.storage.get('boat.map.provider'), 'osm');
+    assert.equal(changed, 0);
+    assert.equal(failedMap.destroyed, true);
+    assert.equal(failedMap.listenerCount('complete'), 0);
+    assert.equal(failedMap.listenerCount('error'), 0);
+    assert.deepEqual(plain(f.view.map.center), [33, 123]);
+    assert.equal(f.view.getZoom(), 14);
+    assert.deepEqual(plain(marker.native.position), [31, 121]);
+    assert.equal(marker.native.opacity, .4);
+    assert.equal(marker.getElement().innerHTML, '<svg>current</svg>');
+    assert.deepEqual(plain(f.lines.at(-1).path), [[31, 121], [32, 122]]);
+    failedMap.emit('complete');
+    assert.equal(f.view.provider, 'osm');
+    assert.equal(f.storage.get('boat.map.provider'), 'osm');
+    assert.equal(f.timers.size, 0);
+    f.view.destroy();
+  }
+});
+
+test('destroy cancels initial and switched render waits and late complete never resurrects a map', async () => {
+  for (const switching of [false, true]) {
+    const f = fixture(configured, switching ? { 'boat.map.provider': 'osm' } : {}, { autoComplete: false });
+    if (switching) await f.view.initialize();
+    let ready = 0, changed = 0;
+    f.view.on('ready', () => ready++).on('providerchange', () => changed++);
+    const pending = switching ? f.view.switchProvider('amap') : f.view.initialize();
+    await until(() => f.scripts.length === 1);
+    f.finishSdk();
+    await until(() => f.maps.at(-1)?.provider === 'amap' && f.maps.at(-1).listenerCount('complete') > 0);
+    const map = f.maps.at(-1), mapCount = f.maps.length;
+    f.view.destroy();
+    await pending;
+    map.emit('complete');
+    map.emit('error', { message: 'late error' });
+    assert.equal(map.destroyed, true);
+    assert.equal(map.listenerCount('complete'), 0);
+    assert.equal(map.listenerCount('error'), 0);
+    assert.equal(f.view.ready, false);
+    assert.equal(f.view.switching, false);
+    assert.equal(f.view.map, null);
+    assert.equal(f.maps.length, mapCount);
+    assert.equal(ready, 0);
+    assert.equal(changed, 0);
+    assert.notEqual(f.storage.get('boat.map.provider'), 'amap');
+    assert.equal(f.timers.size, 0);
+    assert.equal(f.listeners.size, 0);
+  }
+});
+
+test('AMap CSP violations before or after complete stay visible and cannot leak into OSM or a disposed view', async () => {
+  for (const timing of ['before', 'after']) {
+    const f = fixture(configured, {}, { autoComplete: false });
+    const pending = f.view.initialize();
+    await until(() => f.scripts.length === 1);
+    f.finishSdk();
+    await until(() => f.maps.length === 1 && f.maps[0].listenerCount('complete') > 0);
+    const loading = plain(f.view.status);
+    for (const uri of ['https://example.com/asset.js', 'https://amap.com.example.com/asset.js']) {
+      f.emitDocument('securitypolicyviolation', { sourceFile: uri, blockedURI: uri });
+      assert.deepEqual(plain(f.view.status), loading, 'unrelated domains cannot produce an AMap warning');
+    }
+    const violation = timing === 'before'
+      ? { sourceFile: 'https://webapi.amap.com/maps?v=2.0', blockedURI: 'eval' }
+      : { sourceFile: '', blockedURI: 'https://vdata.amap.com/tiles' };
+    if (timing === 'before') f.emitDocument('securitypolicyviolation', violation);
+    f.maps[0].emit('complete');
+    await pending;
+    assert.equal(f.view.ready, true);
+    if (timing === 'after') {
+      assert.equal(f.view.status.tone, 'success');
+      f.emitDocument('securitypolicyviolation', violation);
+    }
+    assert.equal(f.view.status.tone, 'warning');
+    assert.match(f.view.status.message, /CSP/);
+    f.maps[0].emit('complete');
+    assert.equal(f.view.status.tone, 'warning', 'complete cannot overwrite a known CSP warning with success');
+    await f.view.switchProvider('osm');
+    const osmStatus = plain(f.view.status);
+    assert.equal(f.view.provider, 'osm');
+    assert.equal(osmStatus.tone, 'neutral');
+    f.emitDocument('securitypolicyviolation', { sourceFile: 'https://webapi.amap.com/maps', blockedURI: 'https://restapi.amap.com/' });
+    assert.deepEqual(plain(f.view.status), osmStatus, 'late AMap violations cannot affect OSM');
+    const back = f.view.switchProvider('amap');
+    await until(() => f.maps.at(-1).provider === 'amap' && f.maps.at(-1).listenerCount('complete') > 0);
+    f.maps.at(-1).emit('complete');
+    await back;
+    assert.equal(f.view.status.tone, 'success', 'a new map does not inherit the disposed map CSP warning');
+    f.emitDocument('securitypolicyviolation', { sourceFile: 'https://webrd.autonavi.com/assets.js', blockedURI: 'blob' });
+    assert.equal(f.view.status.tone, 'warning', 'Autonavi sources are recognized alongside AMap');
+    const late = [...f.documentListeners.get('securitypolicyviolation')][0];
+    f.view.destroy();
+    const disposedStatus = plain(f.view.status);
+    assert.equal(f.documentListeners.size, 0);
+    f.emitDocument('securitypolicyviolation', violation);
+    late(violation);
+    assert.deepEqual(plain(f.view.status), disposedStatus, 'queued policy events cannot change a destroyed view');
+    assert.equal(f.view.ready, false);
+    assert.equal(f.view.map, null);
+  }
 });

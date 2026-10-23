@@ -109,7 +109,13 @@
     map=new BoatMapView('map');
     map.on('status',status=>{set('mapStatus',status.message);updateMapLabels();updateMapAvailability();});
     map.on('switching',()=>updateMapLabels());
-    map.on('providerchange',()=>{updateMapLabels();render();});
+    map.on('providerchange',()=>{
+      updateMapLabels();
+      const latest=state.latest.velocity;
+      // 等待底图期间仍会收遥测；用最新船位恢复覆盖物，同时保留用户视野。
+      if(latest)position(latest.frame,latest.at,performance.now(),true);
+      render();
+    });
     map.on('dragstart',()=>$('mapFollow').checked=false);
     // 栅格断点和遥测标签会改变容器尺寸，由地图门面更新底图与箭头锚点。
     const mapResize=new ResizeObserver(()=>map.invalidateSize());
@@ -137,7 +143,7 @@
     const source=link.source==='cloud'?'云端实时监测':'本地实时监测';
     set('heroSourceLabel',source+' / '+(amap?'高德地图':map?.provider==='osm'?'OpenStreetMap':'地图加载中'));
   }
-  function position(frame,at,now) {
+  function position(frame,at,now,preserveView=false) {
     const view=M.velocityDisplay.prepareVelocityDisplay(frame,at,now,link.connected),v=frame?.velocity;
     if(view.fixFresh) {
       lastLocation=[v.latitude,v.longitude];
@@ -148,7 +154,7 @@
         if(!marker)marker=map.createMarker(fix,{className:'boat-pin',html:'<span>▲</span>',iconSize:[30,30],iconAnchor:[15,15]});
         marker.setPosition(fix);marker.setOpacity(1);
         const arrow=marker.getElement()?.firstElementChild;if(arrow)arrow.style.transform='rotate('+(view.headingFresh?v.headingDegrees:0)+'deg)';
-        if($('mapFollow').checked)map.setView(lastLocation,firstMapFix?16:map.getZoom(),{animate:false});
+        if(!preserveView&&$('mapFollow').checked)map.setView(lastLocation,firstMapFix?16:map.getZoom(),{animate:false});
       }
       hadFix=true;
       track.record(v,now,true);

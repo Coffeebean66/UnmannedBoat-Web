@@ -3,8 +3,10 @@
   'use strict';
 
   const SDK_TIMEOUT_MS = 15000;
+  const MAP_READY_TIMEOUT_MS = 15000;
   const CONFIG_TIMEOUT_MS = 5000;
   const PROVIDER_PREFERENCE = 'boat.map.provider';
+  const POLICY_WARNING = '高德地图资源被 CSP 安全策略拦截，底图可能不完整；可切换至 OSM';
   let callbackSequence = 0;
 
   function fix(value) {
@@ -29,6 +31,16 @@
       this._trackLayers = [];
       this._mapEvents = [];
       this._destroyed = false;
+      this._amapPolicyBlocked = false;
+      this._policyViolation = event => {
+        if (this._destroyed || this.provider !== 'amap' || !this.map) return;
+        const related = [event.sourceFile, event.blockedURI].some(uri =>
+          /^https:\/\/(?:[\w-]+\.)*(?:amap\.com|autonavi\.com)(?:[/:]|$)/i.test(uri || ''));
+        if (!related) return;
+        this._amapPolicyBlocked = true;
+        this._setStatus(POLICY_WARNING, 'warning');
+      };
+      scope.document?.addEventListener?.('securitypolicyviolation', this._policyViolation);
       this._pageHide = () => this.destroy();
       scope.addEventListener?.('pagehide', this._pageHide, { once: true });
     }
@@ -67,6 +79,10 @@
     }
 
     _mapReadyStatus() {
+      if (this.provider === 'amap' && this._amapPolicyBlocked) {
+        this._setStatus(POLICY_WARNING, 'warning');
+        return;
+      }
       this._setStatus(this.provider === 'amap' ? '高德地图 · GCJ-02（RTK 原始 WGS84）' : this._osmStatus(),
         this.provider === 'amap' ? 'success' : 'neutral');
     }
@@ -99,7 +115,8 @@
           this._setStatus('正在加载高德地图', 'loading');
           await this._loadSdk(config);
           if (this._destroyed) return this;
-          this._createAmap();
+          await this._createAmap();
+          if (this._destroyed) return this;
           this.ready = true;
         } else {
           this.provider = 'osm';
@@ -142,7 +159,8 @@
         rebuilding = true;
         this._disposeMap(true);
         this.provider = provider;
-        this._restoreMap(viewport, tracks);
+        await this._restoreMap(viewport, tracks);
+        if (this._destroyed) return false;
         try { scope.localStorage?.setItem(PROVIDER_PREFERENCE, provider); } catch (_) {}
         this._mapReadyStatus();
         this._emit('providerchange', { provider });
@@ -153,7 +171,8 @@
         if (rebuilding) {
           this._disposeMap(true);
           this.provider = previous;
-          try { this._restoreMap(viewport, tracks); } catch (_) { this._disposeMap(true); }
+          try { await this._restoreMap(viewport, tracks); } catch (_) { this._disposeMap(true); }
+          if (this._destroyed) return false;
         }
         this._setStatus('地图切换失败：' + (error?.message || '未知错误') +
           (this.ready ? '；继续使用' + (this.provider === 'amap' ? '高德地图' : ' OpenStreetMap') : ''),
@@ -162,8 +181,9 @@
       } finally { this._setSwitching(false); }
     }
 
-    _restoreMap(viewport, tracks) {
-      if (this.provider === 'amap') this._createAmap(); else this._createOsm();
+    async _restoreMap(viewport, tracks) {
+      if (this.provider === 'amap') await this._createAmap(); else this._createOsm();
+      if (this._destroyed) return;
       this.ready = true;
       if (viewport.center) this.setView(viewport.center, Math.max(3, Math.min(this.provider === 'amap' ? 20 : 19, viewport.zoom)), { animate: false });
       for (const marker of this._markers) marker._mount();
@@ -236,6 +256,8 @@
     }
 
     _createAmap() {
+      this._amapPolicyBlocked = false;
+      this._setStatus('正在加载高德底图', 'loading');
       const center = this.project({ latitude: 31.23, longitude: 121.47 });
       this.map = new scope.AMap.Map(this.container, {
         viewMode: '2D', zoom: 5, center: [center.longitude, center.latitude],
@@ -245,11 +267,32 @@
       this._bindMap('dragstart', event => this._emit('dragstart', event));
       this._bindMap('resize', event => this._emit('resize', event));
       const currentMap = this.map;
-      this._bindMap('error', () => {
-        if (!this._destroyed && this.map === currentMap) this._setStatus('高德底图加载异常，请检查网络、Key 和域名白名单；RTK 原始经纬度仍可查看', 'warning');
+      // SDK 下载成功、构造函数返回都不代表底图已绘制；必须收到真实 complete。
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = error => {
+          if (settled) return;
+          settled = true;
+          scope.clearTimeout(timer);
+          this._cancelMapReady = null;
+          if (error) reject(error); else resolve();
+        };
+        const timer = scope.setTimeout(() => finish(new Error('高德底图加载超时，请检查 Key、域名白名单、网络和 CSP 安全策略')), MAP_READY_TIMEOUT_MS);
+        this._cancelMapReady = () => finish(new Error('地图已关闭'));
+        this._bindMap('complete', () => {
+          if (!this._destroyed && this.map === currentMap) finish();
+        });
+        this._bindMap('error', () => {
+          if (this._destroyed || this.map !== currentMap) return;
+          const message = '高德底图加载异常，请检查 Key、域名白名单、网络和 CSP 安全策略';
+          if (!settled) finish(new Error(message));
+          else this._setStatus(message + '；RTK 原始经纬度仍可查看', 'warning');
+        });
+        try {
+          this.setTheme(scope.document.documentElement?.dataset.theme);
+          this._createZoomControls();
+        } catch (error) { finish(error); }
       });
-      this.setTheme(scope.document.documentElement?.dataset.theme);
-      this._createZoomControls();
     }
 
     _createZoomControls() {
@@ -487,6 +530,7 @@
     }
 
     _disposeMap(preserveMarkers = false) {
+      this._cancelMapReady?.();
       this.ready = false;
       for (const marker of this._markers) {
         if (preserveMarkers) marker._detach(); else marker.remove();
@@ -500,6 +544,7 @@
       if (this.provider === 'amap') this.map?.destroy?.(); else this.map?.remove?.();
       this.map = null;
       this._tiles = null;
+      this._amapPolicyBlocked = false;
     }
 
     destroy() {
@@ -510,6 +555,7 @@
       this._disposeMap();
       this.lastTrackLines = [];
       scope.removeEventListener?.('pagehide', this._pageHide);
+      scope.document?.removeEventListener?.('securitypolicyviolation', this._policyViolation);
       this._events.clear();
     }
   }
