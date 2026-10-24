@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="artificial-horizon.css">
   <link rel="stylesheet" href="map-view.css">
   <link rel="stylesheet" href="map-settings.css">
+  <link rel="stylesheet" href="workspace.css">
   <script defer src="vendor/leaflet/leaflet.js"></script>
   <script defer src="utils-bundle.js"></script>
   <script defer src="parameter-data.js"></script>
@@ -23,6 +24,7 @@
   <script defer src="attitude-view.js"></script>
   <script defer src="artificial-horizon.js"></script>
   <script defer src="ui.js"></script>
+  <script defer src="workspace-navigation.js"></script>
   <script defer src="map-view.js"></script>
   <script defer src="map-velocity-view.js"></script>
   <script defer src="map-settings.js"></script>
@@ -47,30 +49,31 @@
   <aside class="sidebar" aria-label="主导航">
     <div class="workspace-label">工作空间 <span>WEB</span></div>
     <nav class="side-nav">
-      <a href="#overview" class="active" aria-current="location"><span data-icon="dashboard"></span><span>船况概览</span><span class="nav-index">01</span></a>
+      <a href="#overview" class="active" aria-current="page"><span data-icon="dashboard"></span><span>船况概览</span><span class="nav-index">01</span></a>
       <a href="#navigation"><span data-icon="map"></span><span>船位与轨迹</span><span class="nav-index">02</span></a>
       <a href="#attitude"><span data-icon="compass"></span><span>三维姿态</span><span class="nav-index">03</span></a>
       <a href="#analysis"><span data-icon="chart"></span><span>控制曲线</span><span class="nav-index">04</span></a>
       <a href="#propulsion"><span data-icon="motor"></span><span>推进系统</span><span class="nav-index">05</span></a>
       <a href="#diagnostics"><span data-icon="activity"></span><span>通信诊断</span><span class="nav-index">06</span></a>
     </nav>
-    <section class="vessel-summary" aria-label="当前连接设备">
-      <div class="vessel-summary-heading">当前设备<span id="sourceChip" class="chip">T10</span></div>
-      <div class="vessel-emblem" data-icon="boat"></div>
-      <strong id="deviceName">--</strong><p id="sourceDescription">本地蓝牙 · 单船监测</p>
-      <dl><div><dt>有效数据帧</dt><dd id="frameCount">0</dd></div><div><dt>最近收帧</dt><dd id="linkAge">--</dd></div></dl>
+    <section id="deviceSummary" class="vessel-summary" aria-label="当前连接设备" data-state="offline">
+      <div class="vessel-summary-heading">当前设备<span id="sourceChip" class="chip">BLE</span></div>
+      <div class="vessel-emblem"><img src="assets/boat-preview.png" width="640" height="280" alt="双体无人船模型" decoding="async"></div>
+      <strong id="deviceName">未连接设备</strong><p id="sourceDescription">本地蓝牙 · 单船监测</p>
+      <div class="vessel-link-state"><span id="deviceConnectionState" role="status">未连接</span><span class="vessel-link-bars" aria-hidden="true" title="连接状态指示，不代表信号强度"><i></i><i></i><i></i><i></i></span></div>
+      <dl><div><dt>有效数据帧</dt><dd id="frameCount">0</dd></div><div><dt>最近更新</dt><dd><time id="deviceLastUpdate">--</time></dd></div><div title="估计服务器收到遥测到当前浏览器接收的转发耗时，不含船端上报耗时，也不是往返延迟；蓝牙和未校时状态显示未知。"><dt>转发延迟</dt><dd id="deviceLatency">--</dd></div></dl>
     </section>
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="bluetooth"></span><div>本地蓝牙直连<p>T10 / 无人船电控</p></div></div>
       <button id="sidebarSettings" class="sidebar-setting"><span data-icon="settings"></span>参数设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.10.1</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.13.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
     <nav class="mobile-nav" aria-label="快捷导航"><a href="#overview">概览</a><a href="#navigation">轨迹</a><a href="#attitude">姿态</a><a href="#analysis">曲线</a><a href="#propulsion">电机</a><a href="#diagnostics">诊断</a></nav>
-    <main class="page" id="overview" data-nav-section>
+    <main class="page" id="mainContent">
       <section class="hero">
-        <div class="hero-heading"><h1>航行总览 <span>VESSEL OVERVIEW</span></h1><p id="connectionText" class="muted">连接 T10 蓝牙，开始查看无人船实时状态。</p></div>
+        <div class="hero-heading"><div class="workspace-heading"><h1 id="viewTitle" tabindex="-1">船况概览</h1><span id="viewEnglish">VESSEL OVERVIEW</span></div><p id="viewSubtitle" class="muted">关键船况、船位与实时姿态，集中掌握当前航行状态。</p></div>
         <span id="heroSourceLabel" class="hero-label"><span data-icon="radio"></span>本地实时监测 <i>/</i> WGS84</span>
       </section>
       <div id="accountNotice" class="account-notice" hidden><span id="accountNoticeText">请登录后使用监测平台</span><div><button id="accountRetry" class="small-button" hidden>重试连接</button><button id="accountNoticeLogin" class="small-button primary">登录账户</button></div></div>
@@ -85,6 +88,8 @@
         </div>
         <p id="sourceHint" class="muted">蓝牙可查看遥测并调整参数；管理员可对支持云端调参的无人船远程设置参数。</p>
       </section>
+      <p id="connectionText" class="workspace-connection" role="status">连接 T10 蓝牙，开始查看无人船实时状态。</p>
+      <section id="view-overview" class="workspace-view" data-workspace-view="overview" aria-labelledby="viewTitle">
       <section class="grid metrics" aria-label="关键航行数据">
         <article class="card kpi-card speed-card">
           <div class="kpi-heading"><span class="card-icon blue" data-icon="gauge"></span><h2>实际船速 <small>Speed</small></h2></div>
@@ -119,8 +124,9 @@
         </article>
       </section>
       <section class="grid navigation-grid" aria-label="实时航行监测">
-        <article id="navigation" class="card map-card" data-nav-section>
-          <div class="card-title"><div class="title-with-icon"><span data-icon="map"></span><h2>船位与航行轨迹</h2><span class="panel-caption">NAVIGATION</span></div><button id="mapCenter" class="small-button"><span data-icon="location"></span>回到船位</button></div>
+        <div class="workspace-slot" data-workspace-slot="overview-map">
+        <article id="navigation" class="card map-card">
+          <div class="card-title"><div class="title-with-icon"><span data-icon="map"></span><h2>船位与航行轨迹</h2><span class="panel-caption">NAVIGATION</span></div><div class="button-row"><a href="#navigation" class="panel-page-link" data-view-link>展开地图<span data-icon="arrow"></span></a><button id="mapCenter" class="small-button"><span data-icon="location"></span>回到船位</button></div></div>
           <div class="map-stage">
             <div id="map" aria-label="无人船位置地图"></div>
             <div class="map-layer-label"><span data-icon="layers"></span><span id="mapLayerName">地图加载中</span><span class="map-layer-divider"></span><span id="mapCoordinateSystem">WGS84</span></div>
@@ -133,9 +139,11 @@
           <div class="map-track-info"><p id="trackStatus" class="muted">追踪未开启</p><div class="track-legend" id="trackLegend"></div></div>
           <div class="map-footer"><span id="mapStatus">正在加载地图配置</span><span title="RTK 原始经纬度，WGS84 坐标">RTK 原始坐标 <span id="mapCoordinate">--</span></span></div>
         </article>
+        </div>
         <div class="telemetry-rail">
-        <article id="attitude" class="card attitude-card" data-nav-section>
-          <div class="card-title"><div class="title-with-icon"><span data-icon="boat"></span><h2>三维船体姿态</h2></div><span class="chip">IMU · 3D</span></div>
+        <div class="workspace-slot" data-workspace-slot="overview-attitude">
+        <article id="attitude" class="card attitude-card">
+          <div class="card-title"><div class="title-with-icon"><span data-icon="boat"></span><h2>三维船体姿态</h2></div><a href="#attitude" class="panel-page-link" data-view-link>姿态详情<span data-icon="arrow"></span></a></div>
           <div class="attitude-stage"><canvas id="boatCanvas" width="640" height="360" aria-label="无人船三维姿态"></canvas><span class="stage-label"><span data-icon="compass"></span>船体坐标系</span></div>
           <div class="viewer-controls"><div class="inline-controls">
             <label class="switch-label"><input type="checkbox" id="animationEnabled" checked><span class="switch-track"></span>动画</label>
@@ -144,43 +152,78 @@
           </div><div class="button-row"><button id="resetView" class="small-button">复位视角</button><button id="yawZero" class="small-button">偏航归零</button><button id="reloadModel" class="small-button subtle">重载模型</button></div></div>
           <p id="modelStatus" class="viewer-status">正在加载船体模型…</p>
         </article>
-        <article class="card telemetry-card" aria-label="实时传感器数据">
-          <div class="card-title"><div class="title-with-icon"><span data-icon="activity"></span><h2>实时遥测</h2></div><span class="panel-caption">SENSORS</span></div>
-          <div class="telemetry-tabs" role="tablist" aria-label="遥测数据源"><button id="rtkTab" role="tab" aria-selected="true" aria-controls="rtkPanel" tabindex="0">RTK 定位</button><button id="imuTab" role="tab" aria-selected="false" aria-controls="imuPanel" tabindex="-1">IMU 姿态</button></div>
-          <section id="rtkPanel" class="telemetry-panel" role="tabpanel" aria-labelledby="rtkTab" tabindex="0">
-            <div class="telemetry-status"><span id="velocityStatus" class="state">等待数据</span><span id="fixStatus">等待定位</span></div>
-            <dl class="telemetry-table"><div><dt>经度 <small>Longitude</small></dt><dd id="longitude">--</dd></div><div><dt>纬度 <small>Latitude</small></dt><dd id="latitude">--</dd></div><div><dt>东西速度 <small>m/s</small></dt><dd id="velocityX">--</dd></div><div><dt>南北速度 <small>m/s</small></dt><dd id="velocityY">--</dd></div><div><dt>船头航向 <small>°</small></dt><dd id="rtkHeading">--</dd></div></dl>
-            <div class="telemetry-meta"><span>序号 <b id="velocitySequence">--</b></span><span>年龄 <b id="velocityAge">--</b></span><span>时间 <b id="rtkAlignment">--</b></span></div>
-          </section>
-          <section id="imuPanel" class="telemetry-panel" role="tabpanel" aria-labelledby="imuTab" tabindex="0" hidden>
-            <div class="telemetry-status"><span id="imuStatus" class="state">等待数据</span><span>角度 deg · 角速度 rad/s</span></div>
-            <div class="imu-attitude">
+        </div>
+        <div class="workspace-slot" data-workspace-slot="overview-sensors">
+        <article id="sensorTelemetry" class="card telemetry-card sensor-card" aria-label="RTK 与 IMU 实时监测">
+          <div class="card-title"><div class="title-with-icon"><span data-icon="activity"></span><h2>实时监测</h2></div><span class="panel-caption">SENSORS</span></div>
+          <div class="sensor-sources" aria-label="同时显示 RTK 定位与 IMU 姿态"><span><i data-icon="satellite"></i>RTK 定位</span><span><i data-icon="compass"></i>IMU 姿态</span></div>
+          <div class="sensor-status-strip">
+            <div id="sensorFixState" data-valid="false"><span>定位状态</span><strong id="fixStatus">等待定位</strong></div>
+            <div id="sensorImuState" data-valid="false"><span>IMU 状态</span><strong id="imuStatus">等待数据</strong></div>
+          </div>
+          <section id="imuPanel" class="sensor-instrument-panel" aria-label="姿态与运动数据">
+            <div class="sensor-instruments">
               <dl class="imu-euler-values" aria-label="IMU 欧拉角，单位度">
                 <div><dt><span>ROLL</span>横滚</dt><dd><b id="roll">--</b><small>°</small></dd></div>
                 <div><dt><span>PITCH</span>俯仰</dt><dd><b id="pitch">--</b><small>°</small></dd></div>
                 <div><dt><span>YAW</span>偏航</dt><dd><b id="yaw">--</b><small>°</small></dd></div>
               </dl>
               <div class="imu-horizon-panel"><div id="imuHorizon"></div><span class="imu-horizon-caption">人工地平仪</span></div>
+              <div class="sensor-motion">
+                <section class="sensor-motion-group" aria-label="IMU 三轴角速度，单位弧度每秒">
+                  <h3>角速度 <small>rad/s</small></h3>
+                  <dl class="sensor-axis-values gyro-table"><div><dt>X</dt><dd id="gyroX">--</dd></div><div><dt>Y</dt><dd id="gyroY">--</dd></div><div><dt>Z</dt><dd id="gyroZ">--</dd></div></dl>
+                </section>
+                <section class="sensor-motion-group" aria-label="RTK 对地速度，东向与北向，单位米每秒">
+                  <h3>对地速度 <small>m/s</small></h3>
+                  <dl class="sensor-axis-values"><div><dt><abbr title="东向为正，西向为负">E</abbr></dt><dd id="velocityX">--</dd></div><div><dt><abbr title="北向为正，南向为负">N</abbr></dt><dd id="velocityY">--</dd></div></dl>
+                </section>
+              </div>
             </div>
-            <dl class="telemetry-table gyro-table"><div><dt>X 角速度</dt><dd id="gyroX">--</dd></div><div><dt>Y 角速度</dt><dd id="gyroY">--</dd></div><div><dt>Z 角速度</dt><dd id="gyroZ">--</dd></div></dl>
-            <div class="telemetry-meta"><span>序号 <b id="imuSequence">--</b></span><span>年龄 <b id="imuAge">--</b></span><span>时间 <b id="imuAlignment">--</b></span><span>航向 <b id="imuHeadingUpdate">--</b></span></div>
           </section>
+          <section id="rtkPanel" class="sensor-navigation" aria-label="RTK 定位与航行数据">
+            <dl class="sensor-location"><div><dt>经度</dt><dd id="longitude">--</dd></div><div><dt>纬度</dt><dd id="latitude">--</dd></div></dl>
+            <dl class="sensor-navigation-values"><div><dt>对地合速</dt><dd><b id="sensorPlanar">--</b><small>m/s</small></dd></div><div><dt>船头航向</dt><dd><b id="rtkHeading">--</b><small>°</small></dd></div></dl>
+          </section>
+          <details class="sensor-details"><summary>数据详情<span>WGS84 · E / N</span><i data-icon="chevron"></i></summary>
+            <div class="sensor-source-detail"><strong>RTK</strong><span id="velocityStatus" class="state">等待数据</span><div class="telemetry-meta"><span>序号 <b id="velocitySequence">--</b></span><span>年龄 <b id="velocityAge">--</b></span><span>时间 <b id="rtkAlignment">--</b></span></div></div>
+            <div class="sensor-source-detail"><strong>IMU</strong><div class="telemetry-meta"><span>序号 <b id="imuSequence">--</b></span><span>年龄 <b id="imuAge">--</b></span><span>时间 <b id="imuAlignment">--</b></span><span>航向 <b id="imuHeadingUpdate">--</b></span></div></div>
+          </details>
         </article>
         </div>
+        </div>
       </section>
-      <section class="grid systems-grid" aria-label="控制与推进系统">
-        <article id="analysis" class="card chart-card" data-nav-section>
+      <div class="overview-shortcuts" aria-label="专用工作页面">
+        <a href="#analysis" data-view-link><span class="card-icon blue" data-icon="chart"></span><div><strong>控制曲线</strong><p>比较目标与实际，观察闭环响应</p></div><span data-icon="arrow"></span></a>
+        <a href="#propulsion" data-view-link><span class="card-icon teal" data-icon="motor"></span><div><strong>推进系统</strong><p>查看双电机输出与运行状态</p></div><span data-icon="arrow"></span></a>
+        <a href="#diagnostics" data-view-link><span class="card-icon neutral" data-icon="activity"></span><div><strong>通信诊断</strong><p>检查链路、数据帧和遥控状态</p></div><span data-icon="arrow"></span></a>
+      </div>
+      </section>
+      <section id="view-navigation" class="workspace-view navigation-workspace" data-workspace-view="navigation" aria-labelledby="viewTitle" hidden>
+        <div class="workspace-slot" data-workspace-slot="navigation-map"></div>
+      </section>
+      <section id="view-attitude" class="workspace-view attitude-workspace" data-workspace-view="attitude" aria-labelledby="viewTitle" hidden>
+        <div class="workspace-slot" data-workspace-slot="attitude-model"></div>
+        <div class="workspace-slot" data-workspace-slot="attitude-sensors"></div>
+      </section>
+      <section id="view-analysis" class="workspace-view analysis-workspace" data-workspace-view="analysis" aria-labelledby="viewTitle" hidden>
+        <article id="analysis" class="card chart-card">
           <div class="card-title"><div class="title-with-icon"><span data-icon="chart"></span><h2 id="chartTitle">船速曲线</h2></div><div class="button-row"><button id="chartModeButton" class="small-button">切换为航向角</button><button id="chartClear" class="small-button subtle">清空</button></div></div>
           <div class="chart-legend"><span><i class="target-line"></i>目标值</span><span><i class="actual-line"></i>实际值</span><span class="chart-window">最近 12 秒</span></div>
           <canvas id="chart" width="900" height="310" aria-label="目标与实际曲线"></canvas>
           <div class="chart-readouts"><div><span>目标</span><b id="chartTarget">--</b></div><div><span>实际</span><b id="chartActual">--</b></div><div><span>误差</span><b id="chartError">--</b></div></div>
           <p id="chartSummary" class="sr-only" aria-live="off">--</p>
         </article>
-        <section id="propulsion" data-nav-section>
+        <aside class="workspace-note"><span data-icon="help"></span><p>曲线显示最近 12 秒的目标与实际变化，切换页面会继续采集；断流时曲线留空。需要调参时，可随时打开顶部“设置”。</p></aside>
+      </section>
+      <section id="view-propulsion" class="workspace-view propulsion-workspace" data-workspace-view="propulsion" aria-labelledby="viewTitle" hidden>
+        <section id="propulsion">
           <h2 class="sr-only">推进系统</h2><div id="motors" class="grid motors" aria-label="双电机遥测"></div>
         </section>
+        <aside class="workspace-note"><span data-icon="motor"></span><p>两路电机独立显示输出与反馈。机械转速用于运行监测，船速闭环使用 RTK 对地速度反馈。</p></aside>
       </section>
-        <article id="diagnostics" class="card diagnostics-card" data-nav-section>
+      <section id="view-diagnostics" class="workspace-view diagnostics-workspace" data-workspace-view="diagnostics" aria-labelledby="viewTitle" hidden>
+        <article id="diagnostics" class="card diagnostics-card">
           <div class="card-title"><div class="title-with-icon"><span class="card-icon neutral" data-icon="activity"></span><h2>通信诊断</h2></div><span id="sbusStatus" class="state">遥控 --</span></div>
           <div class="diagnostics-body">
           <div id="connectionRoute" class="connection-route"><span><i data-icon="monitor"></i>浏览器</span><b>↔</b><span><i data-icon="bluetooth"></i>T10</span><b>↔</b><span><i data-icon="boat"></i>无人船</span></div>
@@ -188,11 +231,13 @@
             <span>解析帧<b id="parsedFrames">0</b></span><span>CRC 错误<b id="crcErrors">0</b></span>
             <span>缓存字节<b id="bufferedBytes">0</b></span><span>接收字节<b id="bytesReceived">0</b></span>
             <span>状态帧序号<b id="statusSequence">--</b></span><span>设备运行时间<b id="deviceUptime">--</b></span>
+            <span>距上次收帧<b id="linkAge">--</b></span>
           </div>
           <details class="connection-details"><summary>蓝牙特征与浏览器支持<span data-icon="chevron"></span></summary><div class="characteristic"><span>通知特征</span><b id="notifyCharacteristic">--</b><span>写入特征</span><b id="writeCharacteristic">--</b></div><p id="supportNotice" class="muted"></p></details>
           <div class="settings-callout"><span class="card-icon teal" data-icon="settings"></span><div><strong>电控参数设置</strong><p>20 项参数 · 3 组预设 · Flash 保存</p></div><button id="settingsEntry" class="icon-button" title="进入参数设置" aria-label="进入参数设置"><span data-icon="arrow"></span></button></div>
           </div>
         </article>
+      </section>
       <footer><span>UNMANNED VESSEL MONITOR <b>/</b> 无人船监测平台</span><span>本地蓝牙 · MQTT 云端监测与调参</span></footer>
     </main>
   </div>

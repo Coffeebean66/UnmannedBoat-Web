@@ -10,8 +10,8 @@
   const mapSettings=new BoatMapSettingsPanel();
   const wgs=(latitude,longitude)=>Number.isFinite(latitude)&&Number.isFinite(longitude)&&Math.abs(latitude)<=90&&Math.abs(longitude)<=180?{latitude,longitude}:null;
   const track=new M.boatTrack.BoatTrack(wgs);
-  const state={latest:{},history:[],chartMode:'speed',lastReceived:null,deviceId:null,source:'bluetooth'};
-  let map,marker,mapVectors,trackRevision=-1,lastLocation,hadFix=false;
+  const state={latest:{},history:[],chartMode:'speed',lastReceived:null,lastUpdateAt:null,forwardDelayMs:null,deviceId:null,deviceName:null,source:'bluetooth'};
+  let map,marker,mapVectors,trackRevision=-1,lastLocation,hadFix=false,viewResizeFrame;
   let chartPalette;
   const set=(id,value)=>{const text=value==null?'--':String(value);if($(id).textContent!==text)$(id).textContent=text;};
   function readChartPalette() {
@@ -69,7 +69,19 @@
     set('sbusStatus',!current?'遥控 --':frame.sbusFailsafe?'遥控失控保护':frame.sbusLinkValid?'遥控在线':'遥控失联');
     set('statusSequence',frame?.sequence);set('deviceUptime',current?(frame.timestampMs/1000).toFixed(1)+' s':'--');
   }
+  function renderChartSummary(now) {
+    const b=state.latest.boat,heading=state.chartMode==='heading';
+    const live=M.boatChart.createBoatChartSample(b?.frame,b?.at||0,now,link.connected);
+    const summary=M.boatChart.prepareBoatChartSummary(live,state.chartMode);
+    const unit=heading?'°':' m/s';
+    set('chartTarget',summary.target==='--'?'--':summary.target+unit);
+    set('chartActual',summary.actual==='--'?'--':summary.actual+unit);
+    set('chartError',summary.error==='--'?'--':summary.error+unit);
+    set('chartSummary','目标 '+summary.target+unit+' · 实际 '+summary.actual+unit+' · 误差 '+summary.error+unit+(heading?'（目标−实际，取最短角差）':'（实际−目标）'));
+  }
   function drawChart(now) {
+    // 隐藏页面仍接收数据和更新读数，只跳过没有尺寸的 Canvas 绘制。
+    renderChartSummary(now);
     const canvas=$('chart'),ctx=canvas.getContext('2d'),width=canvas.clientWidth,height=canvas.clientHeight;
     if(!width)return;
     const ratio=Math.min(devicePixelRatio||1,2),pw=Math.round(width*ratio),ph=Math.round(height*ratio);
@@ -96,14 +108,6 @@
       }ctx.stroke();
     }
     if(!chart.hasValues){ctx.fillStyle=chartPalette.text;ctx.textAlign='center';ctx.fillText('等待有效'+(heading?'航向闭环':'船速闭环')+'数据',width/2,height/2);}
-    const b=state.latest.boat;
-    const live=M.boatChart.createBoatChartSample(b?.frame,b?.at||0,now,link.connected);
-    const summary=M.boatChart.prepareBoatChartSummary(live,state.chartMode);
-    const unit=heading?'°':' m/s';
-    set('chartTarget',summary.target==='--'?'--':summary.target+unit);
-    set('chartActual',summary.actual==='--'?'--':summary.actual+unit);
-    set('chartError',summary.error==='--'?'--':summary.error+unit);
-    set('chartSummary','目标 '+summary.target+unit+' · 实际 '+summary.actual+unit+' · 误差 '+summary.error+unit+(heading?'（目标−实际，取最短角差）':'（实际−目标）'));
   }
   function setupMap() {
     map=new BoatMapView('map');
@@ -118,7 +122,7 @@
     });
     map.on('dragstart',()=>$('mapFollow').checked=false);
     // 栅格断点和遥测标签会改变容器尺寸，由地图门面更新底图与箭头锚点。
-    const mapResize=new ResizeObserver(()=>map.invalidateSize());
+    const mapResize=new ResizeObserver(()=>{if($('map').clientWidth&&$('map').clientHeight)map.invalidateSize();});
     mapResize.observe($('map'));
     window.addEventListener('pagehide',()=>{mapResize.disconnect();map.destroy();},{once:true});
     $('trackLegend').innerHTML=M.boatTrack.TRACK_SPEED_LEGEND.map(i=>'<span><i style="background:'+i.color+'"></i>'+i.label+(i.id==='unknown'?'':' m/s')+'</span>').join('');
@@ -170,6 +174,25 @@
     set('trackStatus',(track.active?(fresh?'正在追踪':'等待有效定位'):'已停止')+' · '+track.pointCount+'点'+(track.truncated?' · 已裁剪最早轨迹':''));
     $('trackStart').textContent=track.active?'停止追踪':'开始追踪';
   }
+  function renderDeviceSummary(stats) {
+    const remote=link.source==='cloud';
+    // MQTT 接入名就是遥测主题中的设备 ID；离线时仍显示当前选中的船。
+    const selectedId=remote&&cloud.authenticated?$('cloudDevice').value||(cloud.wanted?cloud.selectedId:''):'';
+    const name=remote?selectedId||'未选择无人船':state.deviceName||'未连接设备';
+    const sameDevice=remote?!!selectedId&&state.deviceId==='cloud:'+selectedId:!!state.deviceId;
+    const waiting=!link.connected&&(remote?cloud.wanted||cloud.busy:link.busy);
+    const status=link.connected?'online':waiting?'waiting':'offline';
+    $('deviceSummary').dataset.state=status;
+    set('deviceName',name);
+    $('deviceName').title=remote&&selectedId?'MQTT 设备 ID：'+selectedId:name;
+    set('deviceConnectionState',link.connected?'已连接':waiting?'等待遥测':'未连接');
+    set('sourceChip',remote?'MQTT':'BLE');
+    set('frameCount',new Intl.NumberFormat('zh-CN').format(sameDevice?stats.framesReceived:0));
+    const updated=sameDevice&&Number.isFinite(state.lastUpdateAt)?new Date(state.lastUpdateAt):null;
+    set('deviceLastUpdate',updated?updated.toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}):'--');
+    if(updated)$('deviceLastUpdate').dateTime=updated.toISOString();else $('deviceLastUpdate').removeAttribute('datetime');
+    set('deviceLatency',remote&&link.connected&&sameDevice&&Number.isFinite(state.forwardDelayMs)?Math.round(state.forwardDelayMs)+' ms':'--');
+  }
   function render() {
     if(document.hidden)return;
     const now=performance.now(),x=state.latest;
@@ -177,7 +200,8 @@
     for(const [id,key] of Object.entries({boatStatus:'status',boatActual:'actual',boatTarget:'target',boatRequested:'requested',boatDirection:'direction',boatMode:'modeText',boatHeading:'actualHeading',boatTargetHeading:'targetHeading',boatHeadingError:'headingError',boatCommon:'common',boatTurn:'turn'}))set(id,b[key]);
     $('boatMeter').style.width=(Number.isFinite(Number(b.common))?Math.min(100,Math.abs(Number(b.common))):0)+'%';
     const v=M.velocityDisplay.prepareVelocityDisplay(x.velocity?.frame,x.velocity?.at||0,now,link.connected);
-    for(const [id,key] of Object.entries({velocityStatus:'status',velocityPlanar:'planar',velocityX:'x',velocityY:'y',latitude:'latitude',longitude:'longitude',rtkHeading:'heading',velocityAge:'ageText',velocitySequence:'sequence',rtkAlignment:'alignmentText',fixStatus:'fixStatus'}))set(id,v[key]);
+    for(const [id,key] of Object.entries({velocityStatus:'status',velocityPlanar:'planar',sensorPlanar:'planar',velocityX:'x',velocityY:'y',latitude:'latitude',longitude:'longitude',rtkHeading:'heading',velocityAge:'ageText',velocitySequence:'sequence',rtkAlignment:'alignmentText',fixStatus:'fixStatus'}))set(id,v[key]);
+    $('sensorFixState').dataset.valid=String(v.fixFresh);
     set('mapCoordinate',v.fixFresh?v.latitude+', '+v.longitude:'--（无有效定位）');
     if(!v.fixFresh){track.breakSegment();marker?.setOpacity(.3);}
     updateMapAvailability(v.fixFresh);
@@ -186,11 +210,15 @@
     const imu=M.imuDisplay.prepareImuDisplay(x.imu?.frame,x.imu?.at||0,now,link.connected);
     for(const key of ['roll','pitch','yaw','gyroX','gyroY','gyroZ'])set(key,imu[key]);
     for(const [id,key] of Object.entries({imuStatus:'status',imuSequence:'sequence',imuAge:'ageText',imuAlignment:'alignmentText',imuHeadingUpdate:'headingUpdateText'}))set(id,imu[key]);
+    // 角速度与欧拉角独立有效，部分数据可用时以黄色提示。
+    $('sensorImuState').dataset.valid=String(imu.fresh);
+    $('sensorImuState').dataset.partial=String(imu.sourceFresh&&!imu.fresh&&(imu.gyroFresh||imu.eulerFresh));
     viewer.setTelemetry(imu);
     horizon.setTelemetry(imu);
     renderMotor(x.status?.frame,x.status?.at||0,now);
     const stats=link.parser.getStats();
-    for(const [id,key] of Object.entries({frameCount:'framesReceived',parsedFrames:'framesReceived',crcErrors:'crcErrors',bufferedBytes:'bufferedBytes',bytesReceived:'bytesReceived'}))set(id,stats[key]);
+    for(const [id,key] of Object.entries({parsedFrames:'framesReceived',crcErrors:'crcErrors',bufferedBytes:'bufferedBytes',bytesReceived:'bytesReceived'}))set(id,stats[key]);
+    renderDeviceSummary(stats);
     set('linkAge',state.lastReceived==null?'--':Math.round(now-state.lastReceived)+' ms');
     state.history=state.history.filter(s=>now-s.timestamp<=12000);
     drawChart(now);
@@ -198,7 +226,8 @@
   link.addEventListener('frame',({detail:frame})=>{
     const now=performance.now(),at=Number.isFinite(frame.receivedAtMonotonic)?frame.receivedAtMonotonic:now;
     if(now-at>=1000)return;
-    state.lastReceived=at;
+    state.lastReceived=at;state.lastUpdateAt=Date.now();
+    state.forwardDelayMs=link.source==='cloud'&&Number.isFinite(frame.cloudForwardDelayMs)?frame.cloudForwardDelayMs:null;
     if(frame.motors)state.latest.status={frame,at};
     if(frame.boat) {
       state.latest.boat={frame,at};
@@ -218,20 +247,20 @@
     $('disconnectButton').disabled=!link.connected&&!waiting&&!link.busy;
   }
   function clearLive() {
-    state.latest={};state.history=[];state.lastReceived=null;viewer.reset();horizon.reset();track.stop();track.breakSegment();
+    state.latest={};state.history=[];state.lastReceived=null;state.forwardDelayMs=null;viewer.reset();horizon.reset();track.stop();track.breakSegment();
     marker?.remove();marker=null;lastLocation=null;hadFix=false;updateMapAvailability(false);
   }
   link.addEventListener('connection',({detail:c})=>{
     $('connectionBadge').textContent=c.connected?'已连接':'未连接';
     $('connectionBadge').className='badge '+(c.connected?'online':'offline');
     updateConnectionButtons();params.reset(link.readOnly||link.source==='cloud');clearLive();
-    if(state.source!==link.source){track.clear();state.deviceId=null;state.source=link.source;}
+    if(state.source!==link.source){track.clear();state.deviceId=null;state.deviceName=null;state.lastUpdateAt=null;state.source=link.source;}
     if(c.connected) {
-      if(state.deviceId!==c.id)track.clear();
-      state.deviceId=c.id;set('deviceName',c.name);set('notifyCharacteristic',c.tx);set('writeCharacteristic',c.rx);
+      if(state.deviceId!==c.id){track.clear();state.lastUpdateAt=null;}
+      state.deviceId=c.id;state.deviceName=c.name;set('notifyCharacteristic',c.tx);set('writeCharacteristic',c.rx);
       set('connectionText',link.source==='cloud'?'云端实时遥测 · '+c.name+(window.BoatAuth?.user?.role==='guest'?' · 访客只读监测':link.readOnly?' · 当前设备只读':' · 管理员可远程调参'):c.readOnly?'已连接 '+c.name+' · 访客只读监测':'已连接 '+c.name+'，等待 UART4 遥测；参数仅在点击时读取。');
     } else {
-      set('deviceName','--');set('connectionText',c.message||'已断开');set('notifyCharacteristic','--');set('writeCharacteristic','--');
+      set('connectionText',c.message||'已断开');set('notifyCharacteristic','--');set('writeCharacteristic','--');
     }
     render();
   });
@@ -299,6 +328,7 @@
     if(link.source==='cloud'){
       set('connectionText',s.message);updateConnectionButtons();
       $('connectButton').disabled=$('connectButton').disabled||!s.enabled||!s.authenticated||!select.value;
+      renderDeviceSummary(link.parser.getStats());
     }
   }
   cloud.addEventListener('cloudstate',({detail})=>renderCloud(detail));
@@ -316,7 +346,7 @@
   $('telemetrySource').onchange=()=>{
     const source=$('telemetrySource').value;link.select(source);
     const remote=source==='cloud';$('cloudControls').hidden=!remote;$('cloudReadOnlyNotice').hidden=!remote;
-    set('sourceChip',remote?'MQTT':'T10');set('sourceDescription',remote?'云端 MQTT · 只读监测':'本地蓝牙 · 单船监测');
+    set('sourceChip',remote?'MQTT':'BLE');set('sourceDescription',remote?'云端 MQTT · 只读监测':'本地蓝牙 · 单船监测');
     updateMapLabels();
     set('sourceSideNote',remote?'MQTT 云端监测 · 网口上云':'本地蓝牙直连 · T10 / 无人船电控');
     $('connectButton').textContent=remote?'连接云端无人船':'选择蓝牙设备';
@@ -325,7 +355,7 @@
     if(remote&&cloud.authenticated)cloud.refreshDevices().catch(error=>toast(error.message));
     renderCloud();render();
   };
-  $('cloudDevice').onchange=()=>{if(link.source==='cloud'){link.disconnect();track.clear();state.deviceId=null;renderCloud();render();}};
+  $('cloudDevice').onchange=()=>{if(link.source==='cloud'){link.disconnect();track.clear();state.deviceId=null;state.deviceName=null;state.lastUpdateAt=null;renderCloud();render();}};
   on('cloudRefresh',()=>cloud.refreshDevices());
   on('cloudLoginOpen',()=>{$('cloudLoginError').textContent='';$('cloudPassword').value='';$('cloudLoginDialog').showModal();$('cloudPassword').focus();});
   on('cloudLoginClose',()=>$('cloudLoginDialog').close());
@@ -341,6 +371,19 @@
   cloud.initialize().catch(()=>{cloud.message='无法读取云端配置，请检查服务器连接';renderCloud();});
   set('supportNotice',!window.isSecureContext?'当前不是安全地址：蓝牙需 HTTPS 或 localhost':!navigator.bluetooth?'此浏览器不支持 Web Bluetooth。建议使用支持蓝牙的桌面 Chrome/Edge 或 Android Chrome。':'蓝牙直接连接当前电脑/手机；地图底图需要联网。');
   readChartPalette();setupMap();mapVectors=new MapVelocityView(map);render();
+  function refreshWorkspace() {
+    // 切页保留连接与历史，待新容器布局完成后恢复地图、图表和三维画面。
+    viewer.visible=false;viewer.stop();cancelAnimationFrame(viewResizeFrame);
+    viewResizeFrame=requestAnimationFrame(()=>{
+      if($('map').clientWidth&&$('map').clientHeight)map.invalidateSize();
+      const rect=viewer.canvas.getBoundingClientRect();
+      viewer.visible=rect.width>0&&rect.height>0&&rect.bottom>0&&rect.top<innerHeight;
+      if(viewer.visible){viewer.resize();viewer.catchUp();viewer.schedule(true);}
+      render();
+    });
+  }
+  window.addEventListener('boat-view-change',refreshWorkspace);
+  refreshWorkspace();
   const timer=setInterval(render,200);
   const cloudTimer=setInterval(()=>{if(link.source==='cloud'&&cloud.enabled&&cloud.authenticated&&!document.hidden)cloud.refreshDevices().catch(()=>{});},10000);
   document.addEventListener('visibilitychange',()=>{
@@ -349,7 +392,7 @@
     }
     if(!document.hidden)render();
   });
-  window.addEventListener('pagehide',()=>{clearInterval(timer);clearInterval(cloudTimer);viewer.stop();mapSettings.destroy();link.disconnect();});
+  window.addEventListener('pagehide',()=>{cancelAnimationFrame(viewResizeFrame);clearInterval(timer);clearInterval(cloudTimer);viewer.stop();mapSettings.destroy();link.disconnect();});
   window.addEventListener('pageshow',event=>{if(event.persisted)location.reload();});
   window.addEventListener('resize',()=>render());
   window.addEventListener('boat-theme-change',()=>{readChartPalette();map?.setTheme(document.documentElement.dataset.theme);render();});

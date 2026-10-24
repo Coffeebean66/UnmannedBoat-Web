@@ -49,34 +49,6 @@
   function updateClock(){if(!document.hidden){const now=new Date();clock.dateTime=now.toISOString();clock.textContent=now.toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});}}
   updateClock();const clockTimer=setInterval(updateClock,1000);
   window.addEventListener('pagehide',()=>clearInterval(clockTimer),{once:true});
-  // 两个标签都持续接收数据，只切换可见面板；支持方向键和首尾键。
-  const tabs=[...document.querySelectorAll('.telemetry-tabs [role="tab"]')];
-  function selectTab(selected,focus=false){
-    tabs.forEach(tab=>{const active=tab===selected;tab.setAttribute('aria-selected',String(active));tab.tabIndex=active?0:-1;document.getElementById(tab.getAttribute('aria-controls')).hidden=!active;});
-    if(focus)selected.focus();
-  }
-  tabs.forEach((tab,index)=>{
-    tab.onclick=()=>selectTab(tab);
-    tab.onkeydown=event=>{
-      const next=event.key==='Home'?0:event.key==='End'?tabs.length-1:event.key==='ArrowRight'?(index+1)%tabs.length:event.key==='ArrowLeft'?(index+tabs.length-1)%tabs.length:null;
-      if(next!=null){event.preventDefault();selectTab(tabs[next],true);}
-    };
-  });
-  // 由当前滚动位置指示导航。手机链接与桌面链接共享同一内容锚点。
-  const sections=[...document.querySelectorAll('[data-nav-section]')];
-  const links=[...document.querySelectorAll('.side-nav a,.mobile-nav a')];
-  let queued=false,activeSection='overview';
-  const markNav=()=>links.forEach(link=>{const selected=link.hash==='#'+activeSection;link.classList.toggle('active',selected);if(selected)link.setAttribute('aria-current','location');else link.removeAttribute('aria-current');});
-  function updateNav(){
-    queued=false;
-    const candidates=sections.map(section=>({id:section.id,top:section.getBoundingClientRect().top})).filter(section=>section.top<=180).sort((a,b)=>b.top-a.top);
-    const first=candidates[0];
-    // 并排面板处于同一行时保留用户点击的导航，不被 DOM 顺序覆盖。
-    if(first&&!candidates.some(section=>section.id===activeSection&&Math.abs(section.top-first.top)<40))activeSection=first.id;
-    markNav();
-  }
-  links.forEach(link=>link.addEventListener('click',()=>{activeSection=link.hash.slice(1);markNav();}));
-  window.addEventListener('scroll',()=>{if(!queued){queued=true;requestAnimationFrame(updateNav);}},{passive:true});
   const dialog=document.getElementById('settingsDialog');
   const syncModal=()=>{
     document.documentElement.classList.toggle('modal-open',dialog.open);
@@ -86,6 +58,5 @@
   };
   new MutationObserver(syncModal).observe(dialog,{attributes:true,attributeFilter:['open']});
   dialog.addEventListener('close',syncModal);
-  updateNav();
   window.BoatUI={icon,decorate,setTheme};
 })();

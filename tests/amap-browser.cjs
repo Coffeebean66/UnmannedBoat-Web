@@ -410,7 +410,16 @@ async function main(){
     assert.equal(await evaluate('boatMonitor.map.getZoom()'),17,'Accessible AMap zoom-in control updates the map');
     await evaluate("document.querySelector('.boat-map-zoom [aria-label=地图缩小]').click()");
     assert.equal(await evaluate('boatMonitor.map.getZoom()'),16,'Accessible AMap zoom-out control updates the map');
-    await evaluate("document.getElementById('imuTab').click()");
+    await evaluate("window.amapWorkspaceReferences={map:boatMonitor.map,nativeMap:boatMonitor.map.map,track:boatMonitor.track,points:boatMonitor.track.pointCount};BoatWorkspace.navigate('navigation');void 0");
+    await until("BoatWorkspace.current==='navigation'&&document.getElementById('map').clientWidth>0");
+    assert.equal(await evaluate("document.getElementById('navigation').closest('[data-workspace-view]').dataset.workspaceView"),'navigation','AMap opens on its dedicated navigation page');
+    await shot('amap-workspace-navigation');
+    await evaluate("BoatWorkspace.navigate('attitude');void 0");await until("BoatWorkspace.current==='attitude'&&document.getElementById('imuPanel').getBoundingClientRect().width>0");
+    assert.equal(await evaluate("document.getElementById('imuHorizon').dataset.valid"),'true','Dedicated attitude instruments remain live while AMap is hidden');
+    await evaluate("BoatWorkspace.navigate('overview');void 0");await until("BoatWorkspace.current==='overview'&&document.getElementById('map').clientWidth>0");
+    assert.equal(await evaluate('boatMonitor.map===amapWorkspaceReferences.map&&boatMonitor.map.map===amapWorkspaceReferences.nativeMap&&boatMonitor.track===amapWorkspaceReferences.track'),true,'Page switching reuses the same AMap and track instances');
+    assert.ok(await evaluate('boatMonitor.track.pointCount')>=await evaluate('amapWorkspaceReferences.points'),'AMap page switching preserves recorded points');
+    await evaluate("document.getElementById('imuPanel').scrollIntoView({block:'center',behavior:'instant'})");
     assert.equal(await evaluate("document.getElementById('imuHorizon').dataset.valid"),'true','IMU horizon remains live with AMap');
     await shot('amap-sdk-simulation-desktop');
     await evaluate("document.getElementById('mapVectorsToggle').click()");await until("!document.querySelector('.map-velocity-anchor')");

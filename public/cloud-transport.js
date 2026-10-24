@@ -197,7 +197,12 @@
           if(!frames.length)return;
           this.lastPayloadAt=now-age;this.message=this.readOnly?'云端实时遥测 · 只读监测':'云端实时遥测 · 管理员可远程调参';
           if(!this.live){this.live=true;this.emit('connection',{connected:true,id:'cloud:'+this.selectedId,name:this.selectedId,readOnly:this.readOnly,source:'cloud'});}
-          for(const frame of frames){frame.receivedAtMonotonic=now-age;this.emit('frame',frame);}
+          for(const frame of frames){
+            frame.receivedAtMonotonic=now-age;
+            // 只估计服务器至浏览器的转发耗时，不能当作船端全链路延迟或 RTT。
+            frame.cloudForwardDelayMs=this.clockKnown&&Number.isFinite(packet.receivedAt)?Math.max(0,wallAge):null;
+            this.emit('frame',frame);
+          }
           this.notify();
         }catch(_){/* Base64 / JSON / 协议错误均不续期已有数据。 */}
       });

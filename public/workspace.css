@@ -1,0 +1,84 @@
+/* 网页工作区：只呈现当前页面，共享地图和姿态实例在对应容器间移动。 */
+html { scroll-behavior:auto; }
+.workspace-heading { display:flex; align-items:baseline; flex-wrap:wrap; gap:5px 12px; margin-bottom:5px; }
+.workspace-heading h1 { margin:0; }
+#viewEnglish { font-size:9px; letter-spacing:.13em; color:var(--faint); }
+.workspace-connection { margin:-3px 0 14px; font-size:11px; color:var(--muted); overflow-wrap:anywhere; }
+.workspace-view { min-width:0; }
+.workspace-view[hidden] { display:none!important; }
+.workspace-slot { display:flex; flex-direction:column; min-width:0; }
+.workspace-slot>.card { flex:1; min-width:0; }
+.panel-page-link { display:inline-flex; align-items:center; gap:5px; text-decoration:none; color:var(--blue); font-size:10px; white-space:nowrap; padding:4px 0; }
+.panel-page-link:hover { color:var(--accent); }
+.panel-page-link svg { width:12px; height:12px; }
+.overview-shortcuts { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
+.overview-shortcuts>a { display:flex; align-items:center; gap:12px; min-width:0; padding:16px; color:var(--text); text-decoration:none; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel); transition:border-color .15s,background .15s; }
+.overview-shortcuts>a:hover { border-color:var(--accent); background:var(--soft); }
+.overview-shortcuts strong { font-size:12px; font-weight:600; }
+.overview-shortcuts p { font-size:10px; color:var(--muted); margin-top:5px; }
+.overview-shortcuts>a>svg,.overview-shortcuts>a>[data-icon]:last-child { margin-left:auto; color:var(--faint); }
+.workspace-note { display:flex; align-items:flex-start; gap:10px; margin-top:16px; padding:14px 16px; border:1px solid var(--line); border-radius:7px; background:var(--soft); color:var(--muted); font-size:11px; line-height:1.8; }
+.workspace-note [data-icon] { margin-top:2px; color:var(--blue); }
+.workspace-note svg { width:16px; height:16px; }
+.navigation-workspace .map-stage { flex:none; min-height:420px; height:clamp(420px,calc(100dvh - 370px),900px); }
+.navigation-workspace #map { min-height:0; }
+.navigation-workspace [href="#navigation"],.attitude-workspace [href="#attitude"] { display:none; }
+.attitude-workspace { display:grid; grid-template-columns:minmax(0,1.55fr) minmax(340px,1fr); gap:16px; align-items:start; }
+.attitude-workspace #boatCanvas { height:clamp(340px,calc(100dvh - 390px),680px); }
+.attitude-workspace .card-title h2 { font-size:14px; }
+.attitude-workspace .viewer-controls .inline-controls { justify-content:flex-start; gap:20px; }
+.attitude-workspace .viewer-controls .button-row { display:flex; flex-wrap:wrap; }
+.attitude-workspace .viewer-controls button { padding:7px 12px; font-size:11px; }
+.analysis-workspace .chart-card { padding:20px; }
+.analysis-workspace .chart-card .card-title h2 { font-size:15px; }
+.analysis-workspace .chart-card canvas { height:clamp(300px,45dvh,600px); }
+.analysis-workspace .chart-readouts { padding:16px 0 4px; }
+.analysis-workspace .chart-readouts b { font-size:22px; }
+.analysis-workspace .chart-readouts span,.analysis-workspace .chart-legend { font-size:11px; }
+.analysis-workspace .chart-card .small-button { font-size:11px; padding:7px 11px; }
+.propulsion-workspace .motor { padding:22px; }
+.propulsion-workspace .motor .card-title h3 { font-size:14px; }
+.propulsion-workspace .motor-main { margin:28px 0; }
+.propulsion-workspace .motor-dial,.propulsion-workspace .motor-dial svg { width:100px; height:100px; }
+.propulsion-workspace .motor-rpm strong { font-size:40px; }
+.propulsion-workspace .motor-output strong { font-size:28px; }
+.propulsion-workspace .motor-values { padding:22px 0; }
+.propulsion-workspace .motor-values b { font-size:20px; }
+.propulsion-workspace .motor-extra { font-size:10px; }
+.diagnostics-workspace .diagnostics-card { padding:22px; }
+.diagnostics-workspace .diagnostics-body { grid-template-columns:minmax(180px,.7fr) minmax(0,2fr); gap:22px; }
+.diagnostics-workspace .diag-grid { grid-template-columns:repeat(4,minmax(0,1fr)); gap:20px; }
+.diagnostics-workspace .diag-grid>span { font-size:11px; }
+.diagnostics-workspace .diag-grid b { font-size:20px; }
+.diagnostics-workspace .settings-callout { grid-column:1/-1; grid-row:auto; }
+.diagnostics-workspace .connection-details { grid-row:auto; }
+.diagnostics-workspace .connection-details summary,.diagnostics-workspace .characteristic,.diagnostics-workspace .connection-details .muted { font-size:11px; }
+.diagnostics-workspace .connection-route { min-height:110px; }
+@media(max-width:1100px) {
+  .attitude-workspace { grid-template-columns:minmax(0,1.15fr) minmax(300px,1fr); gap:12px; }
+  .overview-shortcuts { gap:10px; }.overview-shortcuts>a { gap:9px; padding:12px; }
+  .propulsion-workspace .motor { padding:16px; }.propulsion-workspace .motor-dial,.propulsion-workspace .motor-dial svg { width:76px; height:76px; }.propulsion-workspace .motor-rpm strong { font-size:32px; }
+}
+@media(max-width:860px) {
+  .attitude-workspace { grid-template-columns:minmax(0,1fr); }
+  .attitude-workspace #boatCanvas { height:clamp(280px,46dvh,500px); }
+  .overview-shortcuts p { font-size:9px; }.overview-shortcuts .card-icon { display:none; }
+  .diagnostics-workspace .diag-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+}
+@media(max-width:620px) {
+  /* 相机按横向视野构图，窄屏保持横向画幅以完整显示船体。 */
+  .attitude-workspace #boatCanvas { height:auto; aspect-ratio:16/10; }
+  #viewEnglish { font-size:8px; }
+  .workspace-connection { font-size:10px; }
+  .overview-shortcuts { grid-template-columns:minmax(0,1fr); }.overview-shortcuts>a { padding:14px; }.overview-shortcuts .card-icon { display:inline-flex; }.overview-shortcuts p { font-size:10px; }
+  .navigation-workspace .map-stage { min-height:360px; height:58dvh; }
+  .map-card .card-title>.button-row { gap:6px; flex-wrap:wrap; justify-content:flex-end; }.map-card .panel-caption { display:none; }
+  [data-workspace-view="overview"] .map-card .panel-page-link { font-size:9px; }
+  .analysis-workspace .chart-card,.diagnostics-workspace .diagnostics-card { padding:14px; }
+  .analysis-workspace .chart-card canvas { height:300px; }
+  .analysis-workspace .chart-readouts b { font-size:18px; }
+  .propulsion-workspace .motors { grid-template-columns:minmax(0,1fr); }
+  .propulsion-workspace .motor-main { margin:24px 0; }.propulsion-workspace .motor-rpm strong { font-size:36px; }
+  .diagnostics-workspace .diagnostics-body { grid-template-columns:minmax(0,1fr); gap:18px; }.diagnostics-workspace .connection-route { min-height:0; padding:20px 8px; }.diagnostics-workspace .diag-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .workspace-note { font-size:10px; padding:12px; }
+}

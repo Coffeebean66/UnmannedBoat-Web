@@ -9,7 +9,7 @@ function payload(){
   }
   return Buffer.concat(frames).toString('base64');
 }
-function setup(){
+function setup({serverClock=true,serverOffset=0}={}){
   let now=10000,wall=1770000000000,authorized=true,brokerConnected=true;
   const streams=[],timers=new Map();let timerId=0;
   class FakeEventSource extends EventTarget {
@@ -27,7 +27,7 @@ function setup(){
     window:{},document:{hidden:false},EventSource:FakeEventSource,performance:{now:()=>now},Date:{now:()=>wall},
     setInterval:fn=>{const id=++timerId;timers.set(id,fn);return id;},clearInterval:id=>timers.delete(id),
     fetch:async(url,options)=>{
-      let status=200,body={serverTime:wall};
+      let status=200,body=serverClock?{serverTime:wall+serverOffset}:{};
       if(url.endsWith('/config'))body={...body,enabled:true,requiresLogin:true};
       else if(url.endsWith('/login')){authorized=true;body.ok=true;}
       else if(url.endsWith('/session')){authorized=false;body.ok=true;}
@@ -38,7 +38,7 @@ function setup(){
   vm.runInNewContext(fs.readFileSync(path.join(root,'public/cloud-transport.js'),'utf8'),context);
   const cloud=new context.window.CloudBoatLink();
   return {cloud,context,streams,timers,FakeBluetooth,
-    packet:(extra={})=>({deviceId:'boat-123',receivedAt:wall,ageMs:0,payload:payload(),...extra}),
+    packet:(extra={})=>({deviceId:'boat-123',receivedAt:wall+serverOffset,ageMs:0,payload:payload(),...extra}),
     advance:ms=>{now+=ms;wall+=ms;},setAuthorized:value=>authorized=value,setBroker:value=>brokerConnected=value};
 }
 async function connected(h){await h.cloud.initialize();await h.cloud.connect('boat-123');return h.streams.at(-1);}
@@ -50,6 +50,41 @@ test('云端通道建立不伪装成实时设备；完整176字节沿用UART4解
   assert.equal(frames[0].receivedAtMonotonic,9700);assert.equal(h.cloud.parser.getStats().framesReceived,4);
   assert.equal(connections.at(-1).readOnly,true);assert.equal(connections.at(-1).id,'cloud:boat-123');
   await assert.rejects(h.cloud.request('write',{}),/只读/);
+});
+test('转发延迟使用校时后的服务器接收时间，独立于遥测年龄且不出现负值',async()=>{
+  const h=setup({serverOffset:120000}),frames=[];h.cloud.addEventListener('frame',e=>frames.push(e.detail));
+  const stream=await connected(h);assert.equal(h.cloud.clockKnown,true);assert.equal(h.cloud.serverOffset,120000);
+  stream.send('telemetry',h.packet({receivedAt:1770000000000+120000-125,ageMs:350}));
+  assert.equal(frames.length,4);
+  for(const frame of frames){assert.equal(frame.cloudForwardDelayMs,125);assert.equal(frame.receivedAtMonotonic,9650);}
+  stream.send('telemetry',h.packet({receivedAt:1770000000000+120000+30}));
+  assert.equal(frames.length,8);assert.equal(frames.at(-1).cloudForwardDelayMs,0);
+});
+test('未校时或缺少有效服务器接收时间时，转发延迟明确为未知而不是0ms',async()=>{
+  for(const [label,options,extra] of [
+    ['未校时',{serverClock:false},{}],
+    ['缺少时间戳',{}, {receivedAt:undefined}],
+    ['空时间戳',{}, {receivedAt:null}],
+    ['非数值时间戳',{}, {receivedAt:'1770000000000'}]
+  ]){
+    const h=setup(options),frames=[];h.cloud.addEventListener('frame',e=>frames.push(e.detail));
+    const stream=await connected(h);stream.send('telemetry',h.packet(extra));
+    assert.equal(frames.length,4,label);assert.equal(h.cloud.connected,true,label);
+    for(const frame of frames)assert.equal(frame.cloudForwardDelayMs,null,label);
+  }
+});
+test('切换MQTT设备后旧SSE不能更新船名、有效帧或转发延迟',async()=>{
+  const h=setup(),frames=[],connections=[];h.cloud.addEventListener('frame',e=>frames.push(e.detail));h.cloud.addEventListener('connection',e=>connections.push(e.detail));
+  const previous=await connected(h);previous.send('telemetry',h.packet({receivedAt:1770000000000-111}));
+  assert.equal(frames.length,4);assert.equal(frames.at(-1).cloudForwardDelayMs,111);
+  await h.cloud.connect('boat-second');const current=h.streams.at(-1);
+  assert.notEqual(current,previous);assert.equal(previous.closed,true);assert.equal(h.cloud.selectedId,'boat-second');assert.equal(h.cloud.connected,false);
+  previous.send('telemetry',h.packet({receivedAt:1770000000000-222}));
+  current.send('telemetry',h.packet());assert.equal(frames.length,4);assert.equal(h.cloud.connected,false);
+  current.send('telemetry',h.packet({deviceId:'boat-second',receivedAt:1770000000000-24}));
+  assert.equal(frames.length,8);assert.equal(frames.at(-1).cloudForwardDelayMs,24);
+  assert.equal(connections.at(-1).id,'cloud:boat-second');assert.equal(connections.at(-1).name,'boat-second');
+  assert.equal(h.cloud.parser.getStats().framesReceived,4);
 });
 test('迟到、错设备、损坏和超长遥测都不会恢复云端实时状态',async()=>{
   const h=setup(),stream=await connected(h);let count=0;h.cloud.addEventListener('frame',()=>count++);

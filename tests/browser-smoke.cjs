@@ -5,7 +5,7 @@ const output=path.resolve(__dirname,'../.test-output');fs.mkdirSync(output,{recu
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const mock='('+function(){
   const tx=new EventTarget();tx.uuid='49535343-1e4d-4bd9-ba61-23c647249616';tx.properties={notify:true};tx.startNotifications=async()=>tx;
-  window.testWrites=[];window.replyStatus=0;window.suppressReply=false;let buffer=[];
+  window.testWrites=[];window.testConnections=0;window.replyStatus=0;window.suppressReply=false;let buffer=[];
   function send(bytes){for(let offset=0;offset<bytes.length;offset+=17){const b=bytes.slice(offset,offset+17);tx.value=new DataView(b.buffer);tx.dispatchEvent(new Event('characteristicvaluechanged'));}}
   const rx={uuid:'49535343-8841-43f4-a8d4-ecbe34729bb3',properties:{write:true},async writeValueWithResponse(bytes){
     buffer.push(...bytes);window.testWrites.push([...bytes]);if(buffer.length<56)return;
@@ -19,7 +19,7 @@ const mock='('+function(){
   }};
   const service={uuid:'49535343-fe7d-4ae5-8fa9-9fafd205e455',getCharacteristics:async()=>[tx,rx]};
   const device=new EventTarget();device.id='browser-test';device.name='T10 TEST';
-  device.gatt={connected:false,async connect(){this.connected=true;return {getPrimaryServices:async()=>[service]};},disconnect(){this.connected=false;device.dispatchEvent(new Event('gattserverdisconnected'));}};
+  device.gatt={connected:false,async connect(){window.testConnections++;this.connected=true;return {getPrimaryServices:async()=>[service]};},disconnect(){this.connected=false;device.dispatchEvent(new Event('gattserverdisconnected'));}};
   Object.defineProperty(navigator,'bluetooth',{configurable:true,value:{requestDevice:async()=>device}});
   function frame(type,size,version,flags,seq){
     const b=new Uint8Array(size);b.set([0xa5,0x5a,version,type,size,flags]);const v=new DataView(b.buffer);v.setUint32(6,seq,true);v.setUint32(10,seq*100,true);
@@ -62,13 +62,47 @@ async function main(){
       const clip=await evaluate("(()=>{const r=document.querySelector('.map-stage').getBoundingClientRect();return {x:scrollX+r.left,y:scrollY+r.top,width:r.width,height:r.height,scale:1};})()");
       const r=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:true,clip});fs.writeFileSync(path.join(output,name+'.png'),Buffer.from(r.data,'base64'));
     };
+    const sensorShot=async name=>{
+      const clip=await evaluate("(()=>{const r=document.querySelector('.telemetry-card').getBoundingClientRect();return {x:scrollX+r.left,y:scrollY+r.top,width:r.width,height:r.height,scale:1};})()");
+      const r=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:true,clip});fs.writeFileSync(path.join(output,name+'.png'),Buffer.from(r.data,'base64'));
+    };
+    const deviceShot=async name=>{
+      const clip=await evaluate("(()=>{const r=document.getElementById('deviceSummary').getBoundingClientRect();return {x:scrollX+r.left,y:scrollY+r.top,width:r.width,height:r.height,scale:1};})()");
+      const r=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:true,clip});fs.writeFileSync(path.join(output,name+'.png'),Buffer.from(r.data,'base64'));
+    };
+    const deviceSummary=()=>evaluate("(()=>{const text=id=>document.getElementById(id).textContent;return {state:document.getElementById('deviceSummary').dataset.state,name:text('deviceName'),source:text('sourceChip'),connection:text('deviceConnectionState'),frames:text('frameCount'),updated:text('deviceLastUpdate'),datetime:document.getElementById('deviceLastUpdate').getAttribute('datetime'),latency:text('deviceLatency')};})()");
+    const views=['overview','navigation','attitude','analysis','propulsion','diagnostics'];
+    const assertView=async id=>{
+      await until('BoatWorkspace.current==='+JSON.stringify(id));
+      assert.deepEqual(await evaluate("[...document.querySelectorAll('.workspace-view[data-workspace-view]')].filter(panel=>!panel.hidden&&panel.getBoundingClientRect().width>0).map(panel=>panel.dataset.workspaceView)"),[id],'Only the selected workspace page is visible');
+      assert.equal(await evaluate('location.hash'),'#'+id,'The URL identifies the selected page');
+      assert.equal(await evaluate("document.querySelector('.side-nav a[aria-current=page]')?.hash"),'#'+id,'Desktop navigation identifies the active page');
+      assert.equal(await evaluate("document.querySelector('.mobile-nav a[aria-current=page]')?.hash"),'#'+id,'Mobile navigation follows the same active page');
+    };
+    const view=async id=>{
+      await evaluate("document.querySelector((innerWidth<=740?'.mobile-nav':'.side-nav')+' a[href=\"#"+id+"\"]').click()");
+      await assertView(id);await wait(200);
+      assert.ok(await evaluate('Math.abs(scrollY)<1'),'Page changes start at the top instead of scrolling to a content anchor');
+    };
+    const assertDeviceCardLayout=async width=>{
+      const layout=await evaluate("(()=>{const card=document.getElementById('deviceSummary'),rect=card.getBoundingClientRect();return {width:rect.width,height:rect.height,visible:getComputedStyle(card).display!=='none'&&rect.width>0,overflow:card.scrollWidth>card.clientWidth,rows:[...card.querySelectorAll('dd')].map(row=>({overflow:row.scrollWidth>row.clientWidth,right:row.getBoundingClientRect().right})),right:rect.right};})()");
+      assert.equal(layout.visible,true,'Current-device card is visible on desktop at '+width);
+      assert.equal(layout.overflow,false,'Current-device card has no horizontal overflow at '+width);
+      assert.ok(layout.rows.every(row=>!row.overflow&&row.right<=layout.right+1),'Current-device statistics fit their card at '+width);
+    };
     await send('Runtime.enable');await send('Page.enable');
     // 地图覆盖物与布局测试不依赖外网瓦片；离线提示本身也须不影响遥测。
     await send('Network.enable');await send('Network.setBlockedURLs',{urls:['https://tile.openstreetmap.org/*']});
     await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
     await send('Page.addScriptToEvaluateOnNewDocument',{source:mock});await send('Page.navigate',{url:'http://127.0.0.1:'+server.address().port});
-    await until('!!window.boatMonitor && !!window.boatMonitor.viewer.renderer');assert.deepEqual(errors,[]);
+    await until('!!window.boatMonitor && !!window.boatMonitor.viewer.renderer && !!window.BoatWorkspace');assert.deepEqual(errors,[]);
+    await assertView('overview');
+    await view('navigation');assert.equal(await evaluate('document.activeElement.id'),'viewTitle','Page navigation moves keyboard focus to the page heading');
+    await view('attitude');await evaluate('history.back()');await assertView('navigation');await evaluate('history.forward()');await assertView('attitude');
+    await view('overview');
     await until("boatMonitor.map?.ready && boatMonitor.map.provider==='osm'");
+    await until("(()=>{const image=document.querySelector('#deviceSummary img');return image.complete&&image.naturalWidth>0;})()");
+    assert.deepEqual(await deviceSummary(),{state:'offline',name:'未连接设备',source:'BLE',connection:'未连接',frames:'0',updated:'--',datetime:null,latency:'--'},'Initial device summary shows an unconnected BLE device with no synthetic data');
     assert.match(await evaluate("document.getElementById('mapStatus').textContent"),/未配置/,'Missing AMap credentials are explained');
     assert.match(await evaluate("document.getElementById('mapStatus').textContent"),/OpenStreetMap|OSM/,'Missing AMap credentials retain the existing map');
     assert.deepEqual(await evaluate("(()=>{const h=document.getElementById('imuHorizon');return {valid:h.dataset.valid,state:h.dataset.state,roll:h.dataset.roll,pitch:h.dataset.pitch};})()"),
@@ -76,17 +110,19 @@ async function main(){
     assert.equal(await evaluate("document.documentElement.dataset.theme"),'dark','Monitoring dashboard starts in dark mode');
     assert.equal(await evaluate("(()=>{const ids=[...document.querySelectorAll('[id]')].map(el=>el.id);return new Set(ids).size===ids.length;})()"),true,'Dashboard element IDs remain unique after rearranging panels');
     const assertDesktopLayout=async width=>{
-      const layout=await evaluate("(()=>{const map=document.querySelector('.map-stage').getBoundingClientRect(),attitude=document.querySelector('.attitude-stage').getBoundingClientRect(),chart=document.getElementById('analysis').getBoundingClientRect(),panels=Object.fromEntries(['#navigation','#attitude','.telemetry-card','.map-stage','.systems-grid'].map(selector=>{const el=document.querySelector(selector),r=el.getBoundingClientRect(),s=getComputedStyle(el);return [selector,{width:r.width,height:r.height,fontSize:s.fontSize,lineHeight:s.lineHeight}];}));return {map:{left:map.left,top:map.top,width:map.width,height:map.height,bottom:map.bottom},attitude:{left:attitude.left,top:attitude.top,width:attitude.width,height:attitude.height},chart:{top:chart.top},panels,overflow:document.documentElement.scrollWidth>innerWidth};})()");
+      const layout=await evaluate("(()=>{const map=document.querySelector('.map-stage').getBoundingClientRect(),attitude=document.querySelector('.attitude-stage').getBoundingClientRect(),panels=Object.fromEntries(['#navigation','#attitude','.telemetry-card','.map-stage'].map(selector=>{const el=document.querySelector(selector),r=el.getBoundingClientRect(),s=getComputedStyle(el);return [selector,{width:r.width,height:r.height,fontSize:s.fontSize,lineHeight:s.lineHeight}];}));return {map:{left:map.left,top:map.top,width:map.width,height:map.height,bottom:map.bottom},attitude:{left:attitude.left,top:attitude.top,width:attitude.width,height:attitude.height},panels,overflow:document.documentElement.scrollWidth>innerWidth};})()");
       console.log('Dashboard layout '+width+': '+JSON.stringify(layout.panels));
       assert.equal(layout.overflow,false,'Desktop page overflow at '+width);
       assert.ok(layout.map.width>layout.attitude.width*1.5,'Map remains the primary desktop panel at '+width);
       assert.ok(layout.map.width*layout.map.height>layout.attitude.width*layout.attitude.height,'Map has more display area than the attitude preview at '+width);
       assert.ok(layout.map.left+layout.map.width<=layout.attitude.left,'Map and attitude panels share the desktop row at '+width);
-      assert.ok(layout.map.bottom<=layout.chart.top,'Control chart follows the navigation area at '+width);
+      assert.equal(await evaluate("document.getElementById('analysis').getBoundingClientRect().width"),0,'Detailed control charts live on their own page');
+      assert.equal(await evaluate("document.getElementById('motors').getBoundingClientRect().width"),0,'Detailed motor data lives on its own page');
+      await assertDeviceCardLayout(width);
     };
-    await assertDesktopLayout(1440);
+    await assertDesktopLayout(1440);await deviceShot('device-card-offline-1440');
     await send('Emulation.setDeviceMetricsOverride',{width:1920,height:1080,deviceScaleFactor:1,mobile:false});await wait(300);
-    await assertDesktopLayout(1920);await shot('desktop-wide-empty');
+    await assertDesktopLayout(1920);await shot('desktop-wide-empty');await deviceShot('device-card-offline-1920');
     await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});await wait(300);
     assert.equal(await evaluate("document.getElementById('mapEmpty').hidden"),true,'A ready map remains visible before the first fix');
     assert.equal(await evaluate("document.getElementById('mapFixStatus').hidden"),false,'Waiting for a fix uses a small map hint');
@@ -105,37 +141,71 @@ async function main(){
     assert.equal(await evaluate("document.querySelectorAll('#presets .preset.empty').length"),3);
     await shot('desktop-empty');
     await evaluate("document.getElementById('connectButton').click()");await until('boatMonitor.link.connected');
+    assert.equal((await deviceSummary()).name,'T10 TEST','The BLE device name is used instead of a hardcoded boat name');
+    assert.equal((await deviceSummary()).source,'BLE');
+    assert.equal((await deviceSummary()).state,'online');
     await evaluate("window.testLatestFrames={};boatMonitor.link.addEventListener('frame',({detail})=>{if(detail.boat)testLatestFrames.boat=detail;if(detail.velocity)testLatestFrames.velocity=detail;});startTelemetry();document.getElementById('trackStart').click()");await wait(1200);
+    assert.equal(await evaluate("Number(document.getElementById('frameCount').textContent.replaceAll(',',''))===Number(document.getElementById('parsedFrames').textContent)&&Number(document.getElementById('parsedFrames').textContent)>0"),true,'Device summary counts only valid parsed frames');
+    const liveDevice=await deviceSummary();
+    assert.equal(liveDevice.connection,'已连接');assert.notEqual(liveDevice.updated,'--');assert.ok(Number.isFinite(Date.parse(liveDevice.datetime)),'A live device records a machine-readable receive time');
+    assert.equal(liveDevice.latency,'--','BLE does not invent an end-to-end or forwarding latency');
+    await assertDeviceCardLayout(1440);await deviceShot('device-card-connected-1440');await shot('desktop-device-connected-1440');
+    await send('Emulation.setDeviceMetricsOverride',{width:1920,height:1080,deviceScaleFactor:1,mobile:false});await wait(300);
+    await assertDeviceCardLayout(1920);await deviceShot('device-card-connected-1920');await shot('desktop-device-connected-1920');
+    await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});await wait(300);
+    await evaluate("window.workspaceReferences={link:boatMonitor.link,parser:boatMonitor.link.parser,map:boatMonitor.map,viewer:boatMonitor.viewer,horizon:boatMonitor.horizon,track:boatMonitor.track,canvas:document.getElementById('boatCanvas'),connectionCount:testConnections,pointCount:boatMonitor.track.pointCount,frames:boatMonitor.link.parser.getStats().framesReceived};void 0");
+    const overviewMapWidth=await evaluate("document.getElementById('map').clientWidth");
+    for(const id of views){
+      await view(id);
+      assert.equal(await evaluate('boatMonitor.link.connected&&testConnections===workspaceReferences.connectionCount'),true,'Page changes preserve the existing BLE connection');
+      assert.equal(await evaluate('boatMonitor.map===workspaceReferences.map&&boatMonitor.viewer===workspaceReferences.viewer&&boatMonitor.link.parser===workspaceReferences.parser&&boatMonitor.horizon===workspaceReferences.horizon&&boatMonitor.track===workspaceReferences.track&&document.getElementById("boatCanvas")===workspaceReferences.canvas'),true,'Map, 3D canvas, parser, horizon and track are reused across pages');
+      assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,'Desktop page fits: '+id);
+      if(id==='navigation')assert.ok(await evaluate("document.getElementById('map').clientWidth")>overviewMapWidth*1.25,'Dedicated navigation gives the map more room');
+      if(id==='attitude'){
+        await until('boatMonitor.viewer.visible&&boatMonitor.viewer.fresh');
+        assert.ok(await evaluate("document.getElementById('boatCanvas').clientHeight")>=260,'Dedicated attitude page enlarges the 3D canvas');
+      }
+      if(id==='analysis')assert.ok(await evaluate("document.getElementById('chart').width")>0,'Control chart resizes when its page opens');
+      if(id==='diagnostics'){
+        await until('!boatMonitor.viewer.visible');const phase=await evaluate('boatMonitor.viewer.phase');await wait(180);
+        assert.equal(await evaluate('boatMonitor.viewer.phase'),phase,'Hidden 3D view stops water animation');
+      }
+      await viewportShot('workspace-desktop-'+id);
+    }
+    assert.ok(await evaluate('boatMonitor.track.pointCount')>=await evaluate('workspaceReferences.pointCount'),'Navigation preserves recorded track points');
+    assert.ok(await evaluate('boatMonitor.link.parser.getStats().framesReceived')>await evaluate('workspaceReferences.frames'),'Telemetry continues while switching pages');
+    await view('analysis');
     assert.equal(await evaluate("document.getElementById('boatActual').textContent"),'1.552');assert.equal(await evaluate("document.getElementById('roll').textContent"),'6.00');
     assert.equal(await evaluate("document.getElementById('chartTarget').textContent"),'1.800 m/s');
     assert.equal(await evaluate("document.getElementById('chartActual').textContent"),'1.552 m/s');
     assert.equal(await evaluate("document.getElementById('chartError').textContent"),'-0.248 m/s');
+    await view('overview');
     assert.equal(await evaluate("document.getElementById('mapEmpty').hidden"),true,'Live position remains on the ready map');
     assert.equal(await evaluate("document.getElementById('mapFixStatus').hidden"),true,'A valid fix clears the waiting hint');
     assert.equal(await evaluate("document.getElementById('motor1Voltage').textContent"),'24.50');
     assert.ok(await evaluate("parseFloat(document.getElementById('motor1Dial').style.strokeDasharray)>0"));
     assert.equal(await evaluate("boatMonitor.track.segments[0][0].longitude"),121.7654321);assert.ok(await evaluate('boatMonitor.track.pointCount>=2'));
-    const assertTelemetryTab=async selected=>{
-      const imu=selected==='imu';
-      assert.deepEqual(await evaluate("['rtkPanel','imuPanel'].map(id=>document.getElementById(id).hidden)"),[imu,!imu],'Only the selected telemetry panel is visible');
-      assert.deepEqual(await evaluate("['rtkTab','imuTab'].map(id=>document.getElementById(id).getAttribute('aria-selected'))"),[String(!imu),String(imu)],'Telemetry tab selection is exposed to assistive technology');
-      assert.deepEqual(await evaluate("['rtkTab','imuTab'].map(id=>document.getElementById(id).tabIndex)"),imu?[-1,0]:[0,-1],'Only the selected telemetry tab is in the keyboard tab sequence');
+    const assertCombinedTelemetry=async()=>{
+      assert.deepEqual(await evaluate("['rtkPanel','imuPanel'].map(id=>{const panel=document.getElementById(id),rect=panel.getBoundingClientRect();return !panel.hidden&&getComputedStyle(panel).display!=='none'&&rect.width>0&&rect.height>0;})"),[true,true],'RTK and IMU telemetry remain visible together without switching tabs');
+      assert.equal(await evaluate("document.getElementById('rtkPanel').closest('.telemetry-card')===document.getElementById('imuPanel').closest('.telemetry-card')"),true,'Position and attitude readings share the same sensor card');
     };
     const assertImuLayout=async width=>{
-      const layout=await evaluate("(()=>{const values=document.querySelector('.imu-euler-values').getBoundingClientRect(),horizon=document.getElementById('imuHorizon').getBoundingClientRect(),svg=document.querySelector('#imuHorizon svg').getBoundingClientRect(),panel=document.getElementById('imuPanel').getBoundingClientRect();return {values:{left:values.left,right:values.right,top:values.top,bottom:values.bottom},horizon:{left:horizon.left,right:horizon.right,top:horizon.top,bottom:horizon.bottom},svg:{width:svg.width,height:svg.height},panel:{left:panel.left,right:panel.right},overflow:document.documentElement.scrollWidth>innerWidth};})()");
+      const layout=await evaluate("(()=>{const values=document.querySelector('.imu-euler-values').getBoundingClientRect(),horizon=document.getElementById('imuHorizon').getBoundingClientRect(),gyro=document.getElementById('gyroX').closest('dl').getBoundingClientRect(),svg=document.querySelector('#imuHorizon svg').getBoundingClientRect(),instruments=document.querySelector('.sensor-instruments').getBoundingClientRect(),panel=document.querySelector('.telemetry-card').getBoundingClientRect();return {values:{left:values.left,right:values.right,top:values.top,bottom:values.bottom},horizon:{left:horizon.left,right:horizon.right,top:horizon.top,bottom:horizon.bottom},gyro:{left:gyro.left,right:gyro.right,top:gyro.top,bottom:gyro.bottom},svg:{width:svg.width,height:svg.height},instruments:{left:instruments.left,right:instruments.right},panel:{left:panel.left,right:panel.right},overflow:document.documentElement.scrollWidth>innerWidth};})()");
       console.log('IMU layout '+width+': '+JSON.stringify(layout));
       assert.ok(layout.values.right<=layout.horizon.left+1,'Euler readings stay on the left of the horizon at '+width);
       assert.ok(layout.horizon.top<layout.values.bottom&&layout.horizon.bottom>layout.values.top,'Euler readings and horizon share the same row at '+width);
+      assert.ok(layout.horizon.right<=layout.gyro.left+1,'Angular velocity readings stay on the right of the horizon at '+width);
+      assert.ok(layout.horizon.top<layout.gyro.bottom&&layout.horizon.bottom>layout.gyro.top,'Angular velocity readings and horizon share the same row at '+width);
       assert.ok(Math.abs(layout.svg.width-layout.svg.height)<.5,'Artificial horizon retains a circular aspect at '+width);
       assert.ok(layout.svg.width>=100,'Artificial horizon remains readable at '+width);
-      assert.ok(layout.horizon.right<=layout.panel.right+1&&layout.values.left>=layout.panel.left-1,'IMU content fits its panel at '+width);
+      assert.ok(layout.gyro.right<=layout.instruments.right+1&&layout.values.left>=layout.instruments.left-1,'All three instrument columns fit the shared instrument row at '+width);
+      assert.ok(layout.instruments.right<=layout.panel.right+1&&layout.instruments.left>=layout.panel.left-1,'IMU instruments fit the combined sensor card at '+width);
       assert.equal(layout.overflow,false,'IMU page has no horizontal overflow at '+width);
       assert.equal(await evaluate("[...document.querySelectorAll('.imu-euler-values dd')].every(row=>row.scrollWidth<=row.clientWidth&&row.lastElementChild.getBoundingClientRect().right<=row.getBoundingClientRect().right+1)"),true,'Euler numbers and degree units fit their left column at '+width);
     };
     const override=async values=>{await evaluate('window.telemetryOverrides='+JSON.stringify(values)+';feedTelemetry()');await wait(230);};
     const horizonPose=()=>evaluate("(()=>{const host=document.getElementById('imuHorizon');return {valid:host.dataset.valid,state:host.dataset.state,roll:host.querySelector('.ah-roll-disc').getAttribute('transform'),pitch:host.querySelector('.ah-pitch-disc').getAttribute('transform')};})()");
-    await assertTelemetryTab('rtk');
-    await evaluate("document.getElementById('imuTab').click()");await assertTelemetryTab('imu');await assertImuLayout(1440);await shot('desktop-imu');
+    await assertCombinedTelemetry();await assertImuLayout(1440);await shot('desktop-imu');await sensorShot('desktop-sensors');
     await override({roll:13,pitch:9,yaw:45});
     assert.deepEqual(await horizonPose(),{valid:'true',state:'live',roll:'rotate(-13 120 120)',pitch:'translate(0 -18)'},'Live horizon follows the X-forward/Y-left/Z-up roll and pitch convention');
     assert.deepEqual(await evaluate("['roll','pitch','yaw'].map(id=>document.getElementById(id).textContent)"),['13.00','9.00','45.00'],'Left column shows live roll, pitch and yaw');
@@ -157,14 +227,10 @@ async function main(){
     await override({});const beforeMissingImu=await horizonPose();
     await override({skipImu:true});await wait(1100);
     assert.deepEqual(await horizonPose(),{...beforeMissingImu,valid:'false',state:'stale'},'A missing IMU stream expires while other telemetry continues');
+    assert.notEqual(await evaluate("document.getElementById('longitude').textContent"),'--','Fresh RTK position remains available while the IMU stream is stale');
+    await assertCombinedTelemetry();
     await override({});
-    await evaluate("document.getElementById('rtkTab').click()");await assertTelemetryTab('rtk');
-    for(const [from,key,selected] of [['rtk','ArrowRight','imu'],['imu','ArrowRight','rtk'],['rtk','ArrowLeft','imu'],['imu','Home','rtk'],['rtk','End','imu']]){
-      await evaluate('document.getElementById('+JSON.stringify(from+'Tab')+').dispatchEvent(new KeyboardEvent("keydown",{key:'+JSON.stringify(key)+',bubbles:true,cancelable:true}))');
-      await assertTelemetryTab(selected);
-      assert.equal(await evaluate('document.activeElement.id'),selected+'Tab','Telemetry keyboard navigation moves focus with selection');
-    }
-    await evaluate("document.getElementById('rtkTab').click()");await assertTelemetryTab('rtk');
+    await assertCombinedTelemetry();
     const vector=kind=>"document.querySelector('.map-velocity-anchor [data-vector=\""+kind+"\"]')";
     await until(vector('target')+" && getComputedStyle("+vector('target')+").display!=='none'");
     assert.equal(await evaluate("document.querySelector('.map-velocity-vectors').getBoundingClientRect().width"),264,'Map SVG retains its own size instead of the 19px UI icon size');
@@ -219,14 +285,16 @@ async function main(){
     }
     await shot('desktop-speed');
     await mapShot('map-vectors-directions');
+    await view('analysis');
     const canvasPixel="[...document.getElementById('chart').getContext('2d').getImageData(0,0,1,1).data]";
     assert.deepEqual(await evaluate(canvasPixel),[6,21,37,255]);
     await evaluate("document.getElementById('themeToggle').click()");
     assert.equal(await evaluate("document.documentElement.dataset.theme"),'light');
     assert.deepEqual(await evaluate(canvasPixel),[255,255,255,255]);
     await shot('desktop-light');
-    await evaluate("document.getElementById('imuTab').click()");await assertImuLayout(1440);await shot('light-imu');
-    await evaluate("document.getElementById('rtkTab').click();document.getElementById('themeToggle').click()");
+    await view('overview');
+    await assertCombinedTelemetry();await assertImuLayout(1440);await shot('light-imu');await sensorShot('light-sensors');
+    await evaluate("document.getElementById('themeToggle').click()");
     await evaluate("document.getElementById('settingsToggle').click();document.getElementById('readParameters').click()");await until('!!boatMonitor.params.confirmed && !boatMonitor.params.busy');
     assert.equal(await evaluate("document.getElementById('parameterStatus').dataset.tone"),'success');
     assert.equal(await evaluate("document.getElementById('toast').parentElement.id"),'settingsDialog');
@@ -243,15 +311,16 @@ async function main(){
     await evaluate("suppressReply=false;document.querySelector('[data-slot=\"0\"][data-action=\"use\"]').click()");await until("!boatMonitor.params.busy && document.getElementById('parameterStatus').textContent.includes('写入成功')");
     await shot('desktop-settings');
     await evaluate("document.getElementById('presets').scrollIntoView({behavior:'instant',block:'center'})");await shot('desktop-presets');
-    await evaluate("document.getElementById('settingsClose').click();document.getElementById('chartModeButton').click()");
+    await evaluate("document.getElementById('settingsClose').click()");await view('analysis');await evaluate("document.getElementById('chartModeButton').click()");
     await until("document.getElementById('chartActual').textContent==='359.00°'");
     assert.equal(await evaluate("document.getElementById('chartTarget').textContent"),'1.00°');
     assert.equal(await evaluate("document.getElementById('chartError').textContent"),'2.00°');
     await shot('desktop-live');
-    await evaluate("document.getElementById('boatCanvas').scrollIntoView();document.getElementById('animationEnabled').click()");
+    await view('attitude');await evaluate("document.getElementById('boatCanvas').scrollIntoView();document.getElementById('animationEnabled').click()");
     const frozen=await evaluate('boatMonitor.viewer.phase');await wait(300);assert.equal(await evaluate('boatMonitor.viewer.phase'),frozen);
     await evaluate("document.getElementById('quality').value='low';document.getElementById('quality').dispatchEvent(new Event('change'))");await shot('desktop-attitude');
     await evaluate('stopTelemetry()');await wait(1400);
+    await view('analysis');
     for(const id of ['boatActual','roll','motor1Rpm','chartActual','chartTarget','chartError'])assert.equal(await evaluate('document.getElementById('+JSON.stringify(id)+').textContent'),'--');
     assert.equal(await evaluate("parseFloat(document.getElementById('motor1Dial').style.strokeDasharray)"),0);
     assert.equal(await evaluate("document.getElementById('mapEmpty').hidden"),true,'Expired position retains the recorded track for review');
@@ -259,6 +328,11 @@ async function main(){
     assert.equal(await evaluate("!!document.querySelector('.map-velocity-anchor')"),false,'Stale telemetry removes velocity arrows');
     for(const width of [1024,768,640,375,320]){
       await send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:true});await evaluate('window.scrollTo(0,0)');await wait(300);
+      for(const id of views){
+        await view(id);assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,'Workspace '+id+' fits '+width+'px');
+        if(width===375||width===320)await viewportShot('workspace-mobile-'+width+'-'+id);
+      }
+      await view('overview');
       assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,'Page overflow at '+width);await shot('mobile-'+width);
       await evaluate("document.getElementById('settingsToggle').click();document.querySelector('.dialog-scroll').scrollTop=0");
       assert.equal(await evaluate("document.getElementById('settingsDialog').scrollWidth<=document.getElementById('settingsDialog').clientWidth"),true);await shot('mobile-settings-'+width);
@@ -267,9 +341,10 @@ async function main(){
       await evaluate("document.getElementById('settingsClose').click();startTelemetry()");await wait(250);await shot('mobile-live-'+width);
       assert.ok(await evaluate('Number('+vector('target')+'.dataset.length)')>0,'Velocity arrows visible at '+width);
       assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,'Live page overflow at '+width);
-      await evaluate("document.getElementById('imuTab').click();document.getElementById('imuPanel').scrollIntoView({block:'center',behavior:'instant'})");
-      await assertTelemetryTab('imu');await assertImuLayout(width);
-      if(width===375||width===320)await viewportShot('mobile-imu-'+width);
+      await view('attitude');await evaluate("document.getElementById('imuPanel').scrollIntoView({block:'center',behavior:'instant'})");
+      if(width===375||width===320)assert.ok(await evaluate("(()=>{const r=document.getElementById('boatCanvas').getBoundingClientRect();return r.width/r.height>=1.5;})()"),'Mobile 3D camera keeps a landscape viewport so the full boat remains in frame at '+width);
+      await assertCombinedTelemetry();await assertImuLayout(width);
+      if(width===375||width===320){await viewportShot('mobile-imu-'+width);await sensorShot('mobile-sensors-'+width);}
       await override({roll:-179.99,pitch:-89.99,yaw:-179.99});await assertImuLayout(width);
       if(width===375||width===320){
         await viewportShot('mobile-imu-extreme-'+width);
@@ -279,13 +354,13 @@ async function main(){
         await assertImuLayout(width);await viewportShot('mobile-imu-stale-'+width);
       }
       await override({});
-      await evaluate("document.getElementById('rtkTab').click()");
       if(width===375||width===320){
         // 上面的 IMU 面板滚动可能仍让 3D 局部可见，先离屏再验证重新进入视口的恢复绘制。
-        await evaluate('window.scrollTo(0,document.documentElement.scrollHeight)');
+        await view('diagnostics');
         await until('!boatMonitor.viewer.visible');
         assert.equal(await evaluate('boatMonitor.viewer.settings.animation'),false,'Mobile viewport restores a frame while animation remains paused');
-        await evaluate("(()=>{const renderer=boatMonitor.viewer.renderer;if(!window.testAttitudeOriginalDraw)window.testAttitudeOriginalDraw=renderer.draw.bind(renderer);window.testAttitudeFrames={draws:0,colors:0,nonBlack:0};renderer.draw=(...args)=>{testAttitudeOriginalDraw(...args);const gl=renderer.gl,pixels=new Uint8Array(renderer.canvas.width*renderer.canvas.height*4),colors=new Set();gl.readPixels(0,0,renderer.canvas.width,renderer.canvas.height,gl.RGBA,gl.UNSIGNED_BYTE,pixels);let nonBlack=0;for(let i=0;i<pixels.length;i+=64){colors.add(pixels[i]+','+pixels[i+1]+','+pixels[i+2]);if(pixels[i]||pixels[i+1]||pixels[i+2])nonBlack++;}testAttitudeFrames={draws:testAttitudeFrames.draws+1,colors:colors.size,nonBlack};};document.getElementById('boatCanvas').scrollIntoView({block:'center',behavior:'instant'});})()");
+        await evaluate("(()=>{const renderer=boatMonitor.viewer.renderer;if(!window.testAttitudeOriginalDraw)window.testAttitudeOriginalDraw=renderer.draw.bind(renderer);window.testAttitudeFrames={draws:0,colors:0,nonBlack:0};renderer.draw=(...args)=>{testAttitudeOriginalDraw(...args);const gl=renderer.gl,pixels=new Uint8Array(renderer.canvas.width*renderer.canvas.height*4),colors=new Set();gl.readPixels(0,0,renderer.canvas.width,renderer.canvas.height,gl.RGBA,gl.UNSIGNED_BYTE,pixels);let nonBlack=0;for(let i=0;i<pixels.length;i+=64){colors.add(pixels[i]+','+pixels[i+1]+','+pixels[i+2]);if(pixels[i]||pixels[i+1]||pixels[i+2])nonBlack++;}testAttitudeFrames={draws:testAttitudeFrames.draws+1,colors:colors.size,nonBlack};};})()");
+        await view('attitude');await evaluate("document.getElementById('boatCanvas').scrollIntoView({block:'center',behavior:'instant'})");
         await until('boatMonitor.viewer.visible && boatMonitor.viewer.fresh && !!boatMonitor.viewer.pose && testAttitudeFrames.draws>0');
         const frame=await evaluate('testAttitudeFrames');
         assert.ok(frame.nonBlack>0&&frame.colors>10,'Visible paused 3D canvas contains rendered boat/water pixels at '+width);
@@ -295,7 +370,14 @@ async function main(){
       }
       await evaluate('stopTelemetry()');
     }
+    // 停止遥测后先刷新最后一帧；避免 200 ms 显示周期让断开前的 DOM 时间落后一帧。
+    await evaluate("window.dispatchEvent(new Event('resize'))");
+    const lastDeviceUpdate=(await deviceSummary()).datetime;
     await evaluate("document.getElementById('disconnectButton').click()");assert.equal(await evaluate('boatMonitor.link.connected'),false);
+    const disconnectedDevice=await deviceSummary();
+    assert.equal(disconnectedDevice.state,'offline');assert.equal(disconnectedDevice.connection,'未连接');assert.equal(disconnectedDevice.name,'T10 TEST');
+    assert.equal(disconnectedDevice.datetime,lastDeviceUpdate,'Disconnect retains the last receive time for reference');
+    assert.equal(disconnectedDevice.latency,'--','Disconnected devices show no current forwarding latency');
     assert.equal(await evaluate("!!document.querySelector('.map-velocity-anchor')"),false,'Disconnect clears arrows immediately');
     assert.equal(await evaluate("document.getElementById('mapEmpty').hidden"),true,'Disconnect leaves the ready map and track available');
     assert.equal(await evaluate("document.getElementById('mapFixStatus').hidden"),false,'Disconnect returns the waiting hint without covering the map');
@@ -303,16 +385,19 @@ async function main(){
     assert.equal(await evaluate("document.getElementById('imuHorizon').dataset.roll"),'--');
     await evaluate("document.getElementById('connectButton').click()");await until('boatMonitor.link.connected');await evaluate('feedTelemetry()');await wait(250);
     assert.equal(await evaluate("document.getElementById('parsedFrames').textContent"),'4','Reconnect has only one listener');assert.deepEqual(errors,[]);
-    await evaluate("document.getElementById('disconnectButton').click();document.getElementById('themeToggle').click();document.getElementById('mapVectorsToggle').click()");
+    await view('navigation');await evaluate("document.getElementById('disconnectButton').click();document.getElementById('themeToggle').click();document.getElementById('mapVectorsToggle').click()");
     await send('Page.reload');await until('!!window.boatMonitor && !!window.boatMonitor.viewer.renderer');
+    await assertView('navigation');assert.equal(await evaluate('document.getElementById("navigation").closest("[data-workspace-view]").dataset.workspaceView'),'navigation','A direct URL restores its page after reload');
+    assert.ok(await evaluate('Math.abs(scrollY)<1'),'Refreshing a direct page URL retains its header instead of jumping to the map anchor');
     assert.equal(await evaluate("document.documentElement.dataset.theme"),'light','Explicit light theme persists across reload instead of reverting to the default dark theme');
     assert.equal(await evaluate('boatMonitor.params.slots[0].values.kpX2PerMps'),91,'Presets persist across reload');
     assert.equal(await evaluate('boatMonitor.mapVectors.visible'),false,'Hidden velocity arrows persist across reload');
     await evaluate("document.getElementById('connectButton').click()");await until('boatMonitor.link.connected');await evaluate('feedTelemetry()');await wait(250);
     assert.equal(await evaluate("!!document.querySelector('.map-velocity-anchor')"),false,'Hidden arrows stay hidden when new data arrives');
     await evaluate("document.getElementById('mapVectorsToggle').click()");await until("!!document.querySelector('.map-velocity-anchor')");
+    await evaluate("location.hash='#unknown-page'");await assertView('overview');
     assert.deepEqual(errors,[]);
-    console.log('PASS: browser/WebGL, BLE split frames, parameters/Flash rejection/timeout, grouped settings, preset/theme persistence, map velocity vectors/direction/scale/reverse/overlap/zero/stale/pan/zoom/hide persistence, map use without a fix and non-blocking fix hints, primary desktop map layout, unique element IDs, RTK/IMU tabs and keyboard navigation, IMU left-readings/right-horizon layout, fresh Euler pose/axis directions/yaw independence/gyro independence/invalid-source freezing/expiry/disconnect reset, themed charts, stale values, animation freeze and mobile viewport restoration, reconnect, 320/375/640/768/1024/1440/1920px.');
+    console.log('PASS: six independent workspace pages, desktop/mobile navigation, URL/back/forward/reload/unknown route, focus and aria-current, preserved BLE/map/WebGL/parser/track instances, larger map/3D/chart views, hidden-animation stop and visible-frame recovery; BLE split frames, parameters/Flash rejection/timeout, settings/presets/themes, map vectors/track/expiry, current-device metadata, simultaneous RTK/IMU telemetry and horizon, reconnect, 320/375/640/768/1024/1440/1920px.');
     console.log('Screenshots: '+output);
   }finally{socket?.close();browser.kill();await new Promise(resolve=>server.close(resolve));}
 }
