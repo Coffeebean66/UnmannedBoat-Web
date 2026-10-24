@@ -17,7 +17,6 @@
   <script defer src="vendor/leaflet/leaflet.js"></script>
   <script defer src="utils-bundle.js"></script>
   <script defer src="parameter-data.js"></script>
-  <script defer src="transport.js"></script>
   <script defer src="account-auth.js"></script>
   <script defer src="cloud-transport.js"></script>
   <script defer src="parameter-panel.js"></script>
@@ -39,7 +38,7 @@
     <div class="toolbar">
       <div id="accountControls" class="account-controls" hidden><span id="accountName" class="account-name" hidden></span><button id="accountLoginOpen" class="ghost">账户登录</button><button id="accountLogout" class="ghost" hidden>退出</button></div>
       <span id="connectionBadge" class="badge offline">未连接</span>
-      <button id="connectButton" class="primary"><span data-icon="bluetooth"></span>选择蓝牙设备</button>
+      <button id="connectButton" class="primary" disabled><span data-icon="radio"></span>连接无人船</button>
       <button id="disconnectButton" class="ghost" disabled>断开</button>
       <button id="themeToggle" class="icon-button" aria-label="切换到浅色主题" title="切换到浅色主题"><span data-icon="sun"></span></button>
       <button id="settingsToggle" class="settings-button"><span data-icon="settings"></span>设置</button>
@@ -57,16 +56,16 @@
       <a href="#diagnostics"><span data-icon="activity"></span><span>通信诊断</span><span class="nav-index">06</span></a>
     </nav>
     <section id="deviceSummary" class="vessel-summary" aria-label="当前连接设备" data-state="offline">
-      <div class="vessel-summary-heading">当前设备<span id="sourceChip" class="chip">BLE</span></div>
+      <div class="vessel-summary-heading">当前设备<span id="sourceChip" class="chip">MQTT</span></div>
       <div class="vessel-emblem"><img src="assets/boat-preview.png" width="640" height="280" alt="双体无人船模型" decoding="async"></div>
-      <strong id="deviceName">未连接设备</strong><p id="sourceDescription">本地蓝牙 · 单船监测</p>
+      <strong id="deviceName">未选择无人船</strong><p id="sourceDescription">MQTT 云端 · 只读监测</p>
       <div class="vessel-link-state"><span id="deviceConnectionState" role="status">未连接</span><span class="vessel-link-bars" aria-hidden="true" title="连接状态指示，不代表信号强度"><i></i><i></i><i></i><i></i></span></div>
-      <dl><div><dt>有效数据帧</dt><dd id="frameCount">0</dd></div><div><dt>最近更新</dt><dd><time id="deviceLastUpdate">--</time></dd></div><div title="估计服务器收到遥测到当前浏览器接收的转发耗时，不含船端上报耗时，也不是往返延迟；蓝牙和未校时状态显示未知。"><dt>转发延迟</dt><dd id="deviceLatency">--</dd></div></dl>
+      <dl><div><dt>有效数据帧</dt><dd id="frameCount">0</dd></div><div><dt>最近更新</dt><dd><time id="deviceLastUpdate">--</time></dd></div><div title="估计服务器收到遥测到当前浏览器接收的转发耗时，不含船端上报耗时，也不是往返延迟；未校时或缺少时间戳时显示未知。"><dt>转发延迟</dt><dd id="deviceLatency">--</dd></div></dl>
     </section>
     <div class="sidebar-bottom">
-      <div id="sourceSideNote" class="side-note"><span data-icon="bluetooth"></span><div>本地蓝牙直连<p>T10 / 无人船电控</p></div></div>
+      <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarSettings" class="sidebar-setting"><span data-icon="settings"></span>参数设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.13.0</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.15.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -74,21 +73,21 @@
     <main class="page" id="mainContent">
       <section class="hero">
         <div class="hero-heading"><div class="workspace-heading"><h1 id="viewTitle" tabindex="-1">船况概览</h1><span id="viewEnglish">VESSEL OVERVIEW</span></div><p id="viewSubtitle" class="muted">关键船况、船位与实时姿态，集中掌握当前航行状态。</p></div>
-        <span id="heroSourceLabel" class="hero-label"><span data-icon="radio"></span>本地实时监测 <i>/</i> WGS84</span>
+        <span id="heroSourceLabel" class="hero-label"><span data-icon="radio"></span>MQTT 云端监测 <i>/</i> WGS84</span>
       </section>
       <div id="accountNotice" class="account-notice" hidden><span id="accountNoticeText">请登录后使用监测平台</span><div><button id="accountRetry" class="small-button" hidden>重试连接</button><button id="accountNoticeLogin" class="small-button primary">登录账户</button></div></div>
-      <section class="source-panel" aria-label="遥测数据源">
-        <label class="source-select">数据来源<select id="telemetrySource"><option value="bluetooth">本地蓝牙</option><option value="cloud">云端 MQTT</option></select></label>
-        <div id="cloudControls" class="cloud-controls" hidden>
+      <section class="source-panel" aria-label="MQTT 无人船连接">
+        <div class="cloud-source-label"><span data-icon="radio"></span>MQTT 云端</div>
+        <div id="cloudControls" class="cloud-controls">
           <label class="cloud-device-label">无人船<select id="cloudDevice" aria-label="选择云端无人船"><option value="">等待设备列表</option></select></label>
           <button id="cloudRefresh" class="small-button">刷新设备</button>
           <button id="cloudLoginOpen" class="small-button">云端登录</button>
           <button id="cloudLogout" class="small-button subtle" hidden>退出登录</button>
           <span id="cloudStatus" class="muted" role="status">正在检查服务器配置…</span>
         </div>
-        <p id="sourceHint" class="muted">蓝牙可查看遥测并调整参数；管理员可对支持云端调参的无人船远程设置参数。</p>
+        <p id="sourceHint" class="muted">管理员可对支持云端调参的无人船远程设置参数；访客可查看实时监测。</p>
       </section>
-      <p id="connectionText" class="workspace-connection" role="status">连接 T10 蓝牙，开始查看无人船实时状态。</p>
+      <p id="connectionText" class="workspace-connection" role="status">正在检查 MQTT 服务器配置…</p>
       <section id="view-overview" class="workspace-view" data-workspace-view="overview" aria-labelledby="viewTitle">
       <section class="grid metrics" aria-label="关键航行数据">
         <article class="card kpi-card speed-card">
@@ -226,25 +225,25 @@
         <article id="diagnostics" class="card diagnostics-card">
           <div class="card-title"><div class="title-with-icon"><span class="card-icon neutral" data-icon="activity"></span><h2>通信诊断</h2></div><span id="sbusStatus" class="state">遥控 --</span></div>
           <div class="diagnostics-body">
-          <div id="connectionRoute" class="connection-route"><span><i data-icon="monitor"></i>浏览器</span><b>↔</b><span><i data-icon="bluetooth"></i>T10</span><b>↔</b><span><i data-icon="boat"></i>无人船</span></div>
+          <div id="connectionRoute" class="connection-route"><span><i data-icon="boat"></i>无人船</span><b>→</b><span><i data-icon="radio"></i>MQTT Broker</span><b>→</b><span><i data-icon="monitor"></i>云端服务 / 浏览器</span></div>
           <div class="diag-grid">
             <span>解析帧<b id="parsedFrames">0</b></span><span>CRC 错误<b id="crcErrors">0</b></span>
             <span>缓存字节<b id="bufferedBytes">0</b></span><span>接收字节<b id="bytesReceived">0</b></span>
             <span>状态帧序号<b id="statusSequence">--</b></span><span>设备运行时间<b id="deviceUptime">--</b></span>
             <span>距上次收帧<b id="linkAge">--</b></span>
           </div>
-          <details class="connection-details"><summary>蓝牙特征与浏览器支持<span data-icon="chevron"></span></summary><div class="characteristic"><span>通知特征</span><b id="notifyCharacteristic">--</b><span>写入特征</span><b id="writeCharacteristic">--</b></div><p id="supportNotice" class="muted"></p></details>
+          <details class="connection-details"><summary>连接方式与访问说明<span data-icon="chevron"></span></summary><p id="supportNotice" class="muted"></p></details>
           <div class="settings-callout"><span class="card-icon teal" data-icon="settings"></span><div><strong>电控参数设置</strong><p>20 项参数 · 3 组预设 · Flash 保存</p></div><button id="settingsEntry" class="icon-button" title="进入参数设置" aria-label="进入参数设置"><span data-icon="arrow"></span></button></div>
           </div>
         </article>
       </section>
-      <footer><span>UNMANNED VESSEL MONITOR <b>/</b> 无人船监测平台</span><span>本地蓝牙 · MQTT 云端监测与调参</span></footer>
+      <footer><span>UNMANNED VESSEL MONITOR <b>/</b> 无人船监测平台</span><span>MQTT 云端监测与调参</span></footer>
     </main>
   </div>
   <dialog id="accountLoginDialog" class="account-login-dialog" aria-labelledby="accountLoginTitle">
     <form id="accountLoginForm">
       <div class="dialog-head"><div><p class="eyebrow">PLATFORM ACCOUNT</p><h2 id="accountLoginTitle">登录无人船监测平台</h2></div><button id="accountLoginClose" type="button" class="ghost" aria-label="关闭账户登录窗口">关闭</button></div>
-      <div class="account-login-body"><p class="muted">管理员可监测、通过蓝牙或云端调参和更新平台；访客可查看实时监测。密码仅用于本次登录，不保存在浏览器中。</p><label>账户<input id="accountUsername" type="text" autocomplete="username" required maxlength="64"></label><label>密码<input id="accountPassword" type="password" autocomplete="off" required maxlength="256"></label><p id="accountLoginError" class="muted" role="alert"></p></div>
+      <div class="account-login-body"><p class="muted">管理员可监测、通过 MQTT 云端调参和更新平台；访客可查看实时监测。密码仅用于本次登录，不保存在浏览器中。</p><label>账户<input id="accountUsername" type="text" autocomplete="username" required maxlength="64"></label><label>密码<input id="accountPassword" type="password" autocomplete="off" required maxlength="256"></label><p id="accountLoginError" class="muted" role="alert"></p></div>
       <div class="dialog-actions"><button id="accountLoginSubmit" class="primary" type="submit">登录</button></div>
     </form>
   </dialog>
@@ -262,12 +261,12 @@
             <label for="amapSecurityCode">安全密钥 securityJsCode<input id="amapSecurityCode" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="32" placeholder="32 位安全密钥" aria-describedby="amapCodeHint" disabled><small id="amapCodeHint">与上方 Key 属于同一个高德应用。</small></label>
           </div>
           <div class="map-settings-actions"><button id="mapSettingsRead" type="button" class="subtle" title="重新读取会替换尚未保存的输入">重新读取配置</button><button id="mapSettingsSave" type="submit" class="primary" disabled>保存地图配置</button><button id="mapSettingsReload" type="button" hidden>刷新页面应用</button></div>
-          <p id="mapSettingsRefreshNote" class="map-settings-refresh-note" hidden>刷新会中断当前页面的蓝牙或云端监测连接，并清空本次页面轨迹；刷新后请重新连接。保存本身不会断开连接。</p>
+          <p id="mapSettingsRefreshNote" class="map-settings-refresh-note" hidden>刷新会中断当前页面的云端监测连接，并清空本次页面轨迹；刷新后请重新连接。保存本身不会断开连接。</p>
         </form>
         <p id="mapSettingsStatus" class="map-settings-status" role="status" aria-live="polite" data-tone="neutral">尚未读取平台地图配置。</p>
       </section>
       <h3 class="device-settings-heading">无人船电控参数<span>读取、写入与 Flash 保存需要设备在线</span></h3>
-      <p id="cloudReadOnlyNotice" class="cloud-readonly" hidden>云端调参需要管理员账户和支持该功能的固件；操作结果以设备响应为准。</p>
+      <p id="cloudReadOnlyNotice" class="cloud-readonly">云端调参需要管理员账户和支持该功能的固件；操作结果以设备响应为准。</p>
       <div class="settings-intro"><div class="workflow"><span><b>1</b>读取当前参数</span><i>→</i><span><b>2</b>调整并写入</span><i>→</i><span><b>3</b>调好后存入 Flash</span></div><p>方向修改和 Flash 保存需 CH6 低档、两路停稳且反馈正常满 1 秒。</p></div>
       <p id="parameterStatus" role="status" data-tone="neutral">尚未读取设备参数</p>
       <div id="parameterFields" class="parameter-fields"></div>

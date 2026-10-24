@@ -169,7 +169,7 @@ test('票据被服务器拒绝需要重新登录，运行时管理员退出不�
   assert.equal(h.controller.pending, null); assert.equal(h.controller.state.authenticated, false); assert.match(h.controller.state.notice, /重新登录/);
 });
 
-test('管理员退出只删除独立更新session，不清主题/蓝牙/参数数据', async () => {
+test('管理员退出只删除独立更新session，不清主题/参数草稿', async () => {
   const h = setup(); await h.login(); h.storage.set('boat_web_theme_v1', 'light');
   await h.controller.logout(); assert.equal(h.controller.state.authenticated, false);
   assert.equal(h.storage.get('boat_web_theme_v1'), 'light');

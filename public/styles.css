@@ -266,9 +266,6 @@ svg{display:block;width:19px;height:19px;flex:none}
 .connection-details summary::-webkit-details-marker{display:none}
 .connection-details summary svg{width:15px;height:15px}
 .connection-details[open] summary svg{transform:rotate(180deg)}
-.characteristic{display:grid;gap:5px;margin-top:12px;font-size:10px}
-.characteristic span{color:var(--muted)}
-.characteristic b{font-size:10px;font-weight:500;overflow-wrap:anywhere}
 .connection-details .muted{font-size:10px;margin:12px 0}
 .settings-callout{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:9px;padding:14px;margin-top:auto;background:var(--soft)}
 .settings-callout strong{font-size:12px;font-weight:550}

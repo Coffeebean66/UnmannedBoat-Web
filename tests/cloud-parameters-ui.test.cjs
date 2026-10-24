@@ -86,7 +86,7 @@ test('read/write7秒和flash22秒前端超时不重发；迟到成功被忽略�
   }
 });
 
-test('断连/遥测失效/换身份/切换数据源立即取消，迟到结果不恢复旧会话', async () => {
+test('断连/遥测失效/换身份/切换设备立即取消，迟到结果不恢复旧会话', async () => {
   for (const cancel of [h => h.cloud.disconnect(), h => h.cloud.invalidate('设备失联'), h => h.auth.change('guest'),
     h => { h.cloud.selectedId = 'other-device'; h.cloud.disconnect(); }]) {
     const h = await setup(); let release; h.block(() => new Promise(resolve => { release = resolve; }));
@@ -101,9 +101,8 @@ test('能力在点击时失效则阻止下发，界面权限变化通知不会�
   assert.equal(h.pendingPost().length, 0); assert.ok(changes.includes(true));
 });
 
-test('命令消费单次能力后暂时只读，当前真实响应仍可完成，不能误取消或改路由generation', async () => {
-  const h = await setup(); const ble = new EventTarget(); ble.disconnect=()=>{};
-  const link = new h.context.window.BoatSourceLink(ble,h.cloud); link.select('cloud');
+test('命令消费单次能力后暂时只读，当前真实响应仍可完成，不能误取消或改连接generation', async () => {
+  const h = await setup(), link = h.cloud;
   let release; h.block(() => new Promise(resolve => { release=resolve; }));
   const generation=link.generation,request=link.request('read'); await flush();
   h.cap(false); await h.cloud.refreshDevices();

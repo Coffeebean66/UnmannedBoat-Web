@@ -3,8 +3,7 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
 const {spawn}=require('node:child_process');
-const {createServer}=require('../server');
-const {mock}=require('./browser-smoke.cjs');
+const {createFixtureServer,fixtureScript:mock}=require('./mqtt-browser-fixture.cjs');
 const output=path.resolve(__dirname,'../.test-output');
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const testKey='a'.repeat(32),testCode='b'.repeat(32);
@@ -157,14 +156,14 @@ async function browserSession(server,mode,run){
 
 async function withServer(env,mode,run,options={}){
   const base=fs.mkdtempSync(path.join(output,'map-settings-browser-'));
-  const server=createServer({...options,env:{...process.env,BOAT_CLOUD_ENABLED:'0',BOAT_ACCOUNTS_ENABLED:'0',BOAT_AMAP_KEY:'',BOAT_AMAP_SECURITY_CODE:'',...env},mapOptions:{file:path.join(base,'map-settings.json'),...options.mapOptions}});
+  const server=createFixtureServer({...options,env:{BOAT_ACCOUNTS_ENABLED:'0',...env},mapOptions:{file:path.join(base,'map-settings.json'),...options.mapOptions}});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   try{await browserSession(server,mode,run);}finally{await new Promise(resolve=>server.close(resolve));}
 }
 
 async function startTelemetry({evaluate,until}){
-  await evaluate("document.getElementById('connectButton').click()");await until('boatMonitor.link.connected');
-  await evaluate("startTelemetry();document.getElementById('trackStart').click()");
+  await evaluate('connectTestBoat()');await until('boatMonitor.link.connected');
+  await evaluate("document.getElementById('trackStart').click()");
   await until("document.getElementById('roll').textContent==='6.00' && document.getElementById('boatActual').textContent==='1.552'");
 }
 

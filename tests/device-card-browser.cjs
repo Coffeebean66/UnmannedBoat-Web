@@ -56,14 +56,14 @@ async function main(){
     const choose=async id=>evaluate('document.getElementById("cloudDevice").value='+JSON.stringify(id)+';document.getElementById("cloudDevice").dispatchEvent(new Event("change"))');
     const connect=async()=>{
       await evaluate('document.getElementById("connectButton").click()');
-      await until('boatMonitor.link.cloud.wanted&&!!boatMonitor.link.cloud.stream');
+      await until('boatMonitor.link.wanted&&!!boatMonitor.link.stream');
     };
     const disconnect=async()=>{
       fixture.feed=false;await wait(150);
       // frame 回调与 200 ms 周期渲染分离；先刷新再取快照，避免比较到旧的时间文本。
       await evaluate('window.dispatchEvent(new Event("resize"))');const before=await card();
       await evaluate('document.getElementById("disconnectButton").click()');
-      await until('!boatMonitor.link.cloud.wanted&&!boatMonitor.link.connected');
+      await until('!boatMonitor.link.wanted&&!boatMonitor.link.connected');
       const after=await card();assert.equal(after.updated,before.updated,'A normal disconnect keeps the last valid update');
       assert.equal(after.datetime,before.datetime);assert.equal(after.latency,'--');assert.equal(after.status,'未连接');
       return after;
@@ -76,7 +76,6 @@ async function main(){
     await until('!!window.boatMonitor&&window.BoatAuth.ready&&document.getElementById("accountLoginDialog").open');
     await evaluate('document.getElementById("accountUsername").value="operator";document.getElementById("accountPassword").value="device-card-admin-test-only";document.getElementById("accountLoginForm").requestSubmit()');
     await until('!!BoatAuth.user&&!BoatAuth.busy');
-    await evaluate('document.getElementById("telemetrySource").value="cloud";document.getElementById("telemetrySource").dispatchEvent(new Event("change"))');
     await until('document.getElementById("cloudDevice").value==="boat-cloud-test"&&!document.getElementById("connectButton").disabled');
     let current=await card();assert.equal(current.name,ids[0]);assert.equal(current.chip,'MQTT');assert.equal(current.count,'0');assert.equal(current.updated,'--');assert.equal(current.latency,'--');
     await connect();assert.equal((await card()).status,'等待遥测');
@@ -98,10 +97,10 @@ async function main(){
     assert.equal(await evaluate('document.getElementById("deviceSummary").scrollWidth<=document.getElementById("deviceSummary").clientWidth'),true,'A 64-character MQTT ID stays within the card');
     assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true);await shot('device-card-cloud-long-id');
     await evaluate('document.getElementById("themeToggle").click()');await until('document.documentElement.dataset.theme==="light"');await shot('device-card-cloud-light');
-    await evaluate('document.getElementById("telemetrySource").value="bluetooth";document.getElementById("telemetrySource").dispatchEvent(new Event("change"))');
-    current=await card();assert.equal(current.chip,'BLE');assert.equal(current.name,'未连接设备');assert.equal(current.count,'0');assert.equal(current.updated,'--');assert.equal(current.latency,'--');
+    current=await disconnect();assert.equal(current.chip,'MQTT');assert.equal(current.name,ids[2]);assert.notEqual(current.count,'0');assert.notEqual(current.updated,'--');assert.equal(current.latency,'--');
+    await connect();fixture.feed=true;await until('boatMonitor.link.connected');current=await card();assert.equal(current.chip,'MQTT');assert.equal(current.name,ids[2]);
     assert.deepEqual(errors,[]);
-    console.log('Chrome device card passed: local login/API/SSE; MQTT IDs including 64 characters; count, recent update, forwarding estimate; disconnect retains last update; switch clears old vessel data; dark/light screenshots; no production requests.');
+    console.log('Chrome device card passed: local login/API/SSE; MQTT IDs including 64 characters; count, recent update, forwarding estimate; disconnect retains last update; switch clears old vessel data; MQTT reconnect; dark/light screenshots; no production requests.');
   }finally{
     clearInterval(feed);socket?.close();browser.kill();server.closeAllConnections?.();await new Promise(resolve=>server.close(resolve));
   }

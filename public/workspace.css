@@ -52,8 +52,8 @@ html { scroll-behavior:auto; }
 .diagnostics-workspace .diag-grid b { font-size:20px; }
 .diagnostics-workspace .settings-callout { grid-column:1/-1; grid-row:auto; }
 .diagnostics-workspace .connection-details { grid-row:auto; }
-.diagnostics-workspace .connection-details summary,.diagnostics-workspace .characteristic,.diagnostics-workspace .connection-details .muted { font-size:11px; }
-.diagnostics-workspace .connection-route { min-height:110px; }
+.diagnostics-workspace .connection-details summary,.diagnostics-workspace .connection-details .muted { font-size:11px; }
+.diagnostics-workspace .connection-route { min-height:110px; flex-wrap:wrap; }
 @media(max-width:1100px) {
   .attitude-workspace { grid-template-columns:minmax(0,1.15fr) minmax(300px,1fr); gap:12px; }
   .overview-shortcuts { gap:10px; }.overview-shortcuts>a { gap:9px; padding:12px; }

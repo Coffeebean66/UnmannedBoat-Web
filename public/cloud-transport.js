@@ -24,6 +24,7 @@
       });
     }
     emit(name,detail){this.dispatchEvent(new CustomEvent(name,{detail}));}
+    get source(){return 'cloud';}
     get connected(){return this.live;}
     get parametersReady(){
       const device=this.devices.find(device=>device.id===this.selectedId);
@@ -237,45 +238,5 @@
       this.parser=new UART4StreamParser();this.lastPayloadAt=null;this.openStream(this.generation);
     }
   }
-  class BoatSourceLink extends EventTarget {
-    constructor(bluetooth=new BoatLink(),cloud=new CloudBoatLink()) {
-      super();this.bluetooth=bluetooth;this.cloud=cloud;this.source='bluetooth';this.generation=0;
-      this.accountGeneration=window.BoatAuth?.generation;
-      window.BoatAuth?.addEventListener('change',()=>{
-        const auth=window.BoatAuth;if(this.accountGeneration===auth.generation)return;
-        this.accountGeneration=auth.generation;++this.generation;
-        if(this.bluetooth.pending&&this.bluetooth.finish)this.bluetooth.finish(Error('账户身份已变化，参数操作已取消'));
-        if(!auth.canMonitor){this.bluetooth.disconnect();this.cloud.disconnect();}
-        this.dispatchEvent(new CustomEvent('permissionchange',{detail:{readOnly:this.readOnly}}));
-      });
-      cloud.addEventListener('permissionchange',({detail})=>{
-        if(this.source!=='cloud')return;
-        if(!detail.capabilityOnly)++this.generation;
-        this.dispatchEvent(new CustomEvent('permissionchange',{detail}));
-      });
-      for(const [source,link] of [['bluetooth',bluetooth],['cloud',cloud]])for(const event of ['frame','connection'])link.addEventListener(event,({detail})=>{
-        if(this.source!==source)return;
-        this.dispatchEvent(new CustomEvent(event,{detail:event==='connection'?{...detail,source,readOnly:this.readOnly}:detail}));
-      });
-    }
-    get active(){return this.source==='cloud'?this.cloud:this.bluetooth;}
-    get connected(){return this.active.connected;}
-    get busy(){return this.active.busy;}
-    get parser(){return this.active.parser;}
-    get readOnly(){return (this.source==='cloud'&&this.cloud.readOnly)||!!(window.BoatAuth&&!window.BoatAuth.canManage);}
-    get parameterReadOnlyReason(){return this.source==='cloud'?this.cloud.parameterReadOnlyReason:'访客账户仅可监测，设备调参需要管理员权限';}
-    select(source) {
-      if(!['bluetooth','cloud'].includes(source)||source===this.source)return;
-      const previous=this.active;this.source=source;++this.generation;previous.disconnect();
-      this.dispatchEvent(new CustomEvent('connection',{detail:{connected:false,source,readOnly:this.readOnly,message:source==='cloud'?'请选择云端无人船':'请选择蓝牙设备'}}));
-    }
-    connect(id){window.BoatAuth?.assertMonitor();return this.active.connect(id);}
-    disconnect(){++this.generation;this.active.disconnect();}
-    async request(kind,values){
-      if(window.BoatAuth)await window.BoatAuth.verifyManage();
-      if(this.readOnly)throw Error(this.parameterReadOnlyReason||'当前连接仅支持只读监测');
-      return this.active.request(kind,values);
-    }
-  }
-  window.CloudBoatLink=CloudBoatLink;window.BoatSourceLink=BoatSourceLink;
+  window.CloudBoatLink=CloudBoatLink;
 })();

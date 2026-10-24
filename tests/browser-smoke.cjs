@@ -1,44 +1,11 @@
-/* 真浏览器集成检查：真实页面/WebGL/协议，蓝牙由测试外设替代，不连接电机。 */
+/* 真浏览器集成检查：真实页面/WebGL/协议与本地 MQTT HTTP/SSE，不连接电机。 */
 const fs=require('node:fs'),path=require('node:path'),{spawn}=require('node:child_process'),assert=require('node:assert/strict');
-const {createServer}=require('../server');
+const {createFixtureServer,fixtureScript:mock}=require('./mqtt-browser-fixture.cjs');
 const output=path.resolve(__dirname,'../.test-output');fs.mkdirSync(output,{recursive:true});
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-const mock='('+function(){
-  const tx=new EventTarget();tx.uuid='49535343-1e4d-4bd9-ba61-23c647249616';tx.properties={notify:true};tx.startNotifications=async()=>tx;
-  window.testWrites=[];window.testConnections=0;window.replyStatus=0;window.suppressReply=false;let buffer=[];
-  function send(bytes){for(let offset=0;offset<bytes.length;offset+=17){const b=bytes.slice(offset,offset+17);tx.value=new DataView(b.buffer);tx.dispatchEvent(new Event('characteristicvaluechanged'));}}
-  const rx={uuid:'49535343-8841-43f4-a8d4-ecbe34729bb3',properties:{write:true},async writeValueWithResponse(bytes){
-    buffer.push(...bytes);window.testWrites.push([...bytes]);if(buffer.length<56)return;
-    const request=new Uint8Array(buffer.splice(0,56)),v=new DataView(request.buffer);window.lastCommand=request[3];
-    if(window.suppressReply)return;
-    if(request[3]===0x10){
-      const values={...BoatParameters.tuning,turnAtFullSpeedPercent:50,motor1Reversed:0,motor2Reversed:1,headingKpX100:200,headingKiX100:0,headingKdX100:0,headingIntegralLimitX2:30,headingOutputLimitX2:60,headingDeadbandCdeg:200,headingReversed:0};
-      Object.keys(BoatParameters.ranges).forEach((k,i)=>v.setUint16(14+i*2,values[k],true));
-    }
-    request[3]=0x90;request[5]=window.replyStatus;v.setUint16(54,BoatModules.uart4Protocol.crc16CcittFalse(request,2,52),true);setTimeout(()=>send(request),10);
-  }};
-  const service={uuid:'49535343-fe7d-4ae5-8fa9-9fafd205e455',getCharacteristics:async()=>[tx,rx]};
-  const device=new EventTarget();device.id='browser-test';device.name='T10 TEST';
-  device.gatt={connected:false,async connect(){window.testConnections++;this.connected=true;return {getPrimaryServices:async()=>[service]};},disconnect(){this.connected=false;device.dispatchEvent(new Event('gattserverdisconnected'));}};
-  Object.defineProperty(navigator,'bluetooth',{configurable:true,value:{requestDevice:async()=>device}});
-  function frame(type,size,version,flags,seq){
-    const b=new Uint8Array(size);b.set([0xa5,0x5a,version,type,size,flags]);const v=new DataView(b.buffer);v.setUint32(6,seq,true);v.setUint32(10,seq*100,true);
-    return {b,v,finish(){v.setUint16(size-2,BoatModules.uart4Protocol.crc16CcittFalse(b,2,size-4),true);send(b);}};
-  }
-  window.telemetryOverrides={};
-  let seq=0;window.feedTelemetry=()=>{
-    const o=window.telemetryOverrides;
-    seq++;let f=frame(1,64,1,0xf3,seq);
-    for(const base of [14,38]){f.b[base]=7;f.b[base+1]=32;f.v.setUint16(base+2,2450,true);f.v.setUint16(base+4,1230,true);f.v.setUint32(base+12,1500,true);f.v.setUint32(base+8,10500,true);f.v.setInt16(base+18,120,true);f.v.setUint16(base+20,10,true);}f.finish();
-    f=frame(2,40,2,3,seq);f.v.setInt16(14,Math.round((o.x??1.5)*1000),true);f.v.setInt16(16,Math.round((o.y??.4)*1000),true);f.v.setUint16(20,20,true);f.v.setInt32(26,311234567+seq*160,true);f.v.setInt32(30,1217654321,true);f.v.setUint16(34,Math.round((o.rtkHeading??359)*100),true);f.b[36]=o.rtkFlags??15;if(!o.skipVelocity)f.finish();
-    f=frame(3,36,2,47,seq);f.v.setInt16(14,Math.round((o.target??1.8)*1000),true);f.v.setUint16(16,1552,true);f.v.setInt16(18,120,true);f.v.setUint16(20,20,true);f.v.setInt16(22,2000,true);f.v.setUint16(26,Math.round((o.targetHeading??1)*100),true);f.v.setUint16(28,Math.round((o.actualHeading??359)*100),true);f.v.setInt16(30,200,true);f.b[32]=o.mode??2;f.b[33]=o.headingFlags??3;if(!o.skipBoat)f.finish();
-    f=frame(4,36,1,3,seq);f.v.setInt16(14,120,true);f.v.setInt16(20,Math.round((o.roll??6)*100),true);f.v.setInt16(22,Math.round((o.pitch??-4)*100),true);f.v.setInt16(24,Math.round((o.yaw??32)*100),true);f.v.setUint16(26,o.imuAge??20,true);f.b[32]=o.imuFlags??127;if(!o.skipImu)f.finish();
-  };
-  window.startTelemetry=()=>{feedTelemetry();window.telemetryTimer=setInterval(feedTelemetry,100);};window.stopTelemetry=()=>clearInterval(telemetryTimer);
-}.toString()+')();';
 async function main(){
   // 默认烟测固定验证无 Key 回退，避免开发机环境变量意外触发真实 SDK 请求。
-  const server=createServer({env:{...process.env,BOAT_CLOUD_ENABLED:'0',BOAT_AMAP_KEY:'',BOAT_AMAP_SECURITY_CODE:''}});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const server=createFixtureServer();await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const profile=fs.mkdtempSync(path.join(output,'chrome-')),errors=[];
   const browser=spawn(process.env.CHROME_PATH||'C:/Program Files/Google/Chrome/Application/chrome.exe',['--headless','--no-first-run','--no-default-browser-check','--use-angle=swiftshader','--enable-unsafe-swiftshader','--remote-debugging-port=0','--user-data-dir='+profile],{windowsHide:true,stdio:'ignore'});
   browser.on('error',error=>errors.push(error.message));let socket;
@@ -96,13 +63,17 @@ async function main(){
     await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
     await send('Page.addScriptToEvaluateOnNewDocument',{source:mock});await send('Page.navigate',{url:'http://127.0.0.1:'+server.address().port});
     await until('!!window.boatMonitor && !!window.boatMonitor.viewer.renderer && !!window.BoatWorkspace');assert.deepEqual(errors,[]);
+    await evaluate('ensureTestLogin()');
     await assertView('overview');
     await view('navigation');assert.equal(await evaluate('document.activeElement.id'),'viewTitle','Page navigation moves keyboard focus to the page heading');
     await view('attitude');await evaluate('history.back()');await assertView('navigation');await evaluate('history.forward()');await assertView('attitude');
     await view('overview');
     await until("boatMonitor.map?.ready && boatMonitor.map.provider==='osm'");
     await until("(()=>{const image=document.querySelector('#deviceSummary img');return image.complete&&image.naturalWidth>0;})()");
-    assert.deepEqual(await deviceSummary(),{state:'offline',name:'未连接设备',source:'BLE',connection:'未连接',frames:'0',updated:'--',datetime:null,latency:'--'},'Initial device summary shows an unconnected BLE device with no synthetic data');
+    assert.deepEqual(await deviceSummary(),{state:'offline',name:'boat-mqtt-test',source:'MQTT',connection:'未连接',frames:'0',updated:'--',datetime:null,latency:'--'},'The selected MQTT device has no synthetic telemetry before connection');
+    assert.equal(await evaluate('navigator.bluetooth'),undefined,'The platform works without the Web Bluetooth API');
+    assert.equal(await evaluate("!!document.querySelector('#telemetrySource,#notifyCharacteristic,#writeCharacteristic')"),false,'Bluetooth source and UUID controls are absent');
+    assert.equal(await evaluate("performance.getEntriesByType('resource').some(entry=>/\\/transport\\.js(?:$|\\?)/.test(entry.name))"),false,'No Bluetooth transport resource loads');
     assert.match(await evaluate("document.getElementById('mapStatus').textContent"),/未配置/,'Missing AMap credentials are explained');
     assert.match(await evaluate("document.getElementById('mapStatus').textContent"),/OpenStreetMap|OSM/,'Missing AMap credentials retain the existing map');
     assert.deepEqual(await evaluate("(()=>{const h=document.getElementById('imuHorizon');return {valid:h.dataset.valid,state:h.dataset.state,roll:h.dataset.roll,pitch:h.dataset.pitch};})()"),
@@ -140,15 +111,15 @@ async function main(){
     assert.equal(await evaluate("new Set([...document.querySelectorAll('#parameterFields [data-key]')].map(input=>input.dataset.key)).size"),20);
     assert.equal(await evaluate("document.querySelectorAll('#presets .preset.empty').length"),3);
     await shot('desktop-empty');
-    await evaluate("document.getElementById('connectButton').click()");await until('boatMonitor.link.connected');
-    assert.equal((await deviceSummary()).name,'T10 TEST','The BLE device name is used instead of a hardcoded boat name');
-    assert.equal((await deviceSummary()).source,'BLE');
+    await evaluate('connectTestBoat()');await until('boatMonitor.link.connected');
+    assert.equal((await deviceSummary()).name,'boat-mqtt-test','The MQTT device ID is used as the boat name');
+    assert.equal((await deviceSummary()).source,'MQTT');
     assert.equal((await deviceSummary()).state,'online');
     await evaluate("window.testLatestFrames={};boatMonitor.link.addEventListener('frame',({detail})=>{if(detail.boat)testLatestFrames.boat=detail;if(detail.velocity)testLatestFrames.velocity=detail;});startTelemetry();document.getElementById('trackStart').click()");await wait(1200);
-    assert.equal(await evaluate("Number(document.getElementById('frameCount').textContent.replaceAll(',',''))===Number(document.getElementById('parsedFrames').textContent)&&Number(document.getElementById('parsedFrames').textContent)>0"),true,'Device summary counts only valid parsed frames');
+    await until("Number(document.getElementById('frameCount').textContent.replaceAll(',',''))===Number(document.getElementById('parsedFrames').textContent)&&Number(document.getElementById('parsedFrames').textContent)>0");
     const liveDevice=await deviceSummary();
     assert.equal(liveDevice.connection,'已连接');assert.notEqual(liveDevice.updated,'--');assert.ok(Number.isFinite(Date.parse(liveDevice.datetime)),'A live device records a machine-readable receive time');
-    assert.equal(liveDevice.latency,'--','BLE does not invent an end-to-end or forwarding latency');
+    assert.match(liveDevice.latency,/^\d+ ms$/,'MQTT reports its server forwarding delay');
     await assertDeviceCardLayout(1440);await deviceShot('device-card-connected-1440');await shot('desktop-device-connected-1440');
     await send('Emulation.setDeviceMetricsOverride',{width:1920,height:1080,deviceScaleFactor:1,mobile:false});await wait(300);
     await assertDeviceCardLayout(1920);await deviceShot('device-card-connected-1920');await shot('desktop-device-connected-1920');
@@ -157,7 +128,7 @@ async function main(){
     const overviewMapWidth=await evaluate("document.getElementById('map').clientWidth");
     for(const id of views){
       await view(id);
-      assert.equal(await evaluate('boatMonitor.link.connected&&testConnections===workspaceReferences.connectionCount'),true,'Page changes preserve the existing BLE connection');
+      assert.equal(await evaluate('boatMonitor.link.connected&&testConnections===workspaceReferences.connectionCount'),true,'Page changes preserve the existing MQTT SSE connection');
       assert.equal(await evaluate('boatMonitor.map===workspaceReferences.map&&boatMonitor.viewer===workspaceReferences.viewer&&boatMonitor.link.parser===workspaceReferences.parser&&boatMonitor.horizon===workspaceReferences.horizon&&boatMonitor.track===workspaceReferences.track&&document.getElementById("boatCanvas")===workspaceReferences.canvas'),true,'Map, 3D canvas, parser, horizon and track are reused across pages');
       assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,'Desktop page fits: '+id);
       if(id==='navigation')assert.ok(await evaluate("document.getElementById('map').clientWidth")>overviewMapWidth*1.25,'Dedicated navigation gives the map more room');
@@ -307,8 +278,9 @@ async function main(){
     assert.equal(await evaluate("document.getElementById('parameterStatus').dataset.tone"),'warning');
     await evaluate("replyStatus=0;document.getElementById('saveFlash').click()");await until("document.getElementById('parameterStatus').textContent.includes('下次上电')");
     await evaluate("suppressReply=true;document.getElementById('readParameters').click()");await until("document.getElementById('parameterStatus').textContent.includes('超时')");
-    assert.equal(await evaluate("document.getElementById('parameterStatus').dataset.tone"),'danger');
-    await evaluate("suppressReply=false;document.querySelector('[data-slot=\"0\"][data-action=\"use\"]').click()");await until("!boatMonitor.params.busy && document.getElementById('parameterStatus').textContent.includes('写入成功')");
+    assert.equal(await evaluate("document.getElementById('parameterStatus').dataset.tone"),'warning');
+    await evaluate("suppressReply=false;document.getElementById('readParameters').click()");await until("!boatMonitor.params.busy && document.getElementById('parameterStatus').textContent.includes('读取成功')");
+    await evaluate("document.querySelector('[data-slot=\"0\"][data-action=\"use\"]').click()");await until("!boatMonitor.params.busy && document.getElementById('parameterStatus').textContent.includes('写入成功')");
     await shot('desktop-settings');
     await evaluate("document.getElementById('presets').scrollIntoView({behavior:'instant',block:'center'})");await shot('desktop-presets');
     await evaluate("document.getElementById('settingsClose').click()");await view('analysis');await evaluate("document.getElementById('chartModeButton').click()");
@@ -349,7 +321,7 @@ async function main(){
       if(width===375||width===320){
         await viewportShot('mobile-imu-extreme-'+width);
         await override({skipImu:true});
-        await until("document.querySelector('#imuHorizon .ah-status').textContent.includes('转发链路超时')");
+        await until("document.querySelector('#imuHorizon .ah-status').textContent.includes('过期')");
         assert.equal(await evaluate("(()=>{const status=document.querySelector('#imuHorizon .ah-status');return status.scrollWidth<=status.clientWidth;})()"),true,'Long stale IMU status wraps without clipping at '+width);
         await assertImuLayout(width);await viewportShot('mobile-imu-stale-'+width);
       }
@@ -375,7 +347,7 @@ async function main(){
     const lastDeviceUpdate=(await deviceSummary()).datetime;
     await evaluate("document.getElementById('disconnectButton').click()");assert.equal(await evaluate('boatMonitor.link.connected'),false);
     const disconnectedDevice=await deviceSummary();
-    assert.equal(disconnectedDevice.state,'offline');assert.equal(disconnectedDevice.connection,'未连接');assert.equal(disconnectedDevice.name,'T10 TEST');
+    assert.equal(disconnectedDevice.state,'offline');assert.equal(disconnectedDevice.connection,'未连接');assert.equal(disconnectedDevice.name,'boat-mqtt-test');
     assert.equal(disconnectedDevice.datetime,lastDeviceUpdate,'Disconnect retains the last receive time for reference');
     assert.equal(disconnectedDevice.latency,'--','Disconnected devices show no current forwarding latency');
     assert.equal(await evaluate("!!document.querySelector('.map-velocity-anchor')"),false,'Disconnect clears arrows immediately');
@@ -383,8 +355,10 @@ async function main(){
     assert.equal(await evaluate("document.getElementById('mapFixStatus').hidden"),false,'Disconnect returns the waiting hint without covering the map');
     assert.deepEqual(await horizonPose(),{valid:'false',state:'waiting',roll:'rotate(0 120 120)',pitch:'translate(0 0)'},'Disconnect clears the old horizon pose and returns to an invalid neutral view');
     assert.equal(await evaluate("document.getElementById('imuHorizon').dataset.roll"),'--');
-    await evaluate("document.getElementById('connectButton').click()");await until('boatMonitor.link.connected');await evaluate('feedTelemetry()');await wait(250);
-    assert.equal(await evaluate("document.getElementById('parsedFrames').textContent"),'4','Reconnect has only one listener');assert.deepEqual(errors,[]);
+    await evaluate('connectTestBoat()');await evaluate('stopTelemetry()');await wait(150);
+    const beforeReconnectFeed=await evaluate('boatMonitor.link.parser.getStats().framesReceived');
+    await evaluate('feedTelemetry()');await wait(250);
+    assert.equal(await evaluate('boatMonitor.link.parser.getStats().framesReceived'),beforeReconnectFeed+4,'One MQTT packet parses exactly four frames after reconnect');assert.deepEqual(errors,[]);
     await view('navigation');await evaluate("document.getElementById('disconnectButton').click();document.getElementById('themeToggle').click();document.getElementById('mapVectorsToggle').click()");
     await send('Page.reload');await until('!!window.boatMonitor && !!window.boatMonitor.viewer.renderer');
     await assertView('navigation');assert.equal(await evaluate('document.getElementById("navigation").closest("[data-workspace-view]").dataset.workspaceView'),'navigation','A direct URL restores its page after reload');
@@ -392,15 +366,15 @@ async function main(){
     assert.equal(await evaluate("document.documentElement.dataset.theme"),'light','Explicit light theme persists across reload instead of reverting to the default dark theme');
     assert.equal(await evaluate('boatMonitor.params.slots[0].values.kpX2PerMps'),91,'Presets persist across reload');
     assert.equal(await evaluate('boatMonitor.mapVectors.visible'),false,'Hidden velocity arrows persist across reload');
-    await evaluate("document.getElementById('connectButton').click()");await until('boatMonitor.link.connected');await evaluate('feedTelemetry()');await wait(250);
+    await evaluate('connectTestBoat()');await wait(250);
     assert.equal(await evaluate("!!document.querySelector('.map-velocity-anchor')"),false,'Hidden arrows stay hidden when new data arrives');
     await evaluate("document.getElementById('mapVectorsToggle').click()");await until("!!document.querySelector('.map-velocity-anchor')");
     await evaluate("location.hash='#unknown-page'");await assertView('overview');
     assert.deepEqual(errors,[]);
-    console.log('PASS: six independent workspace pages, desktop/mobile navigation, URL/back/forward/reload/unknown route, focus and aria-current, preserved BLE/map/WebGL/parser/track instances, larger map/3D/chart views, hidden-animation stop and visible-frame recovery; BLE split frames, parameters/Flash rejection/timeout, settings/presets/themes, map vectors/track/expiry, current-device metadata, simultaneous RTK/IMU telemetry and horizon, reconnect, 320/375/640/768/1024/1440/1920px.');
+    console.log('PASS: six independent workspace pages, desktop/mobile navigation, URL/back/forward/reload/unknown route, focus and aria-current, preserved MQTT/map/WebGL/parser/track instances, larger map/3D/chart views, hidden-animation stop and visible-frame recovery; real local HTTP/SSE packets without Web Bluetooth, parameters/Flash rejection/timeout, settings/presets/themes, map vectors/track/expiry, current-device metadata, simultaneous RTK/IMU telemetry and horizon, reconnect, 320/375/640/768/1024/1440/1920px.');
     console.log('Screenshots: '+output);
   }finally{socket?.close();browser.kill();await new Promise(resolve=>server.close(resolve));}
 }
 if(require.main===module)main().catch(error=>{console.error(error);process.exitCode=1;});
-// 地图供应商集成测试复用同一份 BLE 字节流，避免两套测试协议发生偏差。
+// 地图供应商集成测试复用同一份 MQTT 浏览器测试控制器。
 module.exports={mock};

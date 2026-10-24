@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   const M=BoatModules, $=id=>document.getElementById(id);
-  const link=new BoatSourceLink(),cloud=link.cloud;
+  const link=new CloudBoatLink(),cloud=link;
   let toastTimer;
   function toast(message){$('toast').textContent=message;$('toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').classList.remove('show'),4500);}
   const params=new ParameterPanel(link,toast), viewer=new AttitudeView($('boatCanvas'));
@@ -10,7 +10,7 @@
   const mapSettings=new BoatMapSettingsPanel();
   const wgs=(latitude,longitude)=>Number.isFinite(latitude)&&Number.isFinite(longitude)&&Math.abs(latitude)<=90&&Math.abs(longitude)<=180?{latitude,longitude}:null;
   const track=new M.boatTrack.BoatTrack(wgs);
-  const state={latest:{},history:[],chartMode:'speed',lastReceived:null,lastUpdateAt:null,forwardDelayMs:null,deviceId:null,deviceName:null,source:'bluetooth'};
+  const state={latest:{},history:[],chartMode:'speed',lastReceived:null,lastUpdateAt:null,forwardDelayMs:null,deviceId:null};
   let map,marker,mapVectors,trackRevision=-1,lastLocation,hadFix=false,viewResizeFrame;
   let chartPalette;
   const set=(id,value)=>{const text=value==null?'--':String(value);if($(id).textContent!==text)$(id).textContent=text;};
@@ -144,8 +144,7 @@
     button.setAttribute('aria-busy',String(!!map?.switching));
     set('mapProviderToggle',map?.switching?'正在切换…':nextOsm?'切换至 OSM':'切换至高德');
     button.title=nextOsm?'切换为 OpenStreetMap，保留轨迹和船位':'切换为高德地图；需管理员先配置 Key 与安全密钥';
-    const source=link.source==='cloud'?'云端实时监测':'本地实时监测';
-    set('heroSourceLabel',source+' / '+(amap?'高德地图':map?.provider==='osm'?'OpenStreetMap':'地图加载中'));
+    set('heroSourceLabel','MQTT 云端监测 / '+(amap?'高德地图':map?.provider==='osm'?'OpenStreetMap':'地图加载中'));
   }
   function position(frame,at,now,preserveView=false) {
     const view=M.velocityDisplay.prepareVelocityDisplay(frame,at,now,link.connected),v=frame?.velocity;
@@ -175,23 +174,21 @@
     $('trackStart').textContent=track.active?'停止追踪':'开始追踪';
   }
   function renderDeviceSummary(stats) {
-    const remote=link.source==='cloud';
     // MQTT 接入名就是遥测主题中的设备 ID；离线时仍显示当前选中的船。
-    const selectedId=remote&&cloud.authenticated?$('cloudDevice').value||(cloud.wanted?cloud.selectedId:''):'';
-    const name=remote?selectedId||'未选择无人船':state.deviceName||'未连接设备';
-    const sameDevice=remote?!!selectedId&&state.deviceId==='cloud:'+selectedId:!!state.deviceId;
-    const waiting=!link.connected&&(remote?cloud.wanted||cloud.busy:link.busy);
+    const selectedId=cloud.authenticated?$('cloudDevice').value||(cloud.wanted?cloud.selectedId:''):'';
+    const name=selectedId||'未选择无人船';
+    const sameDevice=!!selectedId&&state.deviceId==='cloud:'+selectedId;
+    const waiting=!link.connected&&(cloud.wanted||cloud.busy);
     const status=link.connected?'online':waiting?'waiting':'offline';
     $('deviceSummary').dataset.state=status;
     set('deviceName',name);
-    $('deviceName').title=remote&&selectedId?'MQTT 设备 ID：'+selectedId:name;
+    $('deviceName').title=selectedId?'MQTT 设备 ID：'+selectedId:name;
     set('deviceConnectionState',link.connected?'已连接':waiting?'等待遥测':'未连接');
-    set('sourceChip',remote?'MQTT':'BLE');
     set('frameCount',new Intl.NumberFormat('zh-CN').format(sameDevice?stats.framesReceived:0));
     const updated=sameDevice&&Number.isFinite(state.lastUpdateAt)?new Date(state.lastUpdateAt):null;
     set('deviceLastUpdate',updated?updated.toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}):'--');
     if(updated)$('deviceLastUpdate').dateTime=updated.toISOString();else $('deviceLastUpdate').removeAttribute('datetime');
-    set('deviceLatency',remote&&link.connected&&sameDevice&&Number.isFinite(state.forwardDelayMs)?Math.round(state.forwardDelayMs)+' ms':'--');
+    set('deviceLatency',link.connected&&sameDevice&&Number.isFinite(state.forwardDelayMs)?Math.round(state.forwardDelayMs)+' ms':'--');
   }
   function render() {
     if(document.hidden)return;
@@ -227,7 +224,7 @@
     const now=performance.now(),at=Number.isFinite(frame.receivedAtMonotonic)?frame.receivedAtMonotonic:now;
     if(now-at>=1000)return;
     state.lastReceived=at;state.lastUpdateAt=Date.now();
-    state.forwardDelayMs=link.source==='cloud'&&Number.isFinite(frame.cloudForwardDelayMs)?frame.cloudForwardDelayMs:null;
+    state.forwardDelayMs=Number.isFinite(frame.cloudForwardDelayMs)?frame.cloudForwardDelayMs:null;
     if(frame.motors)state.latest.status={frame,at};
     if(frame.boat) {
       state.latest.boat={frame,at};
@@ -242,8 +239,8 @@
     }
   });
   function updateConnectionButtons() {
-    const waiting=link.source==='cloud'&&cloud.wanted;
-    $('connectButton').disabled=link.connected||link.busy||waiting||!!(window.BoatAuth&&!window.BoatAuth.canMonitor);
+    const waiting=cloud.wanted;
+    $('connectButton').disabled=link.connected||link.busy||waiting||!cloud.enabled||!cloud.authenticated||!$('cloudDevice').value||!!(window.BoatAuth&&!window.BoatAuth.canMonitor);
     $('disconnectButton').disabled=!link.connected&&!waiting&&!link.busy;
   }
   function clearLive() {
@@ -253,22 +250,20 @@
   link.addEventListener('connection',({detail:c})=>{
     $('connectionBadge').textContent=c.connected?'已连接':'未连接';
     $('connectionBadge').className='badge '+(c.connected?'online':'offline');
-    updateConnectionButtons();params.reset(link.readOnly||link.source==='cloud');clearLive();
-    if(state.source!==link.source){track.clear();state.deviceId=null;state.deviceName=null;state.lastUpdateAt=null;state.source=link.source;}
+    updateConnectionButtons();params.reset(true);clearLive();
     if(c.connected) {
       if(state.deviceId!==c.id){track.clear();state.lastUpdateAt=null;}
-      state.deviceId=c.id;state.deviceName=c.name;set('notifyCharacteristic',c.tx);set('writeCharacteristic',c.rx);
-      set('connectionText',link.source==='cloud'?'云端实时遥测 · '+c.name+(window.BoatAuth?.user?.role==='guest'?' · 访客只读监测':link.readOnly?' · 当前设备只读':' · 管理员可远程调参'):c.readOnly?'已连接 '+c.name+' · 访客只读监测':'已连接 '+c.name+'，等待 UART4 遥测；参数仅在点击时读取。');
+      state.deviceId=c.id;
+      set('connectionText','云端实时遥测 · '+c.name+(window.BoatAuth?.user?.role==='guest'?' · 访客只读监测':link.readOnly?' · 当前设备只读':' · 管理员可远程调参'));
     } else {
-      set('connectionText',c.message||'已断开');set('notifyCharacteristic','--');set('writeCharacteristic','--');
+      set('connectionText',c.message||'已断开');
     }
     render();
   });
   function on(id,fn){$(id).onclick=()=>Promise.resolve().then(fn).catch(e=>toast(e.message));}
-  // requestDevice 必须直接位于用户手势回调，避免浏览器丢失授权上下文。
   $('connectButton').onclick=async()=>{
     $('connectButton').disabled=true;
-    try{await link.connect($('cloudDevice').value);}catch(e){if(e.name!=='NotFoundError')toast(e.message);}
+    try{await link.connect($('cloudDevice').value);}catch(e){toast(e.message);}
     finally{updateConnectionButtons();}
   };
   on('disconnectButton',()=>link.disconnect());
@@ -325,37 +320,19 @@
     $('cloudLogout').hidden=accountMode||!s.requiresLogin||!s.authenticated;
     set('cloudStatus',s.message);
     renderSourceAccess();
-    if(link.source==='cloud'){
-      set('connectionText',s.message);updateConnectionButtons();
-      $('connectButton').disabled=$('connectButton').disabled||!s.enabled||!s.authenticated||!select.value;
-      renderDeviceSummary(link.parser.getStats());
-    }
+    set('connectionText',s.message);updateConnectionButtons();
+    renderDeviceSummary(link.parser.getStats());
   }
   cloud.addEventListener('cloudstate',({detail})=>renderCloud(detail));
-  cloud.addEventListener('authrequired',()=>{if(link.source==='cloud')set('cloudStatus',window.BoatAuth?.enabled===true?'请使用平台账户重新登录':'请输入访问密码登录云端');});
+  cloud.addEventListener('authrequired',()=>set('cloudStatus',window.BoatAuth?.enabled===true?'请使用平台账户重新登录':'请输入访问密码登录云端'));
   function renderSourceAccess(){
-    const remote=link.source==='cloud',guest=window.BoatAuth?.user?.role==='guest';
-    set('sourceHint',guest?'访客账户仅可查看遥测、地图和轨迹；设备调参需要管理员账户。':remote?cloud.readOnly?cloud.parameterReadOnlyReason:'云端调参已就绪：管理员可读取、写入参数，调试完成后手动保存到 Flash。':'蓝牙可查看遥测并调整参数；云端调参需管理员账户和支持该功能的固件。');
-    $('cloudReadOnlyNotice').hidden=!remote;
-    if(remote){
-      set('sourceDescription',cloud.readOnly?'云端 MQTT · 只读监测':'云端 MQTT · 可远程调参');
-      set('cloudReadOnlyNotice',cloud.readOnly?cloud.parameterReadOnlyReason+'；已保留的本地草稿仍可保存预设或导出。':'当前通过云端操作设备参数，成功提示以 STM32 响应为准。超时或断连后，写入可能已经生效，请先读取确认再重试。Flash 保存仍需满足停机保护。');
-    }
+    const guest=window.BoatAuth?.user?.role==='guest';
+    set('sourceHint',guest?'访客账户仅可查看遥测、地图和轨迹；设备调参需要管理员账户。':cloud.readOnly?cloud.parameterReadOnlyReason:'云端调参已就绪：管理员可读取、写入参数，调试完成后手动保存到 Flash。');
+    set('sourceDescription',cloud.readOnly?'MQTT 云端 · 只读监测':'MQTT 云端 · 可远程调参');
+    set('cloudReadOnlyNotice',cloud.readOnly?cloud.parameterReadOnlyReason+'；已保留的本地草稿仍可保存预设或导出。':'当前通过云端操作设备参数，成功提示以 STM32 响应为准。超时或断连后，写入可能已经生效，请先读取确认再重试。Flash 保存仍需满足停机保护。');
   }
   link.addEventListener('permissionchange',({detail})=>{detail.capabilityOnly?params.updateButtons():params.reset(true);updateConnectionButtons();renderCloud();renderSourceAccess();render();});
-  $('telemetrySource').onchange=()=>{
-    const source=$('telemetrySource').value;link.select(source);
-    const remote=source==='cloud';$('cloudControls').hidden=!remote;$('cloudReadOnlyNotice').hidden=!remote;
-    set('sourceChip',remote?'MQTT':'BLE');set('sourceDescription',remote?'云端 MQTT · 只读监测':'本地蓝牙 · 单船监测');
-    updateMapLabels();
-    set('sourceSideNote',remote?'MQTT 云端监测 · 网口上云':'本地蓝牙直连 · T10 / 无人船电控');
-    $('connectButton').textContent=remote?'连接云端无人船':'选择蓝牙设备';
-    $('connectionRoute').textContent=remote?'无人船 → 网口 → MQTT Broker → 服务器 → 浏览器':'浏览器 ↔ T10 ↔ 无人船';
-    renderSourceAccess();
-    if(remote&&cloud.authenticated)cloud.refreshDevices().catch(error=>toast(error.message));
-    renderCloud();render();
-  };
-  $('cloudDevice').onchange=()=>{if(link.source==='cloud'){link.disconnect();track.clear();state.deviceId=null;state.deviceName=null;state.lastUpdateAt=null;renderCloud();render();}};
+  $('cloudDevice').onchange=()=>{link.disconnect();track.clear();state.deviceId=null;state.lastUpdateAt=null;renderCloud();render();};
   on('cloudRefresh',()=>cloud.refreshDevices());
   on('cloudLoginOpen',()=>{$('cloudLoginError').textContent='';$('cloudPassword').value='';$('cloudLoginDialog').showModal();$('cloudPassword').focus();});
   on('cloudLoginClose',()=>$('cloudLoginDialog').close());
@@ -369,7 +346,7 @@
   };
   on('cloudLogout',()=>cloud.logout());
   cloud.initialize().catch(()=>{cloud.message='无法读取云端配置，请检查服务器连接';renderCloud();});
-  set('supportNotice',!window.isSecureContext?'当前不是安全地址：蓝牙需 HTTPS 或 localhost':!navigator.bluetooth?'此浏览器不支持 Web Bluetooth。建议使用支持蓝牙的桌面 Chrome/Edge 或 Android Chrome。':'蓝牙直接连接当前电脑/手机；地图底图需要联网。');
+  set('supportNotice','无人船通过 MQTT 向服务器上报，浏览器通过同源 HTTP/SSE 接收实时数据。远程访问建议使用 HTTPS；地图底图需要联网。');
   readChartPalette();setupMap();mapVectors=new MapVelocityView(map);render();
   function refreshWorkspace() {
     // 切页保留连接与历史，待新容器布局完成后恢复地图、图表和三维画面。
@@ -385,11 +362,9 @@
   window.addEventListener('boat-view-change',refreshWorkspace);
   refreshWorkspace();
   const timer=setInterval(render,200);
-  const cloudTimer=setInterval(()=>{if(link.source==='cloud'&&cloud.enabled&&cloud.authenticated&&!document.hidden)cloud.refreshDevices().catch(()=>{});},10000);
+  const cloudTimer=setInterval(()=>{if(cloud.enabled&&cloud.authenticated&&!document.hidden)cloud.refreshDevices().catch(()=>{});},10000);
   document.addEventListener('visibilitychange',()=>{
-    if(link.source==='cloud'){
-      if(document.hidden)cloud.suspend();else cloud.resume();
-    }
+    if(document.hidden)cloud.suspend();else cloud.resume();
     if(!document.hidden)render();
   });
   window.addEventListener('pagehide',()=>{cancelAnimationFrame(viewResizeFrame);clearInterval(timer);clearInterval(cloudTimer);viewer.stop();mapSettings.destroy();link.disconnect();});

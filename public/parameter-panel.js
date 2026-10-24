@@ -79,7 +79,7 @@ class ParameterPanel {
     this.confirmed=null;
     if(!preserveDraft){this.localDraft=null;this.inputs().forEach(el=>el.value='');}
     this.updateButtons();
-    this.status(this.link.readOnly?(this.link.parameterReadOnlyReason||'云端只读 · 请通过蓝牙操作设备参数；本地草稿可保存或导出'):this.link.source==='cloud'?'云端调参已就绪 · 点击“读取参数”获取设备确认值':'请连接设备后点击“读取参数”','neutral');
+    this.status(this.link.readOnly?(this.link.parameterReadOnlyReason||'当前设备只读；本地草稿可保存或导出'):'云端调参已就绪 · 点击“读取参数”获取设备确认值','neutral');
   }
   updateButtons() {
     const hasDraft=!!(this.confirmed||this.localDraft),readOnly=!!this.link.readOnly;
@@ -93,7 +93,7 @@ class ParameterPanel {
   }
   async command(kind, preset) {
     window.BoatAuth?.assertManage();
-    if(this.link.readOnly)throw Error(this.link.parameterReadOnlyReason||'云端为只读监测，请切换蓝牙后读取、写入参数或操作 Flash');
+    if(this.link.readOnly)throw Error(this.link.parameterReadOnlyReason||'当前设备只读，请检查管理员权限与设备状态');
     if(this.busy)throw Error('请等待当前操作完成');
     const generation=this.link.generation;
     let values;
@@ -133,7 +133,7 @@ class ParameterPanel {
   }
   tune() {
     window.BoatAuth?.assertManage();
-    if(this.link.readOnly)throw Error(this.link.parameterReadOnlyReason||'请切换蓝牙后调整设备参数');
+    if(this.link.readOnly)throw Error(this.link.parameterReadOnlyReason||'当前设备只读，请检查管理员权限与设备状态');
     if(!this.confirmed)throw Error('请先读取设备参数');
     // 建议只调整速度环，保留方向、差速、航向参数。
     this.fill({...this.form(),...this.config.tuning});
@@ -165,7 +165,7 @@ class ParameterPanel {
       this.slots=next;this.renderSlots();this.updateButtons();this.status('已保存到浏览器预设 '+(i+1)+'；不代表已写入设备或 Flash','success');
     } else {
       window.BoatAuth?.assertManage();
-      if(this.link.readOnly)throw Error(this.link.parameterReadOnlyReason||'云端为只读监测，请切换蓝牙后使用预设');
+      if(this.link.readOnly)throw Error(this.link.parameterReadOnlyReason||'当前设备只读，暂不能使用预设');
       const slot=this.slots[i];if(!slot||!this.valid(slot.values))throw Error('预设为空或无效');
       if(!this.confirmed)await this.command('read');
       this.fill(slot.values);await this.command('write',slot.values);

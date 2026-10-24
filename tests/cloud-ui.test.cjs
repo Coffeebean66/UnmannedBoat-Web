@@ -17,13 +17,7 @@ function setup({serverClock=true,serverOffset=0}={}){
     close(){this.closed=true;}
     send(type,data){this.dispatchEvent(new MessageEvent(type,{data:JSON.stringify(data)}));}
   }
-  class FakeBluetooth extends EventTarget {
-    constructor(){super();this.connected=false;this.busy=false;this.parser=new P.UART4StreamParser();this.disconnects=0;this.requests=0;}
-    async connect(){this.connected=true;this.dispatchEvent(new CustomEvent('connection',{detail:{connected:true,id:'ble',name:'T10'}}));}
-    disconnect(){this.connected=false;this.disconnects++;this.dispatchEvent(new CustomEvent('connection',{detail:{connected:false}}));}
-    request(){this.requests++;return Promise.resolve({});}
-  }
-  const context={EventTarget,CustomEvent,Uint8Array,atob,BoatModules:{uart4Protocol:P},BoatLink:FakeBluetooth,
+  const context={EventTarget,CustomEvent,Uint8Array,atob,BoatModules:{uart4Protocol:P},
     window:{},document:{hidden:false},EventSource:FakeEventSource,performance:{now:()=>now},Date:{now:()=>wall},
     setInterval:fn=>{const id=++timerId;timers.set(id,fn);return id;},clearInterval:id=>timers.delete(id),
     fetch:async(url,options)=>{
@@ -37,7 +31,7 @@ function setup({serverClock=true,serverOffset=0}={}){
     }};
   vm.runInNewContext(fs.readFileSync(path.join(root,'public/cloud-transport.js'),'utf8'),context);
   const cloud=new context.window.CloudBoatLink();
-  return {cloud,context,streams,timers,FakeBluetooth,
+  return {cloud,context,streams,timers,
     packet:(extra={})=>({deviceId:'boat-123',receivedAt:wall+serverOffset,ageMs:0,payload:payload(),...extra}),
     advance:ms=>{now+=ms;wall+=ms;},setAuthorized:value=>authorized=value,setBroker:value=>brokerConnected=value};
 }
@@ -113,16 +107,6 @@ test('后台恢复使用新SSE，旧队列与缓存不会复活姿态；401会�
   h.setAuthorized(false);next.send('error',{});await new Promise(resolve=>setImmediate(resolve));
   assert.equal(h.cloud.connected,false);assert.equal(h.cloud.authenticated,false);assert.equal(next.closed,true);assert.equal(h.cloud.wanted,false);
 });
-test('单一数据源路由切换时断开旧连接，云端拒绝所有参数事务',async()=>{
-  const h=setup(),ble=new h.FakeBluetooth(),link=new h.context.window.BoatSourceLink(ble,h.cloud),frames=[];
-  link.addEventListener('frame',e=>frames.push(e.detail));await link.connect();assert.equal(link.connected,true);
-  link.select('cloud');assert.equal(ble.connected,false);assert.equal(ble.disconnects,1);assert.equal(link.readOnly,true);
-  ble.dispatchEvent(new CustomEvent('frame',{detail:{sequence:99}}));assert.equal(frames.length,0);
-  for(const kind of ['read','write','flash'])await assert.rejects(link.request(kind,{}),/只读/);
-  assert.equal(ble.requests,0);await connected(h);h.streams.at(-1).send('telemetry',h.packet());assert.equal(frames.length,4);
-  link.select('bluetooth');assert.equal(h.streams.at(-1).closed,true);assert.equal(link.readOnly,false);assert.equal(link.connected,false);
-  h.cloud.emit('frame',{sequence:100});assert.equal(frames.length,4);
-});
 function parameterPanel(){
   const ids={},inputs=[{dataset:{key:'speed'},value:'12'}],buttons=[{dataset:{action:'save',slot:'0'}},{dataset:{action:'use',slot:'0'}}],storage=new Map();
   const context={window:{},document:{getElementById:id=>ids[id]||(ids[id]={dataset:{}}),querySelectorAll:selector=>selector.startsWith('#parameterFields')?inputs:buttons},
@@ -141,7 +125,7 @@ test('云端参数界面和直接调用均拦截读写/Flash/一键使用，允�
   await assert.rejects(panel.actSlot(0,'use'),/只读/);await panel.actSlot(0,'save');assert.equal(JSON.parse(storage.get('preset'))[0].values.speed,12);
   const exported=JSON.parse(panel.exportText());assert.equal(exported.values.speed,12);assert.equal(!!exported.confirmed,false);
 });
-test('蓝牙参数响应在切到云端后迟到，不能恢复设备确认值或开启写入按钮',async()=>{
+test('切换MQTT设备后旧参数响应迟到，不能恢复设备确认值或开启写入按钮',async()=>{
   const {panel,ids,inputs}=parameterPanel();let complete;
   panel.link.readOnly=false;panel.link.request=()=>new Promise(resolve=>complete=resolve);
   const pending=panel.command('read');panel.link.generation++;panel.link.readOnly=true;panel.reset(true);

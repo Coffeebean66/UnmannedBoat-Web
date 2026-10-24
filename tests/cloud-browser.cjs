@@ -80,19 +80,18 @@ async function main(){
       const result=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});fs.writeFileSync(path.join(output,name+'.png'),Buffer.from(result.data,'base64'));
     };
     const chooseCloud=async()=>{
-      await evaluate("document.getElementById('telemetrySource').value='cloud';document.getElementById('telemetrySource').dispatchEvent(new Event('change'))");
-      await until("boatMonitor.link.cloud.authenticated && [...document.getElementById('cloudDevice').options].some(option=>option.value==='boat-server-check')",'authenticated test device in cloud list');
+      await until("boatMonitor.link.authenticated && [...document.getElementById('cloudDevice').options].some(option=>option.value==='boat-server-check')",'authenticated test device in cloud list');
       await evaluate("document.getElementById('cloudDevice').value='boat-server-check';document.getElementById('cloudDevice').dispatchEvent(new Event('change'));document.getElementById('connectButton').click()");
       await until("boatMonitor.link.source==='cloud' && boatMonitor.link.connected && document.getElementById('boatActual').textContent==='1.552'",'live remote cloud telemetry');
     };
     await send('Runtime.enable');await send('Page.enable');await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
     await send('Page.navigate',{url:url.href});
-    await until('!!window.boatMonitor && !!boatMonitor.viewer.renderer && boatMonitor.link.cloud.enabled','deployed page, WebGL model and cloud configuration',40000);
-    await evaluate("document.getElementById('telemetrySource').value='cloud';document.getElementById('telemetrySource').dispatchEvent(new Event('change'));document.getElementById('cloudLoginOpen').click()");
+    await until('!!window.boatMonitor && !!boatMonitor.viewer.renderer && boatMonitor.link.enabled','deployed page, WebGL model and cloud configuration',40000);
+    await evaluate("document.getElementById('cloudLoginOpen').click()");
     await until("document.getElementById('cloudLoginDialog').open",'cloud login dialog');
     // CDP 内填写密码，不记录 expression，也不截图登录表单。
     await evaluate("document.getElementById('cloudPassword').value="+JSON.stringify(accessPassword)+";document.getElementById('cloudLoginForm').requestSubmit()");
-    await until("boatMonitor.link.cloud.authenticated && !document.getElementById('cloudLoginDialog').open",'real HTTPS cookie login');
+    await until("boatMonitor.link.authenticated && !document.getElementById('cloudLoginDialog').open",'real HTTPS cookie login');
     await chooseCloud();await wait(500);
     assert.equal(await evaluate("document.getElementById('roll').textContent"),'6.00');
     assert.equal(await evaluate("document.getElementById('longitude').textContent"),'121.7654321');
@@ -118,10 +117,10 @@ async function main(){
       assert.equal(await evaluate("document.getElementById('settingsDialog').scrollWidth<=document.getElementById('settingsDialog').clientWidth"),true,'Cloud settings overflow at '+width);
       await screenshot('remote-cloud-settings-'+width);await evaluate("document.getElementById('settingsClose').click()");
     }
-    await evaluate("document.getElementById('telemetrySource').value='bluetooth';document.getElementById('telemetrySource').dispatchEvent(new Event('change'))");
-    assert.equal(await evaluate('boatMonitor.link.cloud.wanted'),false,'Switching to BLE closes cloud SSE');
-    assert.equal(await evaluate('boatMonitor.link.connected'),false,'Source switch never claims BLE connected');
-    for(const id of ['boatActual','roll'])assert.equal(await evaluate('document.getElementById('+JSON.stringify(id)+').textContent'),'--','Source switch clears '+id);
+    await evaluate("document.getElementById('disconnectButton').click()");
+    assert.equal(await evaluate('boatMonitor.link.wanted'),false,'Explicit MQTT disconnect closes cloud SSE');
+    assert.equal(await evaluate('boatMonitor.link.connected'),false,'Explicit MQTT disconnect clears the live connection');
+    for(const id of ['boatActual','roll'])assert.equal(await evaluate('document.getElementById('+JSON.stringify(id)+').textContent'),'--','MQTT disconnect clears '+id);
     assert.equal(await evaluate('boatMonitor.viewer.fresh'),false);assert.equal(await evaluate("!!document.querySelector('.map-velocity-anchor')"),false);
     await chooseCloud();await wait(300);assert.equal(await evaluate("document.getElementById('roll').textContent"),'6.00');
     stopTelemetry();await wait(1350);
@@ -130,10 +129,10 @@ async function main(){
     assert.equal(await evaluate("!!document.querySelector('.map-velocity-anchor')"),false);await screenshot('remote-cloud-stale');
     startTelemetry();await until('boatMonitor.link.connected && boatMonitor.viewer.fresh','telemetry recovery after publish pause');
     stopTelemetry();client.stream.destroy();await until('!boatMonitor.link.connected','MQTT abrupt disconnect expires the source');
-    await until("!boatMonitor.link.cloud.devices.find(device=>device.id==='boat-server-check')?.online",'MQTT offline will / server device status');
+    await until("!boatMonitor.link.devices.find(device=>device.id==='boat-server-check')?.online",'MQTT offline will / server device status');
     assert.equal(await evaluate("document.getElementById('boatActual').textContent"),'--');assert.equal(await evaluate("document.getElementById('roll').textContent"),'--');
     assert.deepEqual(errors,[],'No browser runtime exceptions');assert.deepEqual(mqttErrors,[],'No MQTT publish errors');
-    console.log('PASS: real HTTPS session login, MQTT Broker → Node → SSE → Chrome, all four telemetry frames, RTK/map, IMU/WebGL, speed chart/vectors/track, cloud read-only guards, BLE/cloud source isolation, reconnect, 1-second expiry and MQTT offline.');
+    console.log('PASS: real HTTPS session login, MQTT Broker → Node → SSE → Chrome, all four telemetry frames, RTK/map, IMU/WebGL, speed chart/vectors/track, cloud read-only guards, MQTT disconnect/reconnect, 1-second expiry and MQTT offline.');
     console.log('PASS: remote cloud layout and settings have no horizontal overflow at 320 / 375 / 430 / 1440 px.');
     console.log('Screenshots: '+output);
   }finally{

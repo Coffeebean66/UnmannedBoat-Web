@@ -22,7 +22,6 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
     res.setHeader('X-Content-Type-Options','nosniff');
     res.setHeader('Referrer-Policy','strict-origin-when-cross-origin');
     res.setHeader('X-Frame-Options','DENY');
-    res.setHeader('Permissions-Policy','bluetooth=(self)');
     // 业务脚本和模型本地加载；高德官方地图 SDK 及地图资源使用明确的域名白名单。
     res.setHeader('Content-Security-Policy',MAP_CONTENT_SECURITY_POLICY);
     const fail=(status,text)=>{res.writeHead(status,{'Content-Type':'text/plain; charset=utf-8'});res.end(text);};

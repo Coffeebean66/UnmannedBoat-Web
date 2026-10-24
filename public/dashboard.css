@@ -79,6 +79,8 @@ button.primary:hover:not(:disabled) { background:linear-gradient(135deg,#0099dd,
 /* ── Source panel ── */
 .source-panel { display:flex; flex-wrap:wrap; align-items:center; gap:10px 16px; margin-bottom:14px; padding:11px 14px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel); font-size:11px; box-shadow:var(--shadow); }
 .source-panel label { display:flex; align-items:center; gap:9px; white-space:nowrap; color:var(--muted); }
+.cloud-source-label { display:flex; align-items:center; gap:7px; color:var(--blue); font-size:11px; font-weight:600; white-space:nowrap; }
+.cloud-source-label svg { width:16px; height:16px; }
 .source-panel select { font-size:11px; padding:6px 9px; max-width:100%; min-width:118px; border-radius:5px; }
 .source-panel p { margin:0; font-size:10px; }.cloud-controls { display:flex; flex:1; flex-wrap:wrap; align-items:center; gap:8px; min-width:0; }
 .cloud-controls[hidden],.cloud-readonly[hidden] { display:none; }.cloud-device-label { min-width:0; }.cloud-device-label select { max-width:285px; overflow:hidden; text-overflow:ellipsis; }
@@ -164,7 +166,7 @@ button.primary:hover:not(:disabled) { background:linear-gradient(135deg,#0099dd,
 .diagnostics-body { display:grid; grid-template-columns:210px minmax(0,1fr) 265px; gap:10px 22px; align-items:center; }
 .connection-route { margin:0; padding:13px 10px; gap:5px; border-radius:4px; }.connection-route span { font-size:9px; gap:4px; }.connection-route svg { width:14px; height:14px; }
 .diag-grid { grid-template-columns:repeat(6,minmax(0,1fr)); gap:8px; }.diag-grid>span { font-size:8px; }.diag-grid b { font-size:13px; margin-top:3px; }
-.diagnostics-card .connection-details { grid-column:1/-1; grid-row:2; border-top:1px solid var(--line); margin:2px 0 0; padding-top:9px; }.connection-details summary { font-size:9px; }.characteristic { font-size:9px; }.connection-details .muted { font-size:9px; }
+.diagnostics-card .connection-details { grid-column:1/-1; grid-row:2; border-top:1px solid var(--line); margin:2px 0 0; padding-top:9px; }.connection-details summary { font-size:9px; }.connection-details .muted { font-size:9px; }
 .settings-callout { margin:0; padding:10px; gap:8px; border-radius:4px; }.settings-callout strong { font-size:10px; }.settings-callout p { font-size:8px; }.settings-callout button { width:27px; min-width:27px; height:27px; padding:6px; }.settings-callout button svg { width:14px; height:14px; }
 footer { padding-top:15px; font-size:8px; color:var(--faint); }
 /* ── Responsive breakpoints ── */
