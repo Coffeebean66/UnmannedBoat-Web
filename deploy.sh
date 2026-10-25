@@ -102,6 +102,8 @@ After=network.target
 [Service]
 Type=simple
 DynamicUser=yes
+StateDirectory=unmanned-boat-web
+StateDirectoryMode=0750
 WorkingDirectory=$target
 ExecStart=$node_path $target/server.js
 Environment=HOST=$address
@@ -139,12 +141,20 @@ const fs=require('node:fs');
   const base='http://127.0.0.1:'+process.argv[2];
   const request=(route,options={})=>fetch(base+route,{...options,signal:AbortSignal.timeout(1500)});
   const health=await request('/healthz');
-  if(!health.ok||(await health.json()).app!=='unmanned-boat-web')throw Error('health');
+  const data=await health.json();
+  if(!health.ok||data.app!=='unmanned-boat-web')throw Error('health');
   const env={};
   for(const file of process.argv.slice(3)){
     if(!fs.existsSync(file))continue;
     Object.assign(env,Object.fromEntries(fs.readFileSync(file,'utf8').split(/\r?\n/).filter(x=>/^[A-Z_]+=.*/.test(x)).map(x=>{const n=x.indexOf('=');return[x.slice(0,n),x.slice(n+1)];})));
   }
+  if(Object.hasOwn(data,'readiness')){
+    const r=data.readiness;
+    if(!r||Array.isArray(r)||typeof r!=='object'||typeof r.cloudEnabled!=='boolean'||typeof r.brokerConnected!=='boolean'||typeof r.accountsEnabled!=='boolean'||r.accountManagement!==1||r.cloudEnabled!==(env.BOAT_CLOUD_ENABLED==='1')||r.accountsEnabled!==(env.BOAT_ACCOUNTS_ENABLED==='1')||(r.cloudEnabled&&!r.brokerConnected))throw Error('readiness');
+    return;
+  }
+  const accountFiles=env.BOAT_ACCOUNTS_FILE?[env.BOAT_ACCOUNTS_FILE]:['/var/lib/unmanned-boat-web/accounts.json','/var/lib/unmanned-boat-web-update/requests/accounts.json'];
+  for(const file of accountFiles){try{fs.lstatSync(file);throw Error('managed account readiness is unsupported');}catch(error){if(error.code!=='ENOENT')throw error;}}
   if(env.BOAT_CLOUD_ENABLED!=='1')return;
   const accounts=env.BOAT_ACCOUNTS_ENABLED==='1';
   const login=await request(accounts?'/api/auth/login':'/api/cloud/login',{method:'POST',headers:{'Content-Type':'application/json',Origin:env.BOAT_ACCOUNTS_ORIGIN||env.BOAT_CLOUD_ORIGIN||env.BOAT_UPDATE_ORIGIN},body:JSON.stringify(accounts?{username:env.BOAT_ADMIN_USERNAME,password:env.BOAT_ADMIN_PASSWORD}:{password:env.BOAT_CLOUD_PASSWORD})});

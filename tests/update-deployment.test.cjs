@@ -34,7 +34,7 @@ function fixture(t){
 test('bootstrap installs a separate trusted helper and keeps all existing cloud credentials',{skip:!bash},t=>{
   const f=fixture(t),first=f.run();assert.equal(first.status,0,first.stdout+first.stderr);
   const config=JSON.parse(fs.readFileSync(path.join(f.state,'config.json'),'utf8'));
-  assert.deepEqual(config,{apiVersion:1,repository:'https://github.com/Coffeebean66/UnmannedBoat-Web',branch:'main'});
+  assert.deepEqual(config,{apiVersion:1,repository:'https://github.com/Coffeebean66/UnmannedBoat-Web',branch:'main',accountManagement:1});
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.state,'state/status.json'),'utf8')),{status:'idle'});
   const runtime=fs.readFileSync(path.join(f.config,'runtime.env'),'utf8'),env=fs.readFileSync(path.join(f.config,'update.env'),'utf8'),access=fs.readFileSync(path.join(f.config,'update-access.txt'),'utf8');
   assert.equal(runtime,'BOAT_CLOUD_PASSWORD=preserve-cloud-secret\n');assert.match(env,/^BOAT_UPDATE_ENABLED=1$/m);

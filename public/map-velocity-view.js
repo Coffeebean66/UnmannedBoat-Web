@@ -1,4 +1,4 @@
-/* Leaflet 负责船位锚定和缩放；SVG 使用屏幕长度表达速度，两支箭头始终共用比例。 */
+/* 地图门面负责船位投影与锚定；SVG 使用屏幕长度表达速度，两支箭头共用比例。 */
 class MapVelocityView {
   constructor(map) {
     this.map=map;
@@ -30,10 +30,10 @@ class MapVelocityView {
   createMarker(fix) {
     const vector=kind=>'<g class="map-vector '+kind+'" data-vector="'+kind+'" hidden><title></title><path class="vector-halo"/><path class="vector-shaft"/><path class="vector-head-halo"/><path class="vector-head"/><circle class="vector-zero" cx="0" cy="0" r="'+(kind==='target'?7:4)+'" hidden/></g>';
     const svg='<svg class="map-velocity-vectors" width="264" height="264" viewBox="-132 -132 264 264" role="img" aria-label="目标与实际对地速度箭头">'+vector('target')+vector('actual')+'</svg>';
-    this.marker=L.marker([fix.latitude,fix.longitude],{
-      icon:L.divIcon({className:'map-velocity-anchor',html:svg,iconSize:[0,0],iconAnchor:[0,0]}),
+    this.marker=this.map.createMarker(fix,{
+      className:'map-velocity-anchor',html:svg,iconSize:[0,0],iconAnchor:[0,0],
       interactive:false,keyboard:false,zIndexOffset:200
-    }).addTo(this.map);
+    });
   }
   drawVector(group,vector,pixelsPerMps) {
     group.toggleAttribute('hidden',!vector);
@@ -62,9 +62,9 @@ class MapVelocityView {
     document.getElementById('mapVectorActual').textContent=this.readout(view?.actual);
     const status=!this.visible?'速度箭头已隐藏':!view?.closedLoop?'仅在速度 / 角度闭环显示':!view.fix?'等待有效定位':!view.target&&!view.actual?'等待有效速度或方向':'北 0° · 顺时针 · 箭头越长速度越大';
     document.getElementById('mapVectorStatus').textContent=status;
-    if(!this.map||!this.visible||!view?.closedLoop||!view.fix||(!view.target&&!view.actual)){this.clear();return;}
+    if(!this.map?.ready||!this.visible||!view?.closedLoop||!view.fix||(!view.target&&!view.actual)){this.clear();return;}
     if(!this.marker)this.createMarker(view.fix);
-    this.marker.setLatLng([view.fix.latitude,view.fix.longitude]);
+    this.marker.setPosition(view.fix);
     // 常用 0–3 m/s 对应 0–84px；更高速度或窄地图时，两支箭头按同一比例缩小。
     const maxLength=Math.max(1,Math.min(120,Math.min(this.map.getSize().x,this.map.getSize().y)/2-18));
     const maxSpeed=Math.max(view.target?.speedMps||0,view.actual?.speedMps||0);

@@ -812,7 +812,8 @@ function prepareImuDisplay(frame, receivedAt, now, connected) {
   const sourceFresh = !!(connected && data && data.received && data.fresh &&
     age !== null && age < IMU_SOURCE_TIMEOUT_MS && elapsed < IMU_LINK_TIMEOUT_MS);
   const gyroFresh = !!(sourceFresh && data.gyroValid);
-  const eulerFresh = !!(sourceFresh && data.eulerValid);
+  const eulerFresh = !!(sourceFresh && data.eulerValid &&
+    [data.rollDegrees, data.pitchDegrees, data.yawDegrees].every(Number.isFinite));
   let status = '等待 IMU 数据';
   if (!connected) status = '未连接';
   else if (frame && elapsed >= IMU_LINK_TIMEOUT_MS) status = 'IMU 转发链路超时';
@@ -831,6 +832,10 @@ function prepareImuDisplay(frame, receivedAt, now, connected) {
     roll: eulerFresh ? data.rollDegrees.toFixed(2) : '--',
     pitch: eulerFresh ? data.pitchDegrees.toFixed(2) : '--',
     yaw: eulerFresh ? data.yawDegrees.toFixed(2) : '--',
+    // 仪表使用原始数值，避免把占位符转换成零或丢失小数精度。
+    rollDegrees: eulerFresh ? data.rollDegrees : null,
+    pitchDegrees: eulerFresh ? data.pitchDegrees : null,
+    yawDegrees: eulerFresh ? data.yawDegrees : null,
     alignmentText: sourceFresh ? (data.timeAligned ? '已对齐' : '未对齐') : '--',
     headingUpdateText: !sourceFresh ? '--' : !data.headingAvailable ? '等待航向' :
       data.headingFresh ? '本帧新值' : '保持值',
@@ -1065,8 +1070,8 @@ module.exports = { formatParameterExport };
  *   38..61 电机 2，24 字节
  *   62..63 CRC-16/CCITT-FALSE，小端
  *
- * BLE 通知一次携带的字节数不固定，可能小于或大于一帧，因此这里使用
- * 可跨通知保留的滑动缓冲区，而不是假设“一次通知就是一帧”。
+ * 输入字节可能包含一帧或多帧，因此使用滑动缓冲区依次解析；云端
+ * MQTT 遥测每包携带四类帧，复用同一协议校验与字段解码。
  * 参数读写使用同一帧头和 CRC，独立版本 v5 / 56 字节：读取请求 0x10、
  * 临时写入 0x11、保存 Flash 0x12、响应 0x90；20 个 uint16 位于 14..53，CRC 位于 54..55；
  * 参数响应不会参与状态帧序号统计。
@@ -1153,7 +1158,7 @@ function writeU32LE(bytes, offset, value) {
   bytes[offset + 3] = (value >>> 24) & 0xFF;
 }
 
-// 微信 BLE API 返回 ArrayBuffer，单元测试通常传 Uint8Array；统一为只读字节视图。
+// 网络数据与测试可传入不同缓冲区类型；统一为只读字节视图。
 function normalizeBytes(input) {
   if (input instanceof Uint8Array) {
     return input;
@@ -1457,8 +1462,8 @@ function decodeImuFrame(bytes) {
 }
 
 /*
- * BLE 字节流解析器。
- * 通知可能拆包、粘包或从半帧开始，因此实例长期保留未消费字节；每次 push
+ * 遥测字节流解析器。
+ * 输入可能拆包、粘包或从半帧开始，因此实例长期保留未消费字节；每次 push
  * 可以返回 0 到多帧。坏头或坏 CRC 只丢一个字节，再从下一字节继续同步。
  */
 class UART4StreamParser {
@@ -1513,7 +1518,7 @@ class UART4StreamParser {
       }
 
       if (syncIndex < 0) {
-        // 保留末尾 A5，避免帧头被拆在两次 BLE 通知之间时丢失。
+        // 保留末尾 A5，避免帧头被拆在两次输入之间时丢失。
         const keepLast = this.buffer[this.buffer.length - 1] === UART4.SYNC0 ? 1 : 0;
         this.stats.droppedBytes += this.buffer.length - keepLast;
         this.buffer = keepLast ? [UART4.SYNC0] : [];
@@ -1601,7 +1606,7 @@ class UART4StreamParser {
   }
 
   getStats() {
-    // bufferedBytes 用于判断 BLE 是否长期停在半帧或持续收到不完整数据。
+    // bufferedBytes 用于判断字节流是否长期停在半帧或持续收到不完整数据。
     return { ...this.stats, bufferedBytes: this.buffer.length };
   }
 }

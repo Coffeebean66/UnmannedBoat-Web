@@ -1,0 +1,90 @@
+/* RTK/IMU 同屏：左侧欧拉角，中间地平仪，右侧角速度与对地速度。 */
+.sensor-card { container-type:inline-size; align-self:stretch; min-width:0; }
+.sensor-sources { display:grid; grid-template-columns:1fr 1fr; margin-bottom:8px; border:1px solid var(--line-strong); border-radius:4px; background:var(--accent-soft); }
+.sensor-sources>span { display:flex; align-items:center; justify-content:center; gap:5px; padding:5px; color:var(--accent); font-size:9px; font-weight:500; }
+.sensor-sources>span+span { border-left:1px solid var(--line-strong); }
+.sensor-sources svg { display:block; width:11px; height:11px; }
+.sensor-status-strip { display:grid; grid-template-columns:1fr 1fr; border:1px solid var(--line); background:var(--soft); border-radius:4px; }
+.sensor-status-strip>div { min-width:0; padding:6px 9px; }
+.sensor-status-strip>div+div { border-left:1px solid var(--line); }
+.sensor-status-strip>div>span { display:block; color:var(--muted); font-size:8px; margin-bottom:3px; }
+.sensor-status-strip strong { display:block; font-weight:500; font-size:10px; line-height:1.6; color:var(--muted); overflow-wrap:anywhere; }
+.sensor-status-strip strong::before { content:""; display:inline-block; width:5px; height:5px; margin-right:5px; border-radius:50%; background:var(--faint); vertical-align:1px; }
+.sensor-status-strip [data-valid="true"] strong { color:var(--success); }
+.sensor-status-strip [data-valid="true"] strong::before { background:var(--success); box-shadow:0 0 6px color-mix(in srgb,var(--success) 45%,transparent); }
+.sensor-status-strip [data-partial="true"] strong { color:var(--warn); }
+.sensor-status-strip [data-partial="true"] strong::before { background:var(--warn); }
+.sensor-instruments { display:grid; grid-template-columns:minmax(64px,.82fr) minmax(104px,1.5fr) minmax(62px,.8fr); align-items:center; gap:6px; margin:9px 0 8px; }
+.imu-euler-values { display:grid; gap:5px; min-width:0; margin:0; }
+.imu-euler-values>div { min-width:0; padding:6px 5px; border:1px solid var(--line); border-radius:4px; background:var(--soft); }
+.imu-euler-values dt { display:flex; align-items:baseline; flex-wrap:wrap; gap:3px; color:var(--muted); font-size:7px; }
+.imu-euler-values dt span { color:var(--accent); font-size:8px; font-weight:600; letter-spacing:.03em; }
+.imu-euler-values dd { display:flex; align-items:baseline; gap:1px; min-width:0; margin-top:3px; }
+.imu-euler-values b { color:var(--accent); font-size:clamp(15px,5.5cqw,23px); line-height:1.2; font-weight:600; font-variant-numeric:tabular-nums; letter-spacing:-.06em; }
+.imu-euler-values>div:nth-child(2) b { color:var(--success); }
+.imu-euler-values>div:nth-child(3) b { color:var(--warn); }
+.imu-euler-values small { color:var(--faint); font-size:9px; }
+.imu-horizon-panel { min-width:0; text-align:center; }
+.imu-horizon-caption { display:block; margin-top:2px; font-size:8px; color:var(--faint); letter-spacing:.12em; }
+.sensor-motion { display:grid; gap:6px; min-width:0; }
+.sensor-motion-group { min-width:0; padding:5px; border:1px solid var(--line); border-radius:4px; background:var(--soft); }
+.sensor-motion h3 { margin:0 0 4px; color:var(--accent); font-size:8px; font-weight:500; line-height:1.5; }
+.sensor-motion h3 small { display:block; color:var(--faint); font-size:7px; font-weight:400; }
+.sensor-axis-values { margin:0; }
+.sensor-axis-values>div { display:flex; justify-content:space-between; align-items:baseline; gap:3px; min-width:0; min-height:0; padding:1px 0; border:0; font-size:clamp(9px,3.3cqw,12px); line-height:1.45; }
+.sensor-axis-values dt { color:var(--muted); font-size:8px; }
+.sensor-axis-values abbr { text-decoration:none; cursor:help; }
+.sensor-axis-values dd { min-width:0; text-align:right; font-variant-numeric:tabular-nums; letter-spacing:-.03em; }
+.sensor-navigation { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(0,1fr); gap:7px; }
+.sensor-navigation dl { min-width:0; margin:0; padding:3px 7px; border:1px solid var(--line); border-radius:4px; background:var(--soft); }
+.sensor-navigation dl>div { display:flex; justify-content:space-between; align-items:baseline; gap:5px; padding:5px 0; min-width:0; }
+.sensor-navigation dl>div+div { border-top:1px solid var(--line); }
+.sensor-navigation dt { color:var(--muted); flex-shrink:0; font-size:8px; }
+.sensor-navigation dd { text-align:right; font-size:clamp(9px,3.2cqw,12px); font-variant-numeric:tabular-nums; min-width:0; overflow-wrap:anywhere; }
+.sensor-navigation b { font-weight:500; }
+.sensor-navigation small { margin-left:3px; font-size:7px; color:var(--faint); }
+.sensor-details { margin-top:8px; border-top:1px solid var(--line); color:var(--muted); }
+.sensor-details summary { display:flex; align-items:center; gap:6px; padding-top:7px; cursor:pointer; font-size:8px; list-style:none; }
+.sensor-details summary::-webkit-details-marker { display:none; }
+.sensor-details summary>span { margin-left:auto; color:var(--faint); font-size:7px; }
+.sensor-details summary svg { display:block; width:10px; height:10px; transition:transform .15s; }
+.sensor-details[open] summary svg { transform:rotate(180deg); }
+.sensor-source-detail { margin-top:8px; padding:8px 0 1px; border-top:1px solid var(--line); }
+.sensor-source-detail>strong { font-size:9px; margin-right:8px; font-weight:500; color:var(--accent); }
+.sensor-source-detail .state { font-size:8px; padding:1px 5px; }
+.sensor-source-detail .telemetry-meta { padding-top:6px; }
+.ah-instrument { position:relative; width:100%; max-width:220px; margin:auto; }
+.ah-svg { display:block; width:100%; height:auto; overflow:visible; }
+.ah-face { fill:#101d2b; stroke:var(--line-strong); stroke-width:1; }
+.ah-sky { fill:#268aca; }
+.ah-ground { fill:#83583c; }
+.ah-horizon-line { stroke:#f4f8ff; stroke-width:2; }
+.ah-pitch-line { stroke:#fff; opacity:.9; }
+.ah-pitch-negative { stroke-dasharray:4 3; }
+.ah-pitch-label { fill:#fff; font-size:10px; font-weight:600; paint-order:stroke; stroke:#0002; stroke-width:2px; }
+.ah-roll-tick { stroke:#9eb3c9; }
+.ah-roll-major { stroke:#e4f1ff; }
+.ah-roll-label { fill:#b8ccdf; font-size:10px; }
+.ah-zero-index { fill:#e6f2ff; }
+.ah-bank-pointer { fill:#ffd36b; stroke:#332810; stroke-width:1; }
+.ah-aircraft { stroke:#ffd36b; stroke-width:4; fill:none; stroke-linecap:round; stroke-linejoin:round; filter:drop-shadow(0 1px 1px #0009); }
+.ah-bezel { fill:none; stroke:#a4c4dc; stroke-opacity:.45; stroke-width:1.5; }
+.ah-status { position:absolute; left:50%; bottom:19%; transform:translateX(-50%); width:max-content; max-width:86%; white-space:normal; overflow-wrap:anywhere; font-size:8px; line-height:1.6; padding:1px 5px; border:1px solid #ffd36b66; border-radius:3px; background:#15212de6; color:#ffd36b; }
+.ah-instrument[data-state="live"] .ah-status { display:none; }
+.ah-instrument:not([data-state="live"]) .ah-roll-disc { opacity:.45; }
+[data-theme="light"] .imu-euler-values { --soft:#f2f7fc; }
+[data-theme="light"] .ah-face { fill:#1c2c3d; stroke:#9bb0c4; }
+@media (max-width:620px) {
+  .telemetry-rail { grid-template-columns:minmax(0,1fr); }
+}
+@container (min-width:360px) {
+  .sensor-instruments { gap:10px; grid-template-columns:minmax(80px,.8fr) minmax(140px,1.5fr) minmax(80px,.8fr); }
+  .imu-euler-values>div { padding:8px; }
+  .imu-euler-values dt,.sensor-motion h3,.sensor-axis-values dt { font-size:9px; }
+  .imu-euler-values dt span { font-size:10px; }
+  .sensor-motion-group { padding:7px; }
+  .sensor-motion h3 small { display:inline; margin-left:3px; }
+  .sensor-navigation dt { font-size:10px; }
+  .sensor-navigation dl { padding:4px 9px; }
+  .sensor-details summary,.sensor-status-strip strong { font-size:11px; }
+}

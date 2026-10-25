@@ -5,10 +5,11 @@ const {CloudBridge}=require('./server/cloud');
 const {createCloudApi}=require('./server/cloud-api');
 const {createAccountApi}=require('./server/account-api');
 const {createUpdateApi,readCurrentRelease}=require('./server/update-api');
+const {createMapConfigApi,MAP_CONTENT_SECURITY_POLICY}=require('./server/map-config');
 const {version:packageVersion}=require('./package.json');
 const ROOT=path.join(__dirname,'public');
 const MIME={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json; charset=utf-8','.glb':'model/gltf-binary','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon','.txt':'text/plain; charset=utf-8'};
-function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},apiOptions={},updateOptions={},accountOptions={}}={}) {
+function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},apiOptions={},updateOptions={},accountOptions={},mapOptions={}}={}) {
   const base=fs.realpathSync(root);
   const bridge=cloud||new CloudBridge({env,...cloudOptions});
   const accounts=createAccountApi({...accountOptions,env});
@@ -16,25 +17,32 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
   // 启动时只读取一次版本信息，health 与更新状态都代表同一个实际运行实例。
   const current=readCurrentRelease({version:packageVersion,releasePath:updateOptions.releasePath,instanceId:updateOptions.instanceId});
   const updateApi=createUpdateApi({...updateOptions,env,current,accounts});
+  const mapApi=createMapConfigApi({...mapOptions,env,accounts});
   const handler=async(req,res)=>{
     res.setHeader('X-Content-Type-Options','nosniff');
     res.setHeader('Referrer-Policy','strict-origin-when-cross-origin');
     res.setHeader('X-Frame-Options','DENY');
-    res.setHeader('Permissions-Policy','bluetooth=(self)');
-    // 所有程序和模型均本地加载；仅地图图块需要外部图片权限。
-    res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://tile.openstreetmap.org; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'");
+    // 业务脚本和模型本地加载；高德官方地图 SDK 及地图资源使用明确的域名白名单。
+    res.setHeader('Content-Security-Policy',MAP_CONTENT_SECURITY_POLICY);
     const fail=(status,text)=>{res.writeHead(status,{'Content-Type':'text/plain; charset=utf-8'});res.end(text);};
     let pathname;
     try{pathname=decodeURIComponent((req.url||'/').split('?')[0]);}catch(_){return fail(400,'Invalid path');}
     if(pathname.includes('\0')||pathname.includes('\\')||pathname.split('/').some(x=>x==='..'||x.startsWith('.')))return fail(403,'Forbidden');
     try{
       const url=new URL(req.url||'/','http://localhost');
+      if(await mapApi.handle(req,res,url))return;
       if(await accounts.handle(req,res,url))return;
       if(await updateApi.handle(req,res,url))return;
       if(await api.handle(req,res,url))return;
     }catch(_){if(!res.headersSent)return fail(500,'Service unavailable');res.destroy();return;}
     if(req.method!=='GET'&&req.method!=='HEAD'){res.setHeader('Allow','GET, HEAD');return fail(405,'Method not allowed');}
-    if(pathname==='/healthz'){res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');return res.end(req.method==='HEAD'?undefined:JSON.stringify({ok:true,app:'unmanned-boat-web',...current,apiVersion:1}));}
+    if(pathname==='/healthz'){
+      // 部署检查只读取服务就绪状态，不依赖管理员初始密码，避免改密后误判失败。
+      const readiness={cloudEnabled:bridge.enabled===true,brokerConnected:bridge.list()?.brokerConnected===true,
+        accountsEnabled:accounts.enabled===true,accountManagement:1};
+      res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');
+      return res.end(req.method==='HEAD'?undefined:JSON.stringify({ok:true,app:'unmanned-boat-web',...current,apiVersion:1,readiness}));
+    }
     if(pathname==='/')pathname='/index.html';
     const requested=path.resolve(base,'.'+pathname);
     if(!requested.startsWith(base+path.sep))return fail(403,'Forbidden');
@@ -51,7 +59,7 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
   };
   const server=key&&cert?https.createServer({key,cert},handler):http.createServer(handler);
   const originalClose=server.close.bind(server);
-  server.close=(callback)=>{accounts.close();updateApi.close();api.close();bridge.stop();return originalClose(callback);};
+  server.close=(callback)=>{mapApi.close();accounts.close();updateApi.close();api.close();bridge.stop();return originalClose(callback);};
   server.boatCloud=bridge;server.boatCloudApi=api;server.boatUpdateApi=updateApi;server.boatRelease=current;server.boatAccounts=accounts;
   bridge.start();
   return server;

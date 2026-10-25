@@ -9,7 +9,8 @@ function prepareImuDisplay(frame, receivedAt, now, connected) {
   const sourceFresh = !!(connected && data && data.received && data.fresh &&
     age !== null && age < IMU_SOURCE_TIMEOUT_MS && elapsed < IMU_LINK_TIMEOUT_MS);
   const gyroFresh = !!(sourceFresh && data.gyroValid);
-  const eulerFresh = !!(sourceFresh && data.eulerValid);
+  const eulerFresh = !!(sourceFresh && data.eulerValid &&
+    [data.rollDegrees, data.pitchDegrees, data.yawDegrees].every(Number.isFinite));
   let status = '等待 IMU 数据';
   if (!connected) status = '未连接';
   else if (frame && elapsed >= IMU_LINK_TIMEOUT_MS) status = 'IMU 转发链路超时';
@@ -28,6 +29,10 @@ function prepareImuDisplay(frame, receivedAt, now, connected) {
     roll: eulerFresh ? data.rollDegrees.toFixed(2) : '--',
     pitch: eulerFresh ? data.pitchDegrees.toFixed(2) : '--',
     yaw: eulerFresh ? data.yawDegrees.toFixed(2) : '--',
+    // 仪表使用原始数值，避免把占位符转换成零或丢失小数精度。
+    rollDegrees: eulerFresh ? data.rollDegrees : null,
+    pitchDegrees: eulerFresh ? data.pitchDegrees : null,
+    yawDegrees: eulerFresh ? data.yawDegrees : null,
     alignmentText: sourceFresh ? (data.timeAligned ? '已对齐' : '未对齐') : '--',
     headingUpdateText: !sourceFresh ? '--' : !data.headingAvailable ? '等待航向' :
       data.headingFresh ? '本帧新值' : '保持值',

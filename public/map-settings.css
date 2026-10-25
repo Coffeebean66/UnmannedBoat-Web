@@ -1,0 +1,35 @@
+/* 平台设置独立于设备参数，字段只在读取/保存成功时更新，避免遥测刷新打断输入。 */
+.map-settings { margin:0 0 22px; padding:18px; border:1px solid var(--line-strong); border-radius:10px; background:linear-gradient(135deg,var(--accent-soft),var(--panel) 70%); }
+.map-settings-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:12px; }
+.map-settings-title { display:flex; align-items:center; gap:10px; min-width:0; }
+.map-settings-title h3 { font-size:15px; font-weight:650; }
+.map-settings-title p { margin-top:2px; font-size:10px; color:var(--muted); letter-spacing:.05em; }
+.map-settings-guide { font-size:11px; color:var(--accent); white-space:nowrap; text-underline-offset:3px; }
+.map-settings-description,.map-settings-access { color:var(--muted); font-size:12px; line-height:1.8; overflow-wrap:anywhere; }
+.map-settings-source { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:12px 0 14px; font-size:11px; color:var(--muted); }
+.map-settings-source b { font-weight:500; color:var(--text); padding:3px 8px; border:1px solid var(--line); border-radius:5px; background:var(--panel); }
+.map-settings-fields { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.map-settings-fields label { display:grid; gap:7px; min-width:0; color:var(--text); font-size:12px; font-weight:500; }
+.map-settings-fields input { min-width:0; width:100%; font:12px/1.4 Consolas,monospace; letter-spacing:.02em; padding:10px 11px; border:1px solid var(--line-strong); border-radius:6px; background:var(--panel); color:var(--text); }
+.map-settings-fields input::placeholder { font-family:inherit; letter-spacing:0; color:var(--faint); }
+.map-settings-fields small { font-size:10px; color:var(--muted); font-weight:400; }
+.map-settings-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:16px; }
+.map-settings-actions button { min-height:34px; font-size:11px; }
+.map-settings-status { margin-top:12px; font-size:11px; line-height:1.8; color:var(--muted); overflow-wrap:anywhere; }
+.map-settings-status[data-tone="error"] { color:var(--danger); }
+.map-settings-status[data-tone="success"] { color:var(--success); }
+.map-settings-refresh-note { margin-top:8px; padding:9px 11px; border-radius:5px; background:var(--warn-bg); color:var(--warn); font-size:11px; line-height:1.7; }
+.device-settings-heading { display:flex; align-items:center; gap:8px; margin:0 0 14px; font-size:14px; }
+.device-settings-heading span { color:var(--muted); font-size:11px; font-weight:400; }
+@media(max-width:600px) {
+  .map-settings { padding:14px; }
+  .map-settings-fields { grid-template-columns:1fr; gap:13px; }
+  .map-settings-heading { gap:8px; }
+  .map-settings-title h3 { font-size:14px; }
+  .map-settings-title p { font-size:9px; letter-spacing:0; }
+  .map-settings-title .card-icon { display:none; }
+  .map-settings-guide { font-size:10px; }
+  .map-settings-actions button { flex:1 1 auto; }
+  .map-settings-actions #mapSettingsReload { flex-basis:100%; }
+  .device-settings-heading { flex-wrap:wrap; }
+}

@@ -89,7 +89,7 @@ const fs=require('node:fs'),path=require('node:path');
 const [file,node,npm,git,runuser,systemctl,port,state]=process.argv.slice(2);
 fs.writeFileSync(file,JSON.stringify({node,npm,git,runuser,systemctl,port:Number(port)},null,2)+'\n',{mode:0o600});
 fs.chmodSync(file,0o600);
-fs.writeFileSync(path.join(state,'config.json'),JSON.stringify({apiVersion:1,repository:'https://github.com/Coffeebean66/UnmannedBoat-Web',branch:'main'})+'\n',{mode:0o644});
+fs.writeFileSync(path.join(state,'config.json'),JSON.stringify({apiVersion:1,repository:'https://github.com/Coffeebean66/UnmannedBoat-Web',branch:'main',accountManagement:1})+'\n',{mode:0o644});
 if(!fs.existsSync(path.join(state,'state/status.json')))fs.writeFileSync(path.join(state,'state/status.json'),JSON.stringify({status:'idle'})+'\n',{mode:0o644});
 NODE
 chmod 644 "$state/config.json" "$state/state/status.json"

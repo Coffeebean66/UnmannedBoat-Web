@@ -71,14 +71,39 @@ async function readEnvironment(file){
   const text=await fsp.readFile(file,'utf8');
   return Object.fromEntries(text.split(/\r?\n/).filter(line=>/^[A-Z_]+=.*/.test(line)).map(line=>{const index=line.indexOf('=');return [line.slice(0,index),line.slice(index+1)];}));
 }
-async function health({port,commit,configDir,timeout=30000}){
+async function managedAccountsPresent({runtime={},stateDir='/var/lib/unmanned-boat-web-update'}={}){
+  const files=runtime.BOAT_ACCOUNTS_FILE?[runtime.BOAT_ACCOUNTS_FILE]:[
+    '/var/lib/unmanned-boat-web/accounts.json',path.join(stateDir,'requests','accounts.json')];
+  for(const file of files){
+    if(!path.isAbsolute(file))throw new UpdateError('账户库配置路径无效');
+    if(await exists(file)){await ordinary(file);return true;}
+  }
+  return false;
+}
+function readinessMatches(readiness,runtime){
+  return !!readiness&&typeof readiness==='object'&&!Array.isArray(readiness)&&
+    typeof readiness.cloudEnabled==='boolean'&&typeof readiness.brokerConnected==='boolean'&&
+    typeof readiness.accountsEnabled==='boolean'&&readiness.accountManagement===1&&
+    readiness.cloudEnabled===(runtime.BOAT_CLOUD_ENABLED==='1')&&
+    readiness.accountsEnabled===(runtime.BOAT_ACCOUNTS_ENABLED==='1')&&
+    (!readiness.cloudEnabled||readiness.brokerConnected===true);
+}
+async function health({port,commit,configDir,stateDir='/var/lib/unmanned-boat-web-update',timeout=30000,retryMs=1000}){
   const runtime={...await readEnvironment(path.join(configDir,'runtime.env')),...await readEnvironment(path.join(configDir,'accounts.env'))};
+  const managed=await managedAccountsPresent({runtime,stateDir});
   const base='http://127.0.0.1:'+port,end=Date.now()+timeout;let cloudCookie;
   while(Date.now()<end){
     try{
       const request=(route,options={})=>fetch(base+route,{...options,signal:AbortSignal.timeout(2000)});
       const response=await request('/healthz'),data=await response.json();
       if(!response.ok||data.app!=='unmanned-boat-web'||data.ok!==true||data.apiVersion!==1||data.commit!==commit)throw Error('health');
+      // Account changes invalidate the bootstrap environment password. The new
+      // server reports bounded readiness without minting an administrator session.
+      if(Object.hasOwn(data,'readiness')){
+        if(!readinessMatches(data.readiness,runtime))throw Error('readiness');
+        return;
+      }
+      if(managed)throw Error('managed account readiness is unsupported');
       if(runtime.BOAT_CLOUD_ENABLED==='1'){
         if(!cloudCookie){
           const accounts=runtime.BOAT_ACCOUNTS_ENABLED==='1';
@@ -90,7 +115,7 @@ async function health({port,commit,configDir,timeout=30000}){
         if(!devices.ok||(await devices.json()).brokerConnected!==true)throw Error('cloud broker');
       }
       return;
-    }catch(_){await new Promise(resolve=>setTimeout(resolve,1000));}
+    }catch(_){await new Promise(resolve=>setTimeout(resolve,retryMs));}
   }
   throw new UpdateError('新版本启动或云端连接检查失败');
 }
@@ -129,13 +154,14 @@ function productionAdapters(config){
       await buildRun(config.npm,['ci','--prefix',directory,'--omit=dev','--ignore-scripts','--no-bin-links','--no-audit','--no-fund'],{timeout:300000});
       await buildRun(config.node,[path.join(directory,'build-bundle.js')],{cwd:directory,timeout:60000});
       await buildRun(config.node,['--check',path.join(directory,'server.js')],{timeout:30000});
-      const accounts=await readEnvironment(path.join(config.configDir,'accounts.env'));
+      const accounts={...await readEnvironment(path.join(config.configDir,'runtime.env')),...await readEnvironment(path.join(config.configDir,'accounts.env'))};
+      const managed=await managedAccountsPresent({runtime:accounts,stateDir:config.stateDir});
       if(accounts.BOAT_ACCOUNTS_ENABLED==='1')await ordinary(path.join(directory,'server/account-api.js'));
-      await buildRun(config.node,[path.join(config.helperDir,'validate-release.cjs'),directory,commit,...(accounts.BOAT_ACCOUNTS_ENABLED==='1'?['--accounts']:[])],{timeout:30000});
+      await buildRun(config.node,[path.join(config.helperDir,'validate-release.cjs'),directory,commit,...(accounts.BOAT_ACCOUNTS_ENABLED==='1'?['--accounts']:[]),...(managed?['--managed-accounts']:[])],{timeout:30000});
       return manifest.version;
     },
     service:action=>rootRun(config.systemctl,[action,config.service],{timeout:30000}),
-    health:commit=>health({port:config.port,commit,configDir:config.configDir}),
+    health:commit=>health({port:config.port,commit,configDir:config.configDir,stateDir:config.stateDir}),
     log:error=>console.error('[boat-update]',error.message,error.command||'',error.detail||'')
   };
 }
@@ -274,4 +300,4 @@ if(require.main===module){
     return runUpdate(installed);
   }).then(result=>{if(result.status==='failed')process.exitCode=1;}).catch(error=>{console.error('[boat-update]',error.message);process.exitCode=1;});
 }
-module.exports={runUpdate,validateRequest,safeCopyTree,readJson,command,health,REPOSITORY,BRANCH,DEFAULTS};
+module.exports={runUpdate,validateRequest,safeCopyTree,readJson,command,health,managedAccountsPresent,readinessMatches,REPOSITORY,BRANCH,DEFAULTS};

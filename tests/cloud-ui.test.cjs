@@ -9,7 +9,7 @@ function payload(){
   }
   return Buffer.concat(frames).toString('base64');
 }
-function setup(){
+function setup({serverClock=true,serverOffset=0}={}){
   let now=10000,wall=1770000000000,authorized=true,brokerConnected=true;
   const streams=[],timers=new Map();let timerId=0;
   class FakeEventSource extends EventTarget {
@@ -17,17 +17,11 @@ function setup(){
     close(){this.closed=true;}
     send(type,data){this.dispatchEvent(new MessageEvent(type,{data:JSON.stringify(data)}));}
   }
-  class FakeBluetooth extends EventTarget {
-    constructor(){super();this.connected=false;this.busy=false;this.parser=new P.UART4StreamParser();this.disconnects=0;this.requests=0;}
-    async connect(){this.connected=true;this.dispatchEvent(new CustomEvent('connection',{detail:{connected:true,id:'ble',name:'T10'}}));}
-    disconnect(){this.connected=false;this.disconnects++;this.dispatchEvent(new CustomEvent('connection',{detail:{connected:false}}));}
-    request(){this.requests++;return Promise.resolve({});}
-  }
-  const context={EventTarget,CustomEvent,Uint8Array,atob,BoatModules:{uart4Protocol:P},BoatLink:FakeBluetooth,
+  const context={EventTarget,CustomEvent,Uint8Array,atob,BoatModules:{uart4Protocol:P},
     window:{},document:{hidden:false},EventSource:FakeEventSource,performance:{now:()=>now},Date:{now:()=>wall},
     setInterval:fn=>{const id=++timerId;timers.set(id,fn);return id;},clearInterval:id=>timers.delete(id),
     fetch:async(url,options)=>{
-      let status=200,body={serverTime:wall};
+      let status=200,body=serverClock?{serverTime:wall+serverOffset}:{};
       if(url.endsWith('/config'))body={...body,enabled:true,requiresLogin:true};
       else if(url.endsWith('/login')){authorized=true;body.ok=true;}
       else if(url.endsWith('/session')){authorized=false;body.ok=true;}
@@ -37,8 +31,8 @@ function setup(){
     }};
   vm.runInNewContext(fs.readFileSync(path.join(root,'public/cloud-transport.js'),'utf8'),context);
   const cloud=new context.window.CloudBoatLink();
-  return {cloud,context,streams,timers,FakeBluetooth,
-    packet:(extra={})=>({deviceId:'boat-123',receivedAt:wall,ageMs:0,payload:payload(),...extra}),
+  return {cloud,context,streams,timers,
+    packet:(extra={})=>({deviceId:'boat-123',receivedAt:wall+serverOffset,ageMs:0,payload:payload(),...extra}),
     advance:ms=>{now+=ms;wall+=ms;},setAuthorized:value=>authorized=value,setBroker:value=>brokerConnected=value};
 }
 async function connected(h){await h.cloud.initialize();await h.cloud.connect('boat-123');return h.streams.at(-1);}
@@ -50,6 +44,77 @@ test('云端通道建立不伪装成实时设备；完整176字节沿用UART4解
   assert.equal(frames[0].receivedAtMonotonic,9700);assert.equal(h.cloud.parser.getStats().framesReceived,4);
   assert.equal(connections.at(-1).readOnly,true);assert.equal(connections.at(-1).id,'cloud:boat-123');
   await assert.rejects(h.cloud.request('write',{}),/只读/);
+});
+test('转发延迟使用校时后的服务器接收时间，独立于遥测年龄且不出现负值',async()=>{
+  const h=setup({serverOffset:120000}),frames=[];h.cloud.addEventListener('frame',e=>frames.push(e.detail));
+  const stream=await connected(h);assert.equal(h.cloud.clockKnown,true);assert.equal(h.cloud.serverOffset,120000);
+  stream.send('telemetry',h.packet({receivedAt:1770000000000+120000-125,ageMs:350}));
+  assert.equal(frames.length,4);
+  for(const frame of frames){assert.equal(frame.cloudForwardDelayMs,125);assert.equal(frame.receivedAtMonotonic,9650);}
+  stream.send('telemetry',h.packet({receivedAt:1770000000000+120000+30}));
+  assert.equal(frames.length,8);assert.equal(frames.at(-1).cloudForwardDelayMs,0);
+});
+test('未校时或缺少有效服务器接收时间时，转发延迟明确为未知而不是0ms',async()=>{
+  for(const [label,options,extra] of [
+    ['未校时',{serverClock:false},{}],
+    ['缺少时间戳',{}, {receivedAt:undefined}],
+    ['空时间戳',{}, {receivedAt:null}],
+    ['非数值时间戳',{}, {receivedAt:'1770000000000'}]
+  ]){
+    const h=setup(options),frames=[];h.cloud.addEventListener('frame',e=>frames.push(e.detail));
+    const stream=await connected(h);stream.send('telemetry',h.packet(extra));
+    assert.equal(frames.length,4,label);assert.equal(h.cloud.connected,true,label);
+    for(const frame of frames)assert.equal(frame.cloudForwardDelayMs,null,label);
+  }
+});
+
+test('船云延迟元数据独立于转发与遥测年龄，旧固件逐包恢复未知',async()=>{
+  const h=setup(),frames=[];h.cloud.addEventListener('frame',e=>frames.push(e.detail));
+  const stream=await connected(h);
+  stream.send('telemetry',h.packet({receivedAt:1770000000000-80,ageMs:230,
+    uplinkDelayMs:120.25,uplinkRttMs:160.5,uplinkUncertaintyMs:82.25}));
+  assert.equal(frames.length,4);
+  for(const frame of frames){
+    assert.equal(frame.cloudUplinkDelayMs,120.25);assert.equal(frame.cloudUplinkRttMs,160.5);
+    assert.equal(frame.cloudUplinkUncertaintyMs,82.25);assert.equal(frame.cloudForwardDelayMs,80);
+    assert.equal(frame.receivedAtMonotonic,9770,'上行估计不改变原有遥测年龄');
+  }
+  stream.send('telemetry',h.packet());assert.equal(frames.length,8);
+  for(const frame of frames.slice(4)){
+    assert.equal(frame.cloudUplinkDelayMs,null);assert.equal(frame.cloudUplinkRttMs,null);assert.equal(frame.cloudUplinkUncertaintyMs,null);
+  }
+});
+
+test('非法上行延迟不显示为有效值，迟到与错设备数据不能覆盖当前估计',async()=>{
+  const h=setup(),frames=[];h.cloud.addEventListener('frame',e=>frames.push(e.detail));
+  const stream=await connected(h);
+  for(const value of [null,undefined,'100',-1,Infinity,NaN,60001]){
+    stream.send('telemetry',h.packet({uplinkDelayMs:value,uplinkRttMs:value,uplinkUncertaintyMs:value}));
+    assert.equal(frames.at(-1).cloudUplinkDelayMs,null);assert.equal(frames.at(-1).cloudUplinkRttMs,null);assert.equal(frames.at(-1).cloudUplinkUncertaintyMs,null);
+  }
+  stream.send('telemetry',h.packet({uplinkDelayMs:0,uplinkRttMs:0,uplinkUncertaintyMs:1}));
+  assert.equal(frames.at(-1).cloudUplinkDelayMs,0);
+  const count=frames.length;
+  stream.send('telemetry',h.packet({deviceId:'boat-second',uplinkDelayMs:999}));
+  stream.send('telemetry',h.packet({ageMs:1000,uplinkDelayMs:999}));
+  assert.equal(frames.length,count);assert.equal(frames.at(-1).cloudUplinkDelayMs,0);
+  await h.cloud.connect('boat-second');const next=h.streams.at(-1);
+  stream.send('telemetry',h.packet({uplinkDelayMs:999}));assert.equal(frames.length,count);
+  next.send('telemetry',h.packet({deviceId:'boat-second',uplinkDelayMs:42}));
+  assert.equal(frames.at(-1).cloudUplinkDelayMs,42);
+});
+test('切换MQTT设备后旧SSE不能更新船名、有效帧或转发延迟',async()=>{
+  const h=setup(),frames=[],connections=[];h.cloud.addEventListener('frame',e=>frames.push(e.detail));h.cloud.addEventListener('connection',e=>connections.push(e.detail));
+  const previous=await connected(h);previous.send('telemetry',h.packet({receivedAt:1770000000000-111}));
+  assert.equal(frames.length,4);assert.equal(frames.at(-1).cloudForwardDelayMs,111);
+  await h.cloud.connect('boat-second');const current=h.streams.at(-1);
+  assert.notEqual(current,previous);assert.equal(previous.closed,true);assert.equal(h.cloud.selectedId,'boat-second');assert.equal(h.cloud.connected,false);
+  previous.send('telemetry',h.packet({receivedAt:1770000000000-222}));
+  current.send('telemetry',h.packet());assert.equal(frames.length,4);assert.equal(h.cloud.connected,false);
+  current.send('telemetry',h.packet({deviceId:'boat-second',receivedAt:1770000000000-24}));
+  assert.equal(frames.length,8);assert.equal(frames.at(-1).cloudForwardDelayMs,24);
+  assert.equal(connections.at(-1).id,'cloud:boat-second');assert.equal(connections.at(-1).name,'boat-second');
+  assert.equal(h.cloud.parser.getStats().framesReceived,4);
 });
 test('迟到、错设备、损坏和超长遥测都不会恢复云端实时状态',async()=>{
   const h=setup(),stream=await connected(h);let count=0;h.cloud.addEventListener('frame',()=>count++);
@@ -78,16 +143,6 @@ test('后台恢复使用新SSE，旧队列与缓存不会复活姿态；401会�
   h.setAuthorized(false);next.send('error',{});await new Promise(resolve=>setImmediate(resolve));
   assert.equal(h.cloud.connected,false);assert.equal(h.cloud.authenticated,false);assert.equal(next.closed,true);assert.equal(h.cloud.wanted,false);
 });
-test('单一数据源路由切换时断开旧连接，云端拒绝所有参数事务',async()=>{
-  const h=setup(),ble=new h.FakeBluetooth(),link=new h.context.window.BoatSourceLink(ble,h.cloud),frames=[];
-  link.addEventListener('frame',e=>frames.push(e.detail));await link.connect();assert.equal(link.connected,true);
-  link.select('cloud');assert.equal(ble.connected,false);assert.equal(ble.disconnects,1);assert.equal(link.readOnly,true);
-  ble.dispatchEvent(new CustomEvent('frame',{detail:{sequence:99}}));assert.equal(frames.length,0);
-  for(const kind of ['read','write','flash'])await assert.rejects(link.request(kind,{}),/只读/);
-  assert.equal(ble.requests,0);await connected(h);h.streams.at(-1).send('telemetry',h.packet());assert.equal(frames.length,4);
-  link.select('bluetooth');assert.equal(h.streams.at(-1).closed,true);assert.equal(link.readOnly,false);assert.equal(link.connected,false);
-  h.cloud.emit('frame',{sequence:100});assert.equal(frames.length,4);
-});
 function parameterPanel(){
   const ids={},inputs=[{dataset:{key:'speed'},value:'12'}],buttons=[{dataset:{action:'save',slot:'0'}},{dataset:{action:'use',slot:'0'}}],storage=new Map();
   const context={window:{},document:{getElementById:id=>ids[id]||(ids[id]={dataset:{}}),querySelectorAll:selector=>selector.startsWith('#parameterFields')?inputs:buttons},
@@ -106,7 +161,7 @@ test('云端参数界面和直接调用均拦截读写/Flash/一键使用，允�
   await assert.rejects(panel.actSlot(0,'use'),/只读/);await panel.actSlot(0,'save');assert.equal(JSON.parse(storage.get('preset'))[0].values.speed,12);
   const exported=JSON.parse(panel.exportText());assert.equal(exported.values.speed,12);assert.equal(!!exported.confirmed,false);
 });
-test('蓝牙参数响应在切到云端后迟到，不能恢复设备确认值或开启写入按钮',async()=>{
+test('切换MQTT设备后旧参数响应迟到，不能恢复设备确认值或开启写入按钮',async()=>{
   const {panel,ids,inputs}=parameterPanel();let complete;
   panel.link.readOnly=false;panel.link.request=()=>new Promise(resolve=>complete=resolve);
   const pending=panel.command('read');panel.link.generation++;panel.link.readOnly=true;panel.reset(true);

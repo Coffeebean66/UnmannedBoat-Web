@@ -1,17 +1,10 @@
-const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),http=require('node:http');
-const root=path.resolve(__dirname,'..');
+const {test}=require('node:test'),assert=require('node:assert/strict'),http=require('node:http');
 const P=require('../public/utils/uart4Protocol');
 const {createServer}=require('../server');
 const {BoatTrack}=require('../public/utils/boatTrack');
 const {prepareImuDisplay}=require('../public/utils/imuDisplay');
 const {prepareVelocityDisplay}=require('../public/utils/velocityDisplay');
 const {prepareBoatChart,createBoatChartSample}=require('../public/utils/boatChart');
-function loadTransport(){
-  let timeout;
-  const context={EventTarget,CustomEvent,Uint8Array,BoatModules:{uart4Protocol:P},navigator:{},window:{isSecureContext:true},setTimeout:fn=>(timeout=fn,1),clearTimeout(){}};
-  vm.runInNewContext(fs.readFileSync(path.join(root,'public/transport.js'),'utf8'),context);
-  return {link:new context.window.BoatLink(),context,expire:()=>timeout()};
-}
 function rtk(){
   const b=new Uint8Array(40),v=new DataView(b.buffer);
   b.set([0xa5,0x5a,2,2,40,3]);v.setUint32(6,42,true);v.setInt16(14,1200,true);v.setInt16(16,-500,true);
@@ -45,32 +38,29 @@ test('RTK/IMU源超时、断连不显示旧数据；轨迹保持WGS84且断流�
   track.record({...frame.velocity,latitude:31.2},5000,true);
   assert.equal(track.segments.length,2);
 });
+test('人工地平仪原始角度保留精度，欧拉角独立有效且失效时不产生零姿态',()=>{
+  const frame={imu:{received:true,fresh:true,ageMs:20,gyroValid:false,eulerValid:true,
+    gyroRadps:[0,0,0],rollDegrees:12.345,pitchDegrees:-6.789,yawDegrees:32.123}};
+  const display=prepareImuDisplay(frame,0,50,true);
+  assert.equal(display.eulerFresh,true);
+  assert.equal(display.gyroFresh,false);
+  assert.equal(display.roll,'12.35');
+  assert.deepEqual([display.rollDegrees,display.pitchDegrees,display.yawDegrees],[12.345,-6.789,32.123]);
+  for(const view of [prepareImuDisplay(frame,0,1000,true),prepareImuDisplay(frame,0,50,false),
+    prepareImuDisplay({imu:{...frame.imu,eulerValid:false}},0,50,true),
+    prepareImuDisplay({imu:{...frame.imu,pitchDegrees:NaN}},0,50,true)]){
+    assert.equal(view.eulerFresh,false);
+    assert.equal(view.pitch,'--');
+    assert.deepEqual([view.rollDegrees,view.pitchDegrees,view.yawDegrees],[null,null,null]);
+  }
+});
+
 test('航向跨359°→1°曲线走最短角度',()=>{
   const boat={received:true,feedbackValid:true,ageMs:0,controlMode:2,speedLoop:true,headingValid:true,sbusValid:true,motorsValid:true,targetMps:1,actualMps:1,requestedMps:1,commonPercent:10,turnPercent:2,targetHeading:1,actualHeading:359,headingError:2};
   const first=createBoatChartSample({boat},0,0,true);
   const second=createBoatChartSample({boat:{...boat,actualHeading:1}},100,100,true,first);
   assert.equal(second.headingActualPlot-first.headingActualPlot,2);
   assert.equal(prepareBoatChart([first,second],'heading').summary.error,'0.00');
-});
-test('参数串行分片按属性写入，只有匹配序号响应才结束事务',async()=>{
-  const {link}=loadTransport(),chunks=[];
-  link.device={gatt:{connected:true}};link.tx={};
-  link.rx={properties:{write:true},writeValueWithResponse:async bytes=>chunks.push([...bytes]),writeValueWithoutResponse:async()=>assert.fail('不应选择无响应写法')};
-  const pending=link.request('read');
-  await new Promise(resolve=>setImmediate(resolve));
-  assert.deepEqual(chunks.map(x=>x.length),[20,20,16]);
-  link.handleResponse({requestSequence:99,status:0});assert.ok(link.pending);
-  const expected={requestSequence:1,status:3,parameters:{}};
-  link.handleResponse(expected);assert.equal(await pending,expected);assert.equal(link.pending,null);
-});
-test('参数超时/并发/断开会取消事务，迟到响应不能结束新请求',async()=>{
-  const {link,expire}=loadTransport();
-  link.device={gatt:{connected:true,disconnect(){}},removeEventListener(){}};
-  link.tx={removeEventListener(){}};link.rx={properties:{writeWithoutResponse:true},writeValueWithoutResponse:async()=>{}};
-  const first=link.request('read');await assert.rejects(link.request('read'),/等待/);
-  expire();await assert.rejects(first,/响应超时/);
-  const second=link.request('read');link.handleResponse({requestSequence:1,status:0});assert.ok(link.pending);
-  link.disconnect();await assert.rejects(second,/断开/);
 });
 test('静态服务器404、路径穿越、非法URL、HEAD及healthz',async(t)=>{
   const server=createServer();await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
