@@ -1,0 +1,42 @@
+/* 设备凭据在服务器独立管理；卡片沿用平台深浅色变量。 */
+.mqtt-device-settings { margin:0 0 22px; padding:18px; border:1px solid var(--line-strong); border-radius:10px; background:linear-gradient(135deg,var(--accent-soft),var(--panel) 72%); }
+.mqtt-device-heading,.mqtt-device-title { display:flex; align-items:center; gap:10px; min-width:0; }
+.mqtt-device-heading { justify-content:space-between; align-items:flex-start; flex-wrap:wrap; margin-bottom:12px; }
+.mqtt-device-title h3 { font-size:15px; font-weight:650; }
+.mqtt-device-title p { margin-top:2px; font-size:10px; color:var(--muted); letter-spacing:.05em; }
+.mqtt-device-settings button:not(.primary) { color:var(--text); }
+.mqtt-device-heading > button,.mqtt-device-row > button { flex:none; min-height:32px; font-size:11px; }
+.mqtt-device-description,.mqtt-device-access { font-size:12px; line-height:1.8; color:var(--muted); overflow-wrap:anywhere; }
+.mqtt-device-summary { display:flex; justify-content:space-between; flex-wrap:wrap; gap:6px; margin:14px 0 8px; color:var(--muted); font-size:10px; }
+.mqtt-device-summary strong { color:var(--text); font-weight:500; }
+.mqtt-device-list { display:grid; grid-template-columns:1fr 1fr; gap:8px; list-style:none; margin:0; padding:0; max-height:300px; overflow:auto; scrollbar-width:thin; }
+.mqtt-device-row { display:flex; justify-content:space-between; align-items:center; gap:12px; min-width:0; padding:12px; border:1px solid var(--line); border-radius:7px; background:var(--panel); }
+.mqtt-device-identity { min-width:0; }
+.mqtt-device-identity strong { display:block; color:var(--text); font-size:12px; font-weight:600; overflow-wrap:anywhere; }
+.mqtt-device-identity span { display:block; margin-top:5px; color:var(--muted); font-size:10px; overflow-wrap:anywhere; }
+.mqtt-device-form { margin-top:14px; padding:15px; border:1px solid var(--line-strong); border-radius:8px; background:var(--soft); }
+.mqtt-device-form h4 { margin:0 0 12px; font-size:13px; font-weight:600; }
+.mqtt-device-fields { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.mqtt-device-fields label { display:grid; align-content:start; gap:6px; min-width:0; color:var(--text); font-size:12px; font-weight:500; }
+.mqtt-device-fields input { width:100%; min-width:0; padding:10px 11px; border:1px solid var(--line-strong); border-radius:6px; background:var(--panel); color:var(--text); font-size:12px; }
+.mqtt-device-fields input::placeholder { color:var(--faint); }
+.mqtt-device-fields input[readonly] { color:var(--muted); }
+.mqtt-device-fields small,.mqtt-device-password-hint { color:var(--muted); font-size:10px; line-height:1.7; font-weight:400; }
+.mqtt-device-password-hint { margin:9px 0 0; font-size:11px; }
+.mqtt-device-reconnect-notice { margin:10px 0 0; padding:9px 11px; border-radius:5px; background:var(--warn-bg); color:var(--warn); font-size:11px; line-height:1.8; overflow-wrap:anywhere; }
+.mqtt-device-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
+.mqtt-device-actions button { min-height:34px; font-size:11px; }
+.mqtt-device-status { margin-top:12px; color:var(--muted); font-size:11px; line-height:1.8; overflow-wrap:anywhere; }
+.mqtt-device-status[data-tone="error"] { color:var(--danger); }
+.mqtt-device-status[data-tone="success"] { color:var(--success); }
+@media(max-width:600px) {
+  .mqtt-device-settings { padding:14px; }
+  .mqtt-device-title .card-icon { display:none; }
+  .mqtt-device-title h3 { font-size:14px; }
+  .mqtt-device-title p { font-size:9px; letter-spacing:0; }
+  .mqtt-device-heading > button { width:100%; }
+  .mqtt-device-list,.mqtt-device-fields { grid-template-columns:1fr; }
+  .mqtt-device-form { padding:12px; }
+  .mqtt-device-row { gap:8px; padding:11px; }
+  .mqtt-device-actions button { flex:1; }
+}

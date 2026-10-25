@@ -9,6 +9,7 @@
   const horizon=new BoatArtificialHorizon($('imuHorizon'));
   const mapSettings=new BoatMapSettingsPanel();
   const users=new BoatUserManagementPanel({toast});
+  const mqttDevices=new BoatMqttDeviceSettingsPanel();
   const wgs=(latitude,longitude)=>Number.isFinite(latitude)&&Number.isFinite(longitude)&&Math.abs(latitude)<=90&&Math.abs(longitude)<=180?{latitude,longitude}:null;
   const track=new M.boatTrack.BoatTrack(wgs);
   const state={latest:{},history:[],chartMode:'speed',lastReceived:null,lastUpdateAt:null,forwardDelayMs:null,
@@ -303,13 +304,13 @@
   });
   on('mapCenter',()=>{if(!map?.ready)toast('地图尚未就绪，请查看地图底部提示');else if(lastLocation)map.setView(lastLocation,16);else toast('尚无有效定位');});
   $('mapFollow').onchange=()=>{if($('mapFollow').checked&&lastLocation&&map?.ready)map.setView(lastLocation,16);};
-  const openSettings=()=>{window.BoatAuth?.assertManage();$('settingsDialog').showModal();users.open();mapSettings.open();};
+  const openSettings=()=>{window.BoatAuth?.assertManage();$('settingsDialog').showModal();users.open();mqttDevices.open();mapSettings.open();};
   on('settingsToggle',openSettings);
   on('settingsEntry',openSettings);
   on('sidebarSettings',openSettings);
   on('settingsClose',()=>$('settingsDialog').close());
-  $('settingsDialog').addEventListener('close',()=>users.close());
-  window.addEventListener('pagehide',()=>users.destroy(),{once:true});
+  $('settingsDialog').addEventListener('close',()=>{users.close();mqttDevices.close();});
+  window.addEventListener('pagehide',()=>{users.destroy();mqttDevices.destroy();},{once:true});
   for(const [id,kind] of [['readParameters','read'],['writeParameters','write'],['saveFlash','flash']])on(id,()=>params.command(kind));
   on('fillTuning',()=>params.tune());
   on('helpToggle',()=>{$('parameterHelp').hidden=!$('parameterHelp').hidden;});
@@ -395,5 +396,5 @@
   window.addEventListener('resize',()=>render());
   window.addEventListener('boat-theme-change',()=>{readChartPalette();map?.setTheme(document.documentElement.dataset.theme);render();});
   // 提供浏览器控制台诊断入口，界面不显示原始字节流。
-  window.boatMonitor={link,params,viewer,horizon,track,map,mapVectors,mapSettings};
+  window.boatMonitor={link,params,viewer,horizon,track,map,mapVectors,mapSettings,mqttDevices};
 })();

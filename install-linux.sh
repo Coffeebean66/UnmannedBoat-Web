@@ -56,6 +56,9 @@ for item in "$config" "$target" "$nginx_conf" "$acme" "$renew_hook" \
   /etc/systemd/system/unmanned-boat-web-update.service \
   /etc/systemd/system/unmanned-boat-web-update.path \
   /usr/local/lib/unmanned-boat-web-update /var/lib/unmanned-boat-web-update \
+  /etc/systemd/system/unmanned-boat-mqtt-admin.service \
+  /etc/systemd/system/unmanned-boat-mqtt-admin.socket \
+  /usr/local/lib/unmanned-boat-mqtt-admin /run/unmanned-boat-mqtt-admin \
   "/etc/letsencrypt/live/$domain" "/etc/letsencrypt/archive/$domain" "/etc/letsencrypt/renewal/$domain.conf"; do
   reject_existing "$item"
 done
@@ -235,6 +238,8 @@ systemctl enable --now certbot.timer
 
 phase=web-updater
 bash "$work_dir/source/maintenance/install-update.sh" "$origin" "$port"
+phase=mqtt-device-administration
+bash "$work_dir/source/maintenance/install-mqtt-device-admin.sh"
 phase=health-check
 curl --fail --show-error --silent --resolve "$domain:443:127.0.0.1" --max-time 15 "$origin/healthz" >/dev/null
 systemctl is-active --quiet unmanned-boat-web.service unmanned-boat-mqtt.service nginx.service
@@ -245,5 +250,5 @@ echo "MQTT boat-01 firmware connection settings (root only): $config/access.txt"
 echo "Use: sudo cat $config/accounts-access.txt"
 echo "Services: systemctl status unmanned-boat-web unmanned-boat-mqtt nginx"
 echo "Logs: journalctl -u unmanned-boat-web -u unmanned-boat-mqtt -n 80"
-echo "Web updater is enabled. No firewall/security-group rules were changed."
+echo "Web updater and administrator MQTT device-account management are enabled. No firewall/security-group rules were changed."
 echo "MQTT TCP 1883 is unencrypted; the generated dedicated device credentials are required."

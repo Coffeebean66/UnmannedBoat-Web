@@ -1,0 +1,188 @@
+/* 真实账户鉴权/HTTP 与受限 socket 客户端；不连接实船或生产 Broker。 */
+'use strict';
+const { test } = require('node:test'), assert = require('node:assert/strict');
+const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http'), crypto = require('node:crypto');
+const { EventEmitter } = require('node:events');
+const { createServer } = require('../server');
+const { createMqttDeviceClient, validateInput, snapshot } = require('../server/mqtt-device-api');
+const ORIGIN = 'https://mqtt-admin.test', revision = 'a'.repeat(64), nextRevision = 'b'.repeat(64);
+const credentials = { admin: 'admin-only-test', guest: 'guest-only-test' };
+
+function request(port, route, { method = 'GET', body, raw, cookie, origin = ORIGIN, headers = {} } = {}) {
+  const data = raw === undefined ? body === undefined ? undefined : JSON.stringify(body) : raw;
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path: route, method, agent: false, headers: {
+      ...(data === undefined ? {} : { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) }),
+      ...(cookie ? { Cookie: cookie } : {}), ...(origin ? { Origin: origin } : {}), ...headers
+    } }, res => {
+      let raw = ''; res.on('data', chunk => raw += chunk); res.on('end', () => {
+        let data; try { data = JSON.parse(raw); } catch (_) {}
+        resolve({ status: res.statusCode, data, raw, headers: res.headers });
+      });
+    }); req.on('error', reject); req.end(data);
+  });
+}
+
+async function fixture(t, options = {}) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'boat-mqtt-admin-api-'));
+  let time = 10000; const calls = [];
+  const env = { BOAT_ACCOUNTS_ENABLED: '1', BOAT_ACCOUNTS_ORIGIN: ORIGIN, BOAT_CLOUD_PASSWORD: 'legacy-viewer-test-only',
+    BOAT_ADMIN_USERNAME: 'admin', BOAT_ADMIN_PASSWORD: credentials.admin,
+    BOAT_GUEST_USERNAME: 'guest', BOAT_GUEST_PASSWORD: credentials.guest, ...options.env };
+  const client = options.client || (async (method, route, body) => {
+    calls.push({ method, route, body: body && { ...body } });
+    return { ...(method === 'PUT' ? { ok: true, requiresReconnect: true } : {}),
+      devices: [{ deviceId: 'boat-01', username: body?.username || 'boat-01', password: 'must-not-leak' }],
+      revision: method === 'PUT' ? nextRevision : revision, secret: 'must-not-leak' };
+  });
+  const cloud = new EventEmitter(); Object.assign(cloud, { enabled: true, start() {}, stop() {}, list: () => ({ brokerConnected: true, devices: [] }) });
+  const server = createServer({ env, cloud, accountOptions: { storeFile: path.join(directory, 'accounts.json'), now: () => time },
+    mapOptions: { file: path.join(directory, 'map.json') }, mqttAdminOptions: { client, bodyTimeoutMs: 100, ...options.mqttAdminOptions } });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); fs.rmSync(directory, { recursive: true, force: true }); });
+  const call = (route, input) => request(server.address().port, route, input);
+  const login = async (username = 'admin') => {
+    const result = await call('/api/auth/login', { method: 'POST', body: { username, password: credentials[username] } });
+    assert.equal(result.status, 200, result.raw); return result.headers['set-cookie'][0].split(';')[0];
+  };
+  return { server, call, login, calls, advance: ms => time += ms };
+}
+const input = (values = {}) => ({ username: 'new-boat', password: 'NewPassword!123', revision, ...values });
+
+test('MQTT account list and mutation require a currently logged-in platform administrator', async t => {
+  const f = await fixture(t), admin = await f.login(), guest = await f.login('guest');
+  for (const [cookie, status] of [[undefined, 401], [guest, 403]]) {
+    assert.equal((await f.call('/api/mqtt/devices', { cookie })).status, status);
+    assert.equal((await f.call('/api/mqtt/devices/boat-01', { cookie, method: 'PATCH', body: input() })).status, status);
+  }
+  assert.equal(f.calls.length, 0);
+  const listed = await f.call('/api/mqtt/devices', { cookie: admin, origin: null });
+  assert.equal(listed.status, 200); assert.equal(listed.headers['cache-control'], 'no-store');
+  assert.deepEqual(listed.data, { enabled: true, devices: [{ deviceId: 'boat-01', username: 'boat-01' }], revision });
+  assert.doesNotMatch(listed.raw, /password|secret|must-not-leak/);
+  const changed = await f.call('/api/mqtt/devices/boat-01', { cookie: admin, method: 'PATCH', body: input() });
+  assert.equal(changed.status, 200); assert.equal(changed.data.revision, nextRevision);
+  assert.equal(changed.data.requiresReconnect, true); assert.doesNotMatch(changed.raw, /password|secret|must-not-leak|NewPassword/);
+  assert.deepEqual(f.calls[1], { method: 'PUT', route: '/devices/boat-01', body: input() });
+  const preserved = input(); delete preserved.password;
+  assert.equal((await f.call('/api/mqtt/devices/boat-01', { cookie: admin, method: 'PATCH', body: preserved })).status, 200);
+  assert.equal(Object.hasOwn(f.calls[2].body, 'password'), false);
+});
+
+test('MQTT management rejects cross-site access, missing write Origin, disabled accounts and methods', async t => {
+  const f = await fixture(t), cookie = await f.login();
+  for (const options of [{ origin: 'https://evil.test' }, { origin: null, headers: { 'sec-fetch-site': 'cross-site' } }]) {
+    assert.equal((await f.call('/api/mqtt/devices', { cookie, ...options })).status, 403);
+  }
+  for (const origin of [null, 'https://evil.test']) assert.equal((await f.call('/api/mqtt/devices/boat-01', { cookie, origin, method: 'PATCH', body: input() })).status, 403);
+  assert.equal((await f.call('/api/mqtt/devices', { cookie, method: 'POST', body: input() })).status, 405);
+  assert.equal((await f.call('/api/mqtt/devices/boat-01', { cookie })).status, 405);
+  assert.equal((await f.call('/api/mqtt/devices/boat+01', { cookie, method: 'PATCH', body: input() })).status, 404);
+  assert.equal(f.calls.length, 0);
+  const disabled = await fixture(t, { env: { BOAT_ACCOUNTS_ENABLED: '0' } });
+  assert.equal((await disabled.call('/api/mqtt/devices')).status, 503);
+});
+
+test('invalid credentials, extra fields, bad revisions and oversized/non-JSON requests never reach the worker', async t => {
+  const f = await fixture(t), cookie = await f.login();
+  const invalid = [{ username: 'bad user' }, { username: 'x'.repeat(65) }, { username: 'x\nuser bridge' },
+    { password: 'short' }, { password: '' }, { password: 'has space' }, { password: 'has:colon' }, { password: '中文密码123456' },
+    { password: 'x'.repeat(65) }, { revision: 'abc' }, { deviceId: 'new-id' }, { username: ['boat'] }];
+  for (const value of invalid) assert.equal((await f.call('/api/mqtt/devices/boat-01', { cookie, method: 'PATCH', body: input(value) })).status, 400, JSON.stringify(value));
+  assert.equal((await f.call('/api/mqtt/devices/boat-01', { cookie, method: 'PATCH', raw: '{' })).status, 400);
+  assert.equal((await f.call('/api/mqtt/devices/boat-01', { cookie, method: 'PATCH', raw: 'x'.repeat(4097) })).status, 413);
+  assert.equal((await f.call('/api/mqtt/devices/boat-01', { cookie, method: 'PATCH', body: input(), headers: { 'Content-Type': 'text/plain' } })).status, 415);
+  assert.equal(f.calls.length, 0);
+});
+
+test('missing helper disables the read panel and mutations return an actionable error without local fallback', async t => {
+  const f = await fixture(t, { client: async () => { throw Object.assign(Error('unavailable'), { status: 503, unavailable: true }); } }), cookie = await f.login();
+  const result = await f.call('/api/mqtt/devices', { cookie }); assert.equal(result.status, 200); assert.equal(result.data.enabled, false);
+  assert.match(result.data.reason, /README/);
+  assert.equal((await f.call('/api/mqtt/devices/boat-01', { cookie, method: 'PATCH', body: input() })).status, 503);
+});
+
+test('serialized mutations do not retry and late replies after logout cannot disclose account metadata', async t => {
+  let release, started, count = 0; const began = new Promise(resolve => started = resolve);
+  const f = await fixture(t, { client: async () => { count++; started(); await new Promise(resolve => release = resolve); return { ok: true, requiresReconnect: true, devices: [{ deviceId: 'boat-01', username: 'changed' }], revision: nextRevision }; } });
+  const cookie = await f.login();
+  const pending = f.call('/api/mqtt/devices/boat-01', { cookie, method: 'PATCH', body: input() }); await began;
+  assert.equal((await f.call('/api/mqtt/devices/boat-01', { cookie, method: 'PATCH', body: input() })).status, 409);
+  await f.call('/api/auth/session', { cookie, method: 'DELETE' }); release();
+  const result = await pending; assert.equal(result.status, 401); assert.doesNotMatch(result.raw, /changed|NewPassword/); assert.equal(count, 1);
+});
+
+test('partial HTTP body rechecks authorization before dispatching or times out without changing credentials', async t => {
+  const f = await fixture(t), cookie = await f.login(), raw = JSON.stringify(input());
+  async function slow(logout) {
+    return new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: f.server.address().port, path: '/api/mqtt/devices/boat-01', method: 'PATCH', agent: false,
+        headers: { Cookie: cookie, Origin: ORIGIN, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(raw) } }, res => {
+        res.resume(); res.on('end', () => resolve(res.statusCode));
+      }); req.on('error', reject); req.write(raw.slice(0, 10));
+      if (logout) setTimeout(async () => { await f.call('/api/auth/session', { cookie, method: 'DELETE' }); req.end(raw.slice(10)); }, 10);
+    });
+  }
+  assert.equal(await slow(false), 408); assert.equal(await slow(true), 401); assert.equal(f.calls.length, 0);
+});
+
+test('strict snapshots strip secrets and reject ambiguous or invalid worker lists', () => {
+  const record = { devices: [{ deviceId: 'boat-01', username: 'device-01', password: 'not public' }], revision };
+  assert.deepEqual(snapshot(record).devices, [{ deviceId: 'boat-01', username: 'device-01' }]);
+  for (const bad of [{}, { ...record, revision: '' }, { ...record, devices: [...record.devices, ...record.devices] }, { ...record, devices: [{ deviceId: 'bad/id', username: 'device' }] }]) assert.throws(() => snapshot(bad));
+  assert.deepEqual(validateInput({ username: 'boat', revision }), { username: 'boat', revision });
+});
+
+test('socket client uses bounded fixed HTTP paths, masks helper errors, and never retries timed-out changes', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'boat-mqtt-socket-'));
+  const socketPath = process.platform === 'win32' ? '\\\\.\\pipe\\boat-mqtt-test-' + crypto.randomUUID() : path.join(directory, 'helper.sock');
+  let mode = 'success', received, requests = 0;
+  const server = http.createServer((req, res) => {
+    requests++; const chunks = []; req.on('data', chunk => chunks.push(chunk)); req.on('end', () => {
+      received = { method: req.method, path: req.url, body: chunks.length ? JSON.parse(Buffer.concat(chunks)) : undefined };
+      if (mode === 'timeout') return;
+      if (mode === 'secret-error') { res.writeHead(503); return res.end(JSON.stringify({ error: 'PRIVATE-PASSWORD-IN-DETAIL' })); }
+      if (mode === 'invalid') return res.end('{');
+      if (mode === 'oversized') return res.end('x'.repeat(32769));
+      res.end(JSON.stringify({ devices: [], revision }));
+    });
+  });
+  await new Promise(resolve => server.listen(socketPath, resolve));
+  t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); fs.rmSync(directory, { recursive: true, force: true }); });
+  const client = createMqttDeviceClient({ socketPath, timeoutMs: 100 });
+  assert.equal((await client('GET', '/devices')).revision, revision);
+  await client('PUT', '/devices/boat-01', input()); assert.deepEqual(received, { method: 'PUT', path: '/devices/boat-01', body: input() });
+  for (const value of ['secret-error', 'invalid', 'oversized']) { mode = value; await assert.rejects(client('GET', '/devices'), error => error.status === 503 && !error.message.includes('PRIVATE')); }
+  mode = 'timeout'; const before = requests;
+  await assert.rejects(client('PUT', '/devices/boat-01', input()), error => error.status === 504); assert.equal(requests, before + 1);
+  const missing = createMqttDeviceClient({ socketPath: process.platform === 'win32' ? socketPath + '-missing' : path.join(directory, 'missing.sock'), timeoutMs: 100 });
+  await assert.rejects(missing('GET', '/devices'), error => error.unavailable === true && !error.message.includes(socketPath));
+});
+
+test('administrator HTTP API traverses the actual local socket worker and persists a rename without changing topic ID or other hashes', async t => {
+  const { createMqttDeviceWorker } = require('../maintenance/mqtt-device-worker.cjs');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'boat-mqtt-admin-chain-')), file = name => path.join(directory, name);
+  const socketPath = process.platform === 'win32' ? '\\\\.\\pipe\\boat-mqtt-chain-' + crypto.randomUUID() : file('worker.sock');
+  const bridgeHash = '$7$101$bridge$unchanged', deviceHash = '$7$101$device$preserved';
+  fs.writeFileSync(file('.boat-cloud-deployment'), 'unmanned-boat-cloud-v1\n');
+  fs.writeFileSync(file('broker.service'), '# Owned by unmanned-boat-cloud-v1\n');
+  fs.writeFileSync(file('runtime.env'), 'BOAT_MQTT_USERNAME=boat-web-bridge\nBOAT_MQTT_TOPIC_PREFIX=boats\n');
+  fs.writeFileSync(file('passwd'), 'boat-01:' + deviceHash + '\nboat-web-bridge:' + bridgeHash + '\n', { mode: 0o640 });
+  fs.writeFileSync(file('acl'), 'user boat-01\ntopic write boats/boat-01/telemetry\ntopic write boats/boat-01/status\ntopic read boats/boat-01/parameter-command\n\nuser boat-web-bridge\ntopic read boats/+/telemetry\n', { mode: 0o640 });
+  fs.writeFileSync(file('access.txt'), 'Device password: obsolete-test-password\n', { mode: 0o600 });
+  fs.writeFileSync(file('mosquitto.conf'), 'allow_anonymous false\npassword_file ' + file('passwd') + '\nacl_file ' + file('acl') + '\n');
+  let restarts = 0;
+  const worker = createMqttDeviceWorker({ configDir: directory, brokerUnit: file('broker.service'), checkOwnership: false, service: async () => { restarts++; } });
+  await new Promise(resolve => worker.listen(socketPath, resolve));
+  const f = await fixture(t, { client: createMqttDeviceClient({ socketPath }) }), cookie = await f.login();
+  t.after(async () => { worker.closeAllConnections(); await new Promise(resolve => worker.close(resolve)); fs.rmSync(directory, { recursive: true, force: true }); });
+  const before = await f.call('/api/mqtt/devices', { cookie }); assert.equal(before.status, 200, before.raw);
+  const changed = await f.call('/api/mqtt/devices/boat-01', { cookie, method: 'PATCH', body: { username: 'vessel-account', revision: before.data.revision } });
+  assert.equal(changed.status, 200, changed.raw); assert.equal(changed.data.requiresReconnect, true);
+  assert.deepEqual(changed.data.devices, [{ deviceId: 'boat-01', username: 'vessel-account' }]); assert.equal(restarts, 1);
+  assert.equal(fs.readFileSync(file('passwd'), 'utf8'), 'vessel-account:' + deviceHash + '\nboat-web-bridge:' + bridgeHash + '\n');
+  const acl = fs.readFileSync(file('acl'), 'utf8'); assert.match(acl, /user vessel-account/); assert.match(acl, /boats\/boat-01\/telemetry/); assert.doesNotMatch(acl, /boats\/vessel-account/);
+  assert.equal((await f.call('/api/mqtt/devices/boat-01', { cookie, method: 'PATCH', body: { username: 'second-account', revision: before.data.revision } })).status, 409);
+  const after = await f.call('/api/mqtt/devices', { cookie }); assert.equal(after.data.revision, changed.data.revision);
+  assert.doesNotMatch(after.raw, /\$7\$|password|obsolete/); assert.equal(restarts, 1);
+});

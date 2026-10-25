@@ -48,6 +48,7 @@ esac
   write('templates/package.json','{"name":"fixture","version":"1.14.0"}\n');
   write('templates/deploy-cloud.sh',`#!/usr/bin/env bash\nprintf 'deploy-cloud %s\\n' "$*" >> "$MOCK_LOG"\nmkdir -p ${quote(root+'/etc/unmanned-boat-web')} ${quote(root+'/opt/unmanned-boat-web')}\nprintf 'unmanned-boat-cloud-v1\\n' > ${quote(root+'/etc/unmanned-boat-web/.boat-cloud-deployment')}\n`);
   write('templates/maintenance/install-update.sh','#!/usr/bin/env bash\nprintf "install-update %s\\n" "$*" >> "$MOCK_LOG"\n');
+  write('templates/maintenance/install-mqtt-device-admin.sh','#!/usr/bin/env bash\nprintf "install-mqtt-device-admin %s\\n" "$*" >> "$MOCK_LOG"\n');
   write('bin/git',`#!/usr/bin/env bash
 if [[ "$1" == clone && "$*" == *'--depth 1 --branch main https://github.com/Coffeebean66/UnmannedBoat-Web.git '* && "\${@: -1}" == "$MOCK_ROOT/tmp/unmanned-boat-install."*/source ]]; then
   cp -R ${quote(root+'/templates')} "\${@: -1}"; printf 'git clone\\n' >> "$MOCK_LOG"
@@ -96,6 +97,7 @@ test('fresh installation creates accounts and HTTPS/SSE settings and enables upd
   const passwords=[...env.matchAll(/PASSWORD=(.+)/g)].map(match=>match[1]);assert.equal(passwords.length,2);assert.notEqual(passwords[0],passwords[1]);for(const password of passwords){assert.ok(credentials.includes(password));assert.ok(!(result.stdout+result.stderr).includes(password));}
   const nginx=f.read('etc/nginx/conf.d/unmanned-boat-web.conf');assert.match(nginx,/listen 443 ssl/);assert.match(nginx,/proxy_pass http:\/\/127\.0\.0\.1:7890/);assert.match(nginx,/proxy_buffering off/);assert.match(nginx,/proxy_read_timeout 3600s/);assert.ok(fs.existsSync(path.join(f.directory,'etc/letsencrypt/renewal-hooks/deploy/unmanned-boat-web-reload.sh')));
   const calls=f.read('calls.log');assert.match(calls,/deploy-cloud 7890 127\.0\.0\.1 https:\/\/boat.example.com/);assert.match(calls,/install-update https:\/\/boat.example.com 7890/);assert.doesNotMatch(calls,/systemctl stop|apt .*mosquitto/);
+  assert.match(calls,/install-mqtt-device-admin/);assert.ok(calls.indexOf('install-update')<calls.indexOf('install-mqtt-device-admin'),'MQTT management follows updater bootstrap');
   assert.match(calls,/apt install .*\bprocps\b/);assert.match(calls,/apt install .*\blibstdc\+\+6\b/);assert.match(calls,/git clone/);assert.doesNotMatch(calls,/nodejs\.org|^tar /m);
   assert.equal(fs.readdirSync(path.join(f.directory,'tmp')).length,0,'temporary checkout is removed');
 });

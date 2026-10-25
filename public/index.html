@@ -14,6 +14,7 @@
   <link rel="stylesheet" href="map-view.css">
   <link rel="stylesheet" href="map-settings.css">
   <link rel="stylesheet" href="user-management.css">
+  <link rel="stylesheet" href="mqtt-device-settings.css">
   <link rel="stylesheet" href="workspace.css">
   <script defer src="vendor/leaflet/leaflet.js"></script>
   <script defer src="utils-bundle.js"></script>
@@ -29,6 +30,7 @@
   <script defer src="map-velocity-view.js"></script>
   <script defer src="map-settings.js"></script>
   <script defer src="user-management.js"></script>
+  <script defer src="mqtt-device-settings.js"></script>
   <script defer src="app.js"></script>
   <script defer src="update-panel.js"></script>
 </head>
@@ -67,7 +69,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarSettings" class="sidebar-setting"><span data-icon="settings"></span>参数设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.17.0</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.18.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -279,6 +281,31 @@
           </form>
         </div>
         <p id="userManagementStatus" class="user-management-status" role="status" aria-live="polite" data-tone="neutral">点击“重新读取”查看服务器用户。</p>
+      </section>
+      <section id="mqttDeviceSettings" class="mqtt-device-settings" aria-labelledby="mqttDeviceTitle" hidden>
+        <div class="mqtt-device-heading">
+          <div class="mqtt-device-title"><span class="card-icon teal" data-icon="radio"></span><div><h3 id="mqttDeviceTitle">MQTT 设备账号</h3><p>DEVICE ACCESS · 仅管理员可操作</p></div></div>
+          <button id="mqttDeviceRead" type="button" class="subtle">重新读取设备</button>
+        </div>
+        <p class="mqtt-device-description">管理无人船接入本服务器的 MQTT 账号，与网页登录账户相互独立。无需设备在线；设备 ID 和主题保持不变，不修改网页桥接账号。</p>
+        <p id="mqttDeviceAccess" class="mqtt-device-access" hidden></p>
+        <div id="mqttDeviceContent" hidden>
+          <div class="mqtt-device-summary"><strong id="mqttDeviceCount">尚未读取</strong><span>修改持久保存，服务重启与网页更新后保留</span></div>
+          <ul id="mqttDeviceList" class="mqtt-device-list" aria-label="MQTT 设备账号列表" hidden></ul>
+          <form id="mqttDeviceForm" class="mqtt-device-form" autocomplete="off" hidden>
+            <h4>修改设备接入凭据</h4>
+            <div class="mqtt-device-fields">
+              <label for="mqttDeviceId">设备 ID<input id="mqttDeviceId" type="text" readonly autocomplete="off"><small>对应 boats/设备ID/… 主题，保持不变。</small></label>
+              <label for="mqttDeviceUsername">MQTT 用户名<input id="mqttDeviceUsername" type="text" required maxlength="64" pattern="[A-Za-z0-9_\-]{1,64}" autocomplete="off" autocapitalize="none" spellcheck="false"><small>1–64 位英文字母、数字、下划线或短横线。</small></label>
+              <label for="mqttDevicePassword">新密码<input id="mqttDevicePassword" type="password" minlength="8" maxlength="64" autocomplete="new-password" aria-describedby="mqttDevicePasswordHint" placeholder="留空可保留原密码"></label>
+              <label for="mqttDevicePasswordConfirm">确认新密码<input id="mqttDevicePasswordConfirm" type="password" minlength="8" maxlength="64" autocomplete="new-password" aria-describedby="mqttDevicePasswordHint" placeholder="再次输入新密码"></label>
+            </div>
+            <p id="mqttDevicePasswordHint" class="mqtt-device-password-hint">旧密码不会回显。新密码为 8–64 位可打印 ASCII 字符，不能包含空格、冒号或中文；不改密码时两项均留空。</p>
+            <p class="mqtt-device-reconnect-notice">保存会重启 MQTT 服务，所有设备和网页云端通道会短暂重连。请同步更新该船 STM32 的 MQTT 用户名/密码并重新烧录，确保设备能用新凭据连接。</p>
+            <div class="mqtt-device-actions"><button id="mqttDeviceSave" type="submit" class="primary" disabled>保存设备账号</button><button id="mqttDeviceCancel" type="button" class="subtle">取消编辑</button></div>
+          </form>
+        </div>
+        <p id="mqttDeviceStatus" class="mqtt-device-status" role="status" aria-live="polite" data-tone="neutral">读取服务器上的 MQTT 设备账号；密码不会返回到网页。</p>
       </section>
       <section id="mapSettings" class="map-settings" aria-labelledby="mapSettingsTitle" hidden>
         <div class="map-settings-heading"><div class="map-settings-title"><span class="card-icon blue" data-icon="map"></span><div><h3 id="mapSettingsTitle">平台地图设置</h3><p>AMAP · 仅保存在服务器</p></div></div><a class="map-settings-guide" href="https://github.com/Coffeebean66/UnmannedBoat-Web/blob/main/AMAP_SETUP.md" target="_blank" rel="noopener noreferrer">申请与配置教程 ↗</a></div>
