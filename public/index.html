@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="artificial-horizon.css">
   <link rel="stylesheet" href="map-view.css">
   <link rel="stylesheet" href="map-settings.css">
+  <link rel="stylesheet" href="user-management.css">
   <link rel="stylesheet" href="workspace.css">
   <script defer src="vendor/leaflet/leaflet.js"></script>
   <script defer src="utils-bundle.js"></script>
@@ -27,6 +28,7 @@
   <script defer src="map-view.js"></script>
   <script defer src="map-velocity-view.js"></script>
   <script defer src="map-settings.js"></script>
+  <script defer src="user-management.js"></script>
   <script defer src="app.js"></script>
   <script defer src="update-panel.js"></script>
 </head>
@@ -65,7 +67,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarSettings" class="sidebar-setting"><span data-icon="settings"></span>参数设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.15.0</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.16.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -250,6 +252,31 @@
   <dialog id="settingsDialog" aria-labelledby="settingsTitle">
     <div class="dialog-head"><div class="title-with-icon"><span class="card-icon teal" data-icon="sliders"></span><div><p class="eyebrow">PLATFORM & VESSEL SETTINGS</p><h2 id="settingsTitle">平台与电控设置</h2></div></div><button id="settingsClose" class="ghost">返回监控<span data-icon="close"></span></button></div>
     <div class="dialog-scroll">
+      <section id="userManagement" class="user-management" aria-labelledby="userManagementTitle" hidden>
+        <div class="user-management-heading">
+          <div class="user-management-title"><span class="card-icon blue" data-icon="settings"></span><div><h3 id="userManagementTitle">用户与账户</h3><p>PLATFORM USERS · 仅管理员可操作</p></div></div>
+          <div class="user-management-heading-actions"><button id="userManagementRead" type="button" class="subtle">重新读取</button><button id="userManagementCreate" type="button" class="primary" disabled>新建用户</button></div>
+        </div>
+        <p class="user-management-description">管理登录平台的账户，无需连接无人船。管理员可调参、更新平台和管理用户，访客仅可查看监测；至少保留一位管理员。</p>
+        <p id="userManagementAccess" class="user-management-access" hidden></p>
+        <div id="userManagementContent" hidden>
+          <div class="user-management-summary"><strong id="userManagementCount">尚未读取</strong><span>修改后保存在服务器，重启与网页更新后保留</span></div>
+          <ul id="userManagementList" class="user-management-list" aria-label="平台用户列表" hidden></ul>
+          <form id="userManagementForm" class="user-management-form" autocomplete="off" hidden>
+            <h4 id="userEditorTitle">编辑用户</h4>
+            <div class="user-management-fields">
+              <label for="userUsername">用户名<input id="userUsername" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" required maxlength="64" pattern="[A-Za-z0-9_.\-]{1,64}" placeholder="例如 crew-01"><small>1–64 位英文字母、数字、下划线、点或短横线。</small></label>
+              <label for="userRole">角色<select id="userRole"><option value="guest">访客 · 仅查看监测</option><option value="admin">管理员 · 平台与设备管理</option></select><small>管理员拥有用户管理、设备调参及网页更新权限。</small></label>
+              <label for="userPassword">新密码<input id="userPassword" type="password" autocomplete="new-password" minlength="6" maxlength="256" aria-describedby="userPasswordHint" placeholder="编辑时留空可保留原密码"></label>
+              <label for="userPasswordConfirm">确认新密码<input id="userPasswordConfirm" type="password" autocomplete="new-password" minlength="6" maxlength="256" aria-describedby="userPasswordHint" placeholder="再次输入新密码"></label>
+            </div>
+            <p id="userPasswordHint" class="user-management-password-hint">不修改密码时两项均留空；新密码为 6–256 个字符。</p>
+            <p id="userSelfNotice" class="user-management-self-notice" hidden>正在编辑当前登录账户。修改用户名、密码或角色后，当前账户的所有会话会退出，需要重新登录。</p>
+            <div class="user-management-form-actions"><button id="userManagementSave" type="submit" class="primary" disabled>保存用户</button><button id="userManagementCancel" type="button" class="subtle">取消编辑</button></div>
+          </form>
+        </div>
+        <p id="userManagementStatus" class="user-management-status" role="status" aria-live="polite" data-tone="neutral">点击“重新读取”查看服务器用户。</p>
+      </section>
       <section id="mapSettings" class="map-settings" aria-labelledby="mapSettingsTitle" hidden>
         <div class="map-settings-heading"><div class="map-settings-title"><span class="card-icon blue" data-icon="map"></span><div><h3 id="mapSettingsTitle">平台地图设置</h3><p>AMAP · 仅保存在服务器</p></div></div><a class="map-settings-guide" href="https://github.com/Coffeebean66/UnmannedBoat-Web/blob/main/AMAP_SETUP.md" target="_blank" rel="noopener noreferrer">申请与配置教程 ↗</a></div>
         <p class="map-settings-description">使用高德“Web端（JS API）”的 Key 与安全密钥 securityJsCode。两项一起清空并保存可停用高德，继续使用 OpenStreetMap。此设置无需连接无人船。</p>

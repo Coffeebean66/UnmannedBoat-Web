@@ -8,6 +8,7 @@
   const params=new ParameterPanel(link,toast), viewer=new AttitudeView($('boatCanvas'));
   const horizon=new BoatArtificialHorizon($('imuHorizon'));
   const mapSettings=new BoatMapSettingsPanel();
+  const users=new BoatUserManagementPanel({toast});
   const wgs=(latitude,longitude)=>Number.isFinite(latitude)&&Number.isFinite(longitude)&&Math.abs(latitude)<=90&&Math.abs(longitude)<=180?{latitude,longitude}:null;
   const track=new M.boatTrack.BoatTrack(wgs);
   const state={latest:{},history:[],chartMode:'speed',lastReceived:null,lastUpdateAt:null,forwardDelayMs:null,deviceId:null};
@@ -282,11 +283,13 @@
   });
   on('mapCenter',()=>{if(!map?.ready)toast('地图尚未就绪，请查看地图底部提示');else if(lastLocation)map.setView(lastLocation,16);else toast('尚无有效定位');});
   $('mapFollow').onchange=()=>{if($('mapFollow').checked&&lastLocation&&map?.ready)map.setView(lastLocation,16);};
-  const openSettings=()=>{window.BoatAuth?.assertManage();$('settingsDialog').showModal();mapSettings.open();};
+  const openSettings=()=>{window.BoatAuth?.assertManage();$('settingsDialog').showModal();users.open();mapSettings.open();};
   on('settingsToggle',openSettings);
   on('settingsEntry',openSettings);
   on('sidebarSettings',openSettings);
   on('settingsClose',()=>$('settingsDialog').close());
+  $('settingsDialog').addEventListener('close',()=>users.close());
+  window.addEventListener('pagehide',()=>users.destroy(),{once:true});
   for(const [id,kind] of [['readParameters','read'],['writeParameters','write'],['saveFlash','flash']])on(id,()=>params.command(kind));
   on('fillTuning',()=>params.tune());
   on('helpToggle',()=>{$('parameterHelp').hidden=!$('parameterHelp').hidden;});

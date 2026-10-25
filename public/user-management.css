@@ -1,0 +1,48 @@
+/* 用户管理与设备参数分别保存；布局使用平台主题变量以适配深浅色。 */
+.user-management { margin:0 0 22px; padding:18px; border:1px solid var(--line-strong); border-radius:10px; background:linear-gradient(135deg,var(--blue-soft),var(--panel) 72%); }
+.user-management-heading { display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:12px; }
+.user-management-title { display:flex; align-items:center; gap:10px; min-width:0; }
+.user-management-title h3 { font-size:15px; font-weight:650; }
+.user-management-title p { margin-top:2px; font-size:10px; color:var(--muted); letter-spacing:.05em; }
+.user-management-description,.user-management-access { font-size:12px; line-height:1.8; color:var(--muted); overflow-wrap:anywhere; }
+.user-management-heading-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.user-management-heading-actions button { min-height:32px; font-size:11px; }
+.user-management button { transition:background .15s,border-color .15s,box-shadow .15s; }
+.user-management button:not(.primary) { color:var(--text); }
+.user-management-summary { display:flex; justify-content:space-between; flex-wrap:wrap; gap:6px; margin:14px 0 8px; font-size:10px; color:var(--muted); }
+.user-management-summary strong { font-weight:500; color:var(--text); }
+.user-management-list { list-style:none; display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:0; margin:0; max-height:300px; overflow:auto; scrollbar-width:thin; }
+.user-management-row { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px; min-width:0; border:1px solid var(--line); border-radius:7px; background:var(--panel); }
+.user-management-identity { min-width:0; }
+.user-management-identity > strong { display:block; color:var(--text); font-size:12px; font-weight:600; overflow-wrap:anywhere; }
+.user-management-meta { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:5px; font-size:10px; }
+.user-management-role,.user-management-current { display:inline-flex; padding:2px 6px; border-radius:4px; background:var(--soft); color:var(--muted); }
+.user-management-role[data-role="admin"] { color:var(--accent); background:var(--accent-soft); }
+.user-management-current { background:var(--success-bg); color:var(--success); }
+.user-management-row > button { flex:none; min-height:30px; font-size:11px; }
+.user-management-form { margin-top:14px; padding:15px; border:1px solid var(--line-strong); border-radius:8px; background:var(--soft); }
+.user-management-form h4 { margin:0 0 12px; font-size:13px; font-weight:600; }
+.user-management-fields { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.user-management-fields label { display:grid; align-content:start; gap:6px; min-width:0; color:var(--text); font-size:12px; font-weight:500; }
+.user-management-fields input,.user-management-fields select { width:100%; min-width:0; padding:10px 11px; border:1px solid var(--line-strong); border-radius:6px; background:var(--panel); color:var(--text); font-size:12px; }
+.user-management-fields input::placeholder { color:var(--faint); }
+.user-management-fields small { color:var(--muted); font-size:10px; line-height:1.7; font-weight:400; }
+.user-management-password-hint { margin:9px 0 0; color:var(--muted); font-size:11px; line-height:1.7; }
+.user-management-self-notice { margin:10px 0 0; padding:9px 11px; border-radius:5px; background:var(--warn-bg); color:var(--warn); font-size:11px; line-height:1.8; }
+.user-management-form-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
+.user-management-form-actions button { min-height:34px; font-size:11px; }
+.user-management-status { margin-top:12px; font-size:11px; line-height:1.8; color:var(--muted); overflow-wrap:anywhere; }
+.user-management-status[data-tone="error"] { color:var(--danger); }
+.user-management-status[data-tone="success"] { color:var(--success); }
+@media(max-width:600px) {
+  .user-management { padding:14px; }
+  .user-management-title .card-icon { display:none; }
+  .user-management-title h3 { font-size:14px; }
+  .user-management-title p { font-size:9px; letter-spacing:0; }
+  .user-management-heading-actions { width:100%; }
+  .user-management-heading-actions button { flex:1; }
+  .user-management-list,.user-management-fields { grid-template-columns:1fr; }
+  .user-management-row { gap:8px; padding:11px; }
+  .user-management-form { padding:12px; }
+  .user-management-form-actions button { flex:1; }
+}

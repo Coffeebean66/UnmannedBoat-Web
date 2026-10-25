@@ -1,6 +1,6 @@
 # 无人船监测平台 · Web
 
-网页版源码 `v1.15.0`，项目版本 `v2.25.0`；仅通过 MQTT 云端连接无人船，提供六个独立工作页面、RTK/IMU 同屏仪表、设备卡片和管理员云端调参。本版新增 Linux 首次安装入口，安装依赖、MQTT、网页、账户及 HTTPS，无需 Docker。上传源码与升级运行中的服务器是两个独立操作，运行版本以网站“更新”界面为准。
+网页版源码 `v1.16.0`，项目版本 `v2.26.0`；仅通过 MQTT 云端连接无人船，提供六个独立工作页面、RTK/IMU 同屏仪表、设备卡片和管理员云端调参。本版新增“设置 → 用户与账户”，管理员可创建用户、修改用户名/密码和角色，账户持久化并在修改后撤销旧会话。本次发布将账户管理及部署兼容修改同步至独立仓库 `main`，尚未部署到现有服务器。Linux 首次安装入口、HTTPS及网页更新继续可用；已安装旧更新组件的服务器先按下文升级一次组件，再更改账户。
 
 ## Linux 首次部署：一条指令
 
@@ -75,7 +75,7 @@ cd UnmannedBoat-Web
 npm ci --omit=dev
 ~~~
 
-2026-10-23 只读核对线上为 `v1.10.0` / `32c1483`：[https://boat.coffeebean66.tech](https://boat.coffeebean66.tech)。服务器已启用管理员/访客和参数主题 ACL；Ubuntu 服务器 `47.251.109.111` 上，Nginx HTTPS 代理 Node `7890`，Node 监听 `0.0.0.0`；独立 MQTT Broker 监听 TCP `1883`。这是上次线上核对记录，不代表本次 `v1.15.0` 已部署；服务器版本与 GitHub 源码同步分别记录。
+2026-10-23 只读核对线上为 `v1.10.0` / `32c1483`：[https://boat.coffeebean66.tech](https://boat.coffeebean66.tech)。服务器已启用管理员/访客和参数主题 ACL；Ubuntu 服务器 `47.251.109.111` 上，Nginx HTTPS 代理 Node `7890`，Node 监听 `0.0.0.0`；独立 MQTT Broker 监听 TCP `1883`。这是上次线上核对记录，不代表本次 `v1.16.0` 已部署；服务器版本与 GitHub 源码同步分别记录。
 
 2026-10-20 晚间复查，公网 TCP 1883 已可连接；服务器到 Broker 及网页 SSE 通道连续观察 55 秒稳定。当时船端已关闭，没有验证正在运行的 STM32 链路。新 Release 固件仍需用户烧录和实机测试。
 
@@ -110,19 +110,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\start-local.ps1 -Port 8081
 4. 点击“刷新设备”，选择 `boat-01`，再点击顶部“连接无人船”。没有设备时等待 STM32 连接 Broker 并上传第一条有效遥测。
 5. 连接后查看电机、船速/航向曲线、RTK/IMU、地图、速度分色轨迹、闭环箭头和三维姿态；“退出登录”会关闭当前会话及其实时连接。
 
-账户由本机私密 `web账户.txt` 指定，线上配置保存在 root 专用 `/etc/unmanned-boat-web/accounts.env`；本机忽略目录中的 `UnmannedBoat_Controller/build/cloud-deploy/网页账户信息.txt` 保存私密访问资料。设备连接资料 `云端连接信息.txt` 位于同目录，服务器副本为 `/etc/unmanned-boat-web/access.txt`；这些私密资料不随独立仓库提供。不要将账户文件、密码、本机私有固件头或服务器凭据上传 GitHub。单片机需按[固件构建说明](https://github.com/Coffeebean66/UnmannedBoat/blob/main/UnmannedBoat_Controller/README.md#构建与烧录)构建、烧录匹配账号的 Release HEX，旧的空账号镜像无法连接当前认证 Broker。
+首次登录账户由安装脚本或 root 专用 `/etc/unmanned-boat-web/accounts.env` 初始化；管理员通过网页修改后，以独立账户库为准，初始登录资料文件不会跟着更新。本机私密 `web账户.txt` 与忽略目录中的 `UnmannedBoat_Controller/build/cloud-deploy/网页账户信息.txt` 仅是原部署资料。设备连接资料 `云端连接信息.txt` 位于同目录，服务器副本为 `/etc/unmanned-boat-web/access.txt`；这些私密资料不随独立仓库提供。不要将账户文件、密码、本机私有固件头或服务器凭据上传 GitHub。单片机需按[固件构建说明](https://github.com/Coffeebean66/UnmannedBoat/blob/main/UnmannedBoat_Controller/README.md#构建与烧录)构建、烧录匹配账号的 Release HEX，旧的空账号镜像无法连接当前认证 Broker。
 
 ### 管理员和访客
 
-| 角色 | 监测、地图、轨迹和动画 | 设备参数操作 | 网页更新 | 地图配置 |
-| --- | --- | --- | --- | --- |
-| 管理员 | 可用 | MQTT 云端可用；需新版固件在线并报告参数能力 | 可检查、启动和查看结果 | 可填写和保存高德配置，无需连船 |
-| 访客 | 可用 | 无管理入口，不发送读取/写入/Flash 请求 | 无入口，服务器拒绝管理请求 | 不可修改 |
-| 未登录 | 显示登录提示，受保护云端接口不可用 | 不可用 | 不可用 | 不可用 |
+| 角色 | 监测、地图、轨迹和动画 | 设备参数操作 | 网页更新 | 地图配置 | 用户管理 |
+| --- | --- | --- | --- | --- | --- |
+| 管理员 | 可用 | MQTT 云端可用；需新版固件在线并报告参数能力 | 可检查、启动和查看结果 | 可填写和保存高德配置，无需连船 | 新建用户、改名、重设密码和调整角色 |
+| 访客 | 可用 | 无管理入口，不发送读取/写入/Flash 请求 | 无入口，服务器拒绝管理请求 | 不可修改 | 不可查看列表或修改账户 |
+| 未登录 | 显示登录提示，受保护云端接口不可用 | 不可用 | 不可用 | 不可用 | 不可用 |
 
 顶部显示当前用户名和角色，可退出后登录另一账户；退出会关闭当前云端实时会话。管理员切换为访客后，旧管理员会话失效，调参和更新权限随即撤销。密码只在登录时发送，不放进 URL、前端源码、浏览器存储或公开文档。
 
-自建服务器可在 `/etc/unmanned-boat-web/accounts.env` 配置：
+自建服务器可在 `/etc/unmanned-boat-web/accounts.env` 配置初始账户：
 
 ~~~text
 BOAT_ACCOUNTS_ENABLED=1
@@ -133,7 +133,26 @@ BOAT_GUEST_USERNAME=<访客用户名>
 BOAT_GUEST_PASSWORD=<访客密码>
 ~~~
 
-两个用户名须不同，允许 1–64 位英文字母、数字、下划线、点和短横线；密码允许 6–256 字符，配置文件仅 root 可读。修改后重启 Web，已有登录随重启失效。密码以服务器私密配置为准，不提供网页自助注册。未启用账户模式的旧部署可继续使用云端访问密码进行只读 MQTT 监测；账户接口不可达时不会自动放开管理权限。
+两个初始用户名须不同，允许 1–64 位英文字母、数字、下划线、点和短横线；密码允许 6–256 字符，空格原样保留。环境配置仅用于尚无独立账户库时的初始化；有账户库后修改这些初始用户名/密码不会覆盖网页中保存的账户。未启用账户模式的旧部署可继续使用云端访问密码进行只读 MQTT 监测；账户接口不可达时不会自动放开管理权限。
+
+### 在网页管理用户
+
+1. 使用管理员登录，打开顶部“设置”，进入“用户与账户”。此操作不需要连接无人船。
+2. 点击“新建用户”，填写用户名、角色、新密码及确认密码，再点击“保存用户”。最多64个用户；新用户即可登录，不提供开放注册。
+3. 点击现有用户的“编辑”，可更改用户名、角色或重设密码。编辑时两项密码均留空可保留原密码；系统必须至少保留一个管理员。
+4. 修改用户名、密码或角色后，该用户的所有旧会话失效，实时连接随即关闭。修改自己的账户会要求重新登录；修改其他账户不影响当前管理员的监测连接。
+
+账户库保存盐化 scrypt 派生值，接口不返回密码或密码哈希，浏览器不保存密码。关闭设置、切换账户及提交后会清空密码输入。读取/保存失败会明确提示，写入请求不会自动重发；响应超时时先重新读取列表确认。首次保存会将初始管理员/访客一并迁移到独立账户库，后续重启或网页更新保留全部用户。
+
+账户库位置可用绝对路径 `BOAT_ACCOUNTS_FILE` 指定；默认新装 systemd 服务为 `/var/lib/unmanned-boat-web/accounts.json`，没有 `StateDirectory` 的旧更新部署为 `/var/lib/unmanned-boat-web-update/requests/accounts.json`。Windows 本机默认 `%APPDATA%\unmanned-boat-web\accounts.json`，其他 Linux 本机为 `${XDG_CONFIG_HOME:-~/.config}/unmanned-boat-web/accounts.json`。升级安装更新组件时会继续读取已有库。备份该文件并限制访问；库损坏或不可读时拒绝启动，不能自动回退到旧密码。`accounts-access.txt` 只记录首次安装的密码，网页改密后不会更新它。
+
+**已安装旧版网页更新组件的服务器，在通过网页更改账号前，需要用本版源码重新安装一次可信组件**，否则旧健康检查还会尝试初始密码，日后更新可能失败回滚。在最新源码目录执行，替换为自己的域名与内部端口；Node 不在默认 PATH 时沿用原部署的 PATH：
+
+~~~bash
+sudo bash maintenance/install-update.sh https://boat.example.com 7890
+~~~
+
+这一步升级组件并重启网页，保留账户库、原 MQTT 配置及更新签名密钥。本版的首次安装脚本已使用新组件，无需再执行。普通网页更新继续只替换应用，不会自行覆盖 root 管理的更新组件。
 
 云端调参仅限统一账户中的管理员；未启用账户的旧密码模式保持只读。管理员可在同一设置界面读取、写入、保存 Flash 和使用预设；本地预设仍保存在浏览器。切换设备或账户会取消当前参数等待并清理实时状态。浏览器通过 HTTPS 接收 SSE 遥测，不需要设备通信权限。
 
@@ -186,6 +205,7 @@ STM32 网口直接上报 MQTT Broker，Node 桥接校验后，浏览器通过认
 | MQTT 连接 | 统一账户登录、MQTT 设备选择、Broker/设备状态、断流清屏及恢复；只保留云端链路 |
 | 当前设备 | 船模缩略图、MQTT 设备 ID、连接状态、有效帧数、本地最近收帧时间及云端转发延迟；切船清除旧统计 |
 | 角色账户 | 管理员/访客统一用户名密码登录；访客只监测，管理员可调参与维护；退出、角色切换和会话过期撤销权限 |
+| 用户管理 | 管理员在设置中新建用户、修改用户名/密码/角色；最多64人、至少一名管理员；服务器保存密码派生值，修改后目标账户旧会话撤销 |
 | 网页更新 | 管理员顶部“更新”入口、检查 main 提交、确认安装、跨服务重启查看进度、失败恢复旧版本；Linux 服务器首次需要安装可信更新组件 |
 | 双电机 | 电压、电流、温度、机械/电气转速、PWM、方向、功率、容量、反馈年龄、序号 |
 | 船体控制 | PWM/速度/角度模式、目标/实际/请求船速、方向、共同推进、差速、目标/实际航向及角差 |
@@ -313,8 +333,9 @@ sudo bash deploy-cloud.sh 7890 0.0.0.0 https://boat.coffeebean66.tech
 | 配置/服务 | 作用 |
 | --- | --- |
 | `/etc/unmanned-boat-web/runtime.env` | systemd 注入的云端开关、HTTPS 来源、网页密码、桥接账号及密码，root 专用 |
-| `/etc/unmanned-boat-web/accounts.env` | 管理员/访客账户与统一认证开关；可选加载，root 专用，升级保留 |
-| `/etc/unmanned-boat-web/accounts-access.txt` | 启用账户后的私密登录资料，root 专用，勿公开 |
+| `/etc/unmanned-boat-web/accounts.env` | 初始管理员/访客及统一认证开关；独立账户库存在后，不覆盖已保存的用户 |
+| `/etc/unmanned-boat-web/accounts-access.txt` | 首次启用账户时的私密登录资料，网页改密后不会更新，root 专用，勿公开 |
+| `/var/lib/unmanned-boat-web/accounts.json` | 新装服务的持久化用户库，保存盐化密码派生值；旧更新部署可能在 requests 目录，详见用户管理说明 |
 | `/etc/unmanned-boat-web/access.txt` | 网页/设备/桥接的连接资料，root 专用，勿公开 |
 | 同目录 `passwd`、`acl`、`mosquitto.conf` | Broker 密码哈希、逐用户主题权限和独立监听配置 |
 | `unmanned-boat-mqtt.service` | 专用 MQTT Broker，持久化位于 `/var/lib/unmanned-boat-mqtt` |
@@ -350,7 +371,9 @@ sudo bash remove.sh
 sudo bash remove.sh --purge
 ~~~
 
-默认停止/禁用 Web 和本项目独立 Broker 服务，将部署目录、云端配置及服务单元移到 root 专用的恢复目录；恢复时按脚本提示放回原路径并重新启用服务。保留源码、Node、Mosquitto 软件包、Broker 持久化数据、Nginx和其他站点。`--purge` 才永久删除经过标记校验的应用和云端配置目录，包括其中的账号资料；自行添加的 HTTPS 代理配置需单独管理。
+默认停止/禁用 Web 和本项目独立 Broker 服务，将部署目录、云端配置及服务单元移到 root 专用的恢复目录；恢复时按脚本提示放回原路径并重新启用服务。保留源码、Node、Mosquitto 软件包、Broker 持久化数据、Nginx和其他站点。`--purge` 才永久删除经过标记校验的应用和云端配置目录，包括其中的初始账号资料；自行添加的 HTTPS 代理配置需单独管理。
+
+独立的 `/var/lib/unmanned-boat-web` 地图设置与账户库会保留；旧部署位于更新组件 `requests` 中的账户库随更新状态移入恢复副本。`--purge` 同样保留这些数据，不能用它重置网页用户。
 
 已安装更新组件时，卸载会先停队列和 worker，再备份可信 helper、更新状态、drop-in 与管理员资料。即使 `--purge` 也保留更新组件及其管理员恢复副本；专用构建账号和队列组不删除，便于恢复。此行为只用于卸载脚本，日常网页更新不停止 Broker。
 
@@ -441,6 +464,8 @@ node server.js
 | `/api/auth/config` | GET，`enabled`、`requiresLogin`、当前 `{username,role}` 或 null；不返回密码 |
 | `/api/auth/login` | POST JSON `{username,password}`，同源登录并设置全站会话 Cookie |
 | `/api/auth/session` | DELETE，同源退出，撤销共享会话并关闭其 SSE |
+| `/api/auth/users` | GET，管理员读取 `{users:[{id,username,role}],currentUserId}`；POST 同源 JSON `{username,password,role}` 新建用户，成功返回 201 |
+| `/api/auth/users/<id>` | PATCH，管理员同源 JSON `{username,role,password?}`；省略密码可保留原密码，返回 `reauthenticate` 表示当前用户是否需要重新登录 |
 | `/api/map/config` | GET/HEAD，浏览器地图配置；只返回 Web端 Key、安全密钥及启用状态，不接受写入 |
 | `/api/map/settings` | GET/PUT，需启用账户并登录管理员；PUT 同源 JSON `{key,securityJsCode}`，两项为 32 位十六进制或同时为空；成功后配置持久化并供刷新后的地图使用 |
 | `/api/cloud/config` | GET，`enabled`、`requiresLogin`、`serverTime`；无需登录 |
@@ -453,6 +478,10 @@ node server.js
 设备条目包含 `id`、`online`、`lastReceivedAt`、`status`、`lastStatusAt`。服务端限制 64 台记录设备、128 个会话、64 个 SSE 连接且每会话至多 4 个，登录每 IP 每分钟最多 8 次；慢客户端发生背压时断开，避免无限队列。网页会自动恢复实时通道，恢复不会重播旧帧。
 
 ## 代码与验证
+
+2026-10-25 10:49:32 +08:00，Web `v1.16.0`：工具包生成、完整239项Node串行检查及脚本语法、差异检查通过，零失败、零跳过。覆盖新建用户、用户名/密码/角色修改、至少一名管理员、64用户上限、盐化账户库与重启保留、失败与并发写入、会话撤销、访客拒绝、前端超时/迟到响应和旧更新组件兼容。
+
+Chrome用户管理专项通过：使用真实本机认证、持久化账户库及HTTP/SSE，验证新建管理员/访客、确认密码错误不提交、修改他人不重连当前监测、自改后撤销会话并重新登录、旧密码拒绝与新密码可用、新用户刷新后登录及访客403；1440/375/320px深浅布局无横向溢出，已查看桌面和手机截图，并修正本面板浅色按钮文字对比度。地图请求隔离，Linux安装/更新使用隔离替身，未连接生产Broker或实船。源码发布单独记录，现有服务器未部署本版。
 
 2026-10-24 20:39:38 +08:00，Web `v1.15.0`：工具包生成、16项版本/账户/核心检查、Bash语法与差异检查通过。新增首次安装器9项隔离分支分别通过，覆盖参数/端口/已有安装冲突、完整安装配置与随机账户、Node归档下载和真实SHA256校验、坏校验阻止解压/部署、私有目录Node拒绝及证书失败后保留凭据。测试中的apt、Git下载、systemd、Nginx与Certbot均为隔离替身；未在全新Linux实机执行安装或真实申请证书。上一版仅MQTT功能的199项及六类浏览器结果见下方；本次同时发布这些源码，未重部署现有服务器。
 
@@ -467,6 +496,7 @@ UnmannedBoat_Web/
 ├── server/parameter-protocol.js BPC1信封、20项范围与响应校验
 ├── server/cloud-api.js        同源登录、会话、设备列表和SSE
 ├── server/account-api.js      统一管理员/访客登录、共享会话与角色授权
+├── server/account-store.js    独立账户库、scrypt密码派生与原子保存
 ├── server/update-api.js       管理员授权、固定仓库检查、任务和只读进度票据
 ├── server/map-config.js       高德配置读取、管理员保存、持久化与地图资源 CSP
 ├── AMAP_SETUP.md              高德 Key 申请及本机/systemd 配置教程
@@ -476,6 +506,7 @@ UnmannedBoat_Web/
 ├── public/
 │   ├── index.html             监控页和设置弹窗
 │   ├── account-auth.js        统一登录、角色权限、退出与会话刷新
+│   ├── user-management.js / .css 管理员用户列表、新建/改名/改密及角色管理
 │   ├── app.js                 遥测、曲线、地图、轨迹
 │   ├── ui.js                  SVG图标、主题偏好、时钟及设置弹窗交互
 │   ├── workspace-navigation.js 六页导航、URL/历史、共享面板与焦点管理
@@ -513,6 +544,7 @@ npm run test:browser
 npm run test:amap:browser
 node tests/update-browser.cjs
 node tests/accounts-browser.cjs
+node tests/user-management-browser.cjs
 node tests/cloud-parameters-browser.cjs
 node tests/device-card-browser.cjs
 ~~~
@@ -570,6 +602,8 @@ Node 全套串行首轮共 165 项、163 项通过：旧账户界面测试仍断
 
 | 日期 | 网页版本 | 功能 |
 | --- | --- | --- |
+| 2026-10-25 10:51:45 +08:00 | v1.16.0，源码发布 | 将管理员用户管理、持久化账户库、会话撤销及部署/更新兼容修改同步至独立网页仓库 main；包含完整239项Node和本机Chrome用户管理专项验证及说明，修正浅色按钮对比度；本次仅发布源码，未部署现有服务器；旧更新组件需按账户管理教程升级一次 |
+| 2026-10-25 10:34:06 +08:00 | v1.16.0，项目 v2.26.0 | 新增管理员用户管理，支持新建管理员/访客、改名、重设密码和调整角色；独立scrypt账户库原子持久化，保留至少一名管理员、修改后撤销目标旧会话；同步改密后的部署/更新健康检查及候选账户兼容预检；本地修改，尚未上传或部署 |
 | 2026-10-24 20:20:38 +08:00 | v1.15.0，项目 v2.25.0 | 新增 Ubuntu/Debian 首次安装入口，自动准备 Node/依赖、MQTT、网页、管理员/访客随机账户、Nginx HTTPS 与证书续期、网页更新组件；README 提供可复制的一条安装指令、DNS/端口前提、凭据路径和维护说明；连同仅 MQTT 的网页功能同步独立仓库，未对现有服务器执行部署 |
 | 2026-10-24 19:37:33 +08:00 | v1.14.0，项目 v2.24.0 | 删除网页蓝牙连接入口、Web Bluetooth 传输和双源切换，仅使用 MQTT；保留设备选择、六页监测、云端参数/Flash、账户权限、预设、地图与三维姿态；更新本机/部署/浏览器说明；本地修改，尚未上传或部署 |
 | 2026-10-24 19:29:20 +08:00 | v1.13.0，源码发布 | 将六页工作区、RTK/IMU 同屏仪表、按 MQTT 设备 ID 命名的设备卡片，以及相关资源、测试和说明同步至独立网页仓库 main；沿用上文已通过的31项相关Node、完整监控烟测和高德地图专项结果；本次仅上传源码，未部署服务器 |
