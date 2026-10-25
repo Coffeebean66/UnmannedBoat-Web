@@ -67,6 +67,42 @@ test('未校时或缺少有效服务器接收时间时，转发延迟明确为�
     for(const frame of frames)assert.equal(frame.cloudForwardDelayMs,null,label);
   }
 });
+
+test('船云延迟元数据独立于转发与遥测年龄，旧固件逐包恢复未知',async()=>{
+  const h=setup(),frames=[];h.cloud.addEventListener('frame',e=>frames.push(e.detail));
+  const stream=await connected(h);
+  stream.send('telemetry',h.packet({receivedAt:1770000000000-80,ageMs:230,
+    uplinkDelayMs:120.25,uplinkRttMs:160.5,uplinkUncertaintyMs:82.25}));
+  assert.equal(frames.length,4);
+  for(const frame of frames){
+    assert.equal(frame.cloudUplinkDelayMs,120.25);assert.equal(frame.cloudUplinkRttMs,160.5);
+    assert.equal(frame.cloudUplinkUncertaintyMs,82.25);assert.equal(frame.cloudForwardDelayMs,80);
+    assert.equal(frame.receivedAtMonotonic,9770,'上行估计不改变原有遥测年龄');
+  }
+  stream.send('telemetry',h.packet());assert.equal(frames.length,8);
+  for(const frame of frames.slice(4)){
+    assert.equal(frame.cloudUplinkDelayMs,null);assert.equal(frame.cloudUplinkRttMs,null);assert.equal(frame.cloudUplinkUncertaintyMs,null);
+  }
+});
+
+test('非法上行延迟不显示为有效值，迟到与错设备数据不能覆盖当前估计',async()=>{
+  const h=setup(),frames=[];h.cloud.addEventListener('frame',e=>frames.push(e.detail));
+  const stream=await connected(h);
+  for(const value of [null,undefined,'100',-1,Infinity,NaN,60001]){
+    stream.send('telemetry',h.packet({uplinkDelayMs:value,uplinkRttMs:value,uplinkUncertaintyMs:value}));
+    assert.equal(frames.at(-1).cloudUplinkDelayMs,null);assert.equal(frames.at(-1).cloudUplinkRttMs,null);assert.equal(frames.at(-1).cloudUplinkUncertaintyMs,null);
+  }
+  stream.send('telemetry',h.packet({uplinkDelayMs:0,uplinkRttMs:0,uplinkUncertaintyMs:1}));
+  assert.equal(frames.at(-1).cloudUplinkDelayMs,0);
+  const count=frames.length;
+  stream.send('telemetry',h.packet({deviceId:'boat-second',uplinkDelayMs:999}));
+  stream.send('telemetry',h.packet({ageMs:1000,uplinkDelayMs:999}));
+  assert.equal(frames.length,count);assert.equal(frames.at(-1).cloudUplinkDelayMs,0);
+  await h.cloud.connect('boat-second');const next=h.streams.at(-1);
+  stream.send('telemetry',h.packet({uplinkDelayMs:999}));assert.equal(frames.length,count);
+  next.send('telemetry',h.packet({deviceId:'boat-second',uplinkDelayMs:42}));
+  assert.equal(frames.at(-1).cloudUplinkDelayMs,42);
+});
 test('切换MQTT设备后旧SSE不能更新船名、有效帧或转发延迟',async()=>{
   const h=setup(),frames=[],connections=[];h.cloud.addEventListener('frame',e=>frames.push(e.detail));h.cloud.addEventListener('connection',e=>connections.push(e.detail));
   const previous=await connected(h);previous.send('telemetry',h.packet({receivedAt:1770000000000-111}));

@@ -62,12 +62,12 @@
       <div class="vessel-emblem"><img src="assets/boat-preview.png" width="640" height="280" alt="双体无人船模型" decoding="async"></div>
       <strong id="deviceName">未选择无人船</strong><p id="sourceDescription">MQTT 云端 · 只读监测</p>
       <div class="vessel-link-state"><span id="deviceConnectionState" role="status">未连接</span><span class="vessel-link-bars" aria-hidden="true" title="连接状态指示，不代表信号强度"><i></i><i></i><i></i><i></i></span></div>
-      <dl><div><dt>有效数据帧</dt><dd id="frameCount">0</dd></div><div><dt>最近更新</dt><dd><time id="deviceLastUpdate">--</time></dd></div><div title="估计服务器收到遥测到当前浏览器接收的转发耗时，不含船端上报耗时，也不是往返延迟；未校时或缺少时间戳时显示未知。"><dt>转发延迟</dt><dd id="deviceLatency">--</dd></div></dl>
+      <dl><div><dt>有效数据帧</dt><dd id="frameCount">0</dd></div><div><dt>最近更新</dt><dd><time id="deviceLastUpdate">--</time></dd></div><div title="估计 STM32 发出遥测至服务器收到的耗时；双向校时后估算，不含传感器采样。"><dt>船→云延迟</dt><dd id="deviceUplinkLatency">--</dd></div><div title="估计服务器收到遥测到当前浏览器接收的转发耗时，不含船端上报耗时，也不是往返延迟；未校时或缺少时间戳时显示未知。"><dt>转发延迟</dt><dd id="deviceLatency">--</dd></div><div title="船→云估计值加服务器→浏览器转发耗时；两段均有效时显示，不含传感器采样或画面绘制。"><dt>合计延迟（估算）</dt><dd id="deviceTotalLatency">--</dd></div></dl>
     </section>
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarSettings" class="sidebar-setting"><span data-icon="settings"></span>参数设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.16.0</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.17.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -233,6 +233,9 @@
             <span>缓存字节<b id="bufferedBytes">0</b></span><span>接收字节<b id="bytesReceived">0</b></span>
             <span>状态帧序号<b id="statusSequence">--</b></span><span>设备运行时间<b id="deviceUptime">--</b></span>
             <span>距上次收帧<b id="linkAge">--</b></span>
+            <span>船→云延迟 · 估算<b id="diagnosticUplinkLatency">--</b></span>
+            <span>云→网页转发延迟<b id="diagnosticForwardLatency">--</b></span>
+            <span title="仅两段延迟均有效时相加，不含传感器采样与画面绘制。">合计延迟 · 估算<b id="diagnosticTotalLatency">--</b></span>
           </div>
           <details class="connection-details"><summary>连接方式与访问说明<span data-icon="chevron"></span></summary><p id="supportNotice" class="muted"></p></details>
           <div class="settings-callout"><span class="card-icon teal" data-icon="settings"></span><div><strong>电控参数设置</strong><p>20 项参数 · 3 组预设 · Flash 保存</p></div><button id="settingsEntry" class="icon-button" title="进入参数设置" aria-label="进入参数设置"><span data-icon="arrow"></span></button></div>

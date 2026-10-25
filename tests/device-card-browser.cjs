@@ -11,14 +11,15 @@ function telemetry(sequence){
   })).toString('base64');
 }
 async function main(){
-  fs.mkdirSync(output,{recursive:true});const fixture={feed:false,deviceId:ids[0],sequence:0};
+  fs.mkdirSync(output,{recursive:true});const fixture={feed:false,deviceId:ids[0],sequence:0,timing:null};
+  const run=fs.mkdtempSync(path.join(output,'device-card-state-'));
   const devices=ids.map(id=>({id,online:true,parametersReady:false}));
   const bridge=new EventEmitter();Object.assign(bridge,{enabled:true,start(){},stop(){},
     list:()=>({brokerConnected:true,devices}),state:id=>({brokerConnected:true,device:devices.find(device=>device.id===id)})});
   const env={BOAT_ACCOUNTS_ENABLED:'1',BOAT_ADMIN_USERNAME:'operator',BOAT_ADMIN_PASSWORD:'device-card-admin-test-only',
     BOAT_GUEST_USERNAME:'observer',BOAT_GUEST_PASSWORD:'device-card-guest-test-only',BOAT_AMAP_KEY:'',BOAT_AMAP_SECURITY_CODE:''};
-  const server=createServer({env,cloud:bridge});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
-  const emit=(deviceId=fixture.deviceId)=>bridge.emit('telemetry',{deviceId,receivedAt:Date.now()-80,ageMs:0,payload:telemetry(++fixture.sequence)});
+  const server=createServer({env,cloud:bridge,accountOptions:{storeFile:path.join(run,'accounts.json')},mapOptions:{file:path.join(run,'map-settings.json')}});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const emit=(deviceId=fixture.deviceId)=>bridge.emit('telemetry',{deviceId,receivedAt:Date.now()-80,ageMs:0,payload:telemetry(++fixture.sequence),...fixture.timing});
   const feed=setInterval(()=>{if(fixture.feed)emit();},100);
   const profile=fs.mkdtempSync(path.join(output,'chrome-device-card-')),errors=[];
   const browser=spawn(process.env.CHROME_PATH||'C:/Program Files/Google/Chrome/Application/chrome.exe',[
@@ -43,7 +44,7 @@ async function main(){
       const result=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true,userGesture:true});
       if(result.exceptionDetails)throw Error(result.exceptionDetails.exception?.description||result.exceptionDetails.text);return result.result.value;
     };
-    const card=()=>evaluate("(()=>{const get=id=>document.getElementById(id),text=id=>get(id).textContent;return {name:text('deviceName'),title:get('deviceName').title,chip:text('sourceChip'),status:text('deviceConnectionState'),state:get('deviceSummary').dataset.state,count:text('frameCount'),updated:text('deviceLastUpdate'),datetime:get('deviceLastUpdate').dateTime,latency:text('deviceLatency')};})()");
+    const card=()=>evaluate("(()=>{const get=id=>document.getElementById(id),text=id=>get(id).textContent;return {name:text('deviceName'),title:get('deviceName').title,chip:text('sourceChip'),status:text('deviceConnectionState'),state:get('deviceSummary').dataset.state,count:text('frameCount'),updated:text('deviceLastUpdate'),datetime:get('deviceLastUpdate').dateTime,latency:text('deviceLatency'),uplink:text('deviceUplinkLatency'),total:text('deviceTotalLatency')};})()");
     const until=async expression=>{
       for(let i=0;i<180;i++){if(await evaluate(expression))return;await wait(60);}
       throw Error('Condition timed out: '+expression+'\n'+JSON.stringify(await card())+'\n'+errors.join('\n'));
@@ -51,6 +52,10 @@ async function main(){
     const shot=async name=>{
       const clip=await evaluate("(()=>{const r=document.getElementById('deviceSummary').getBoundingClientRect();return {x:scrollX+r.left,y:scrollY+r.top,width:r.width,height:r.height,scale:2};})()");
       const result=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:true,clip});
+      fs.writeFileSync(path.join(output,name+'.png'),Buffer.from(result.data,'base64'));
+    };
+    const pageShot=async name=>{
+      const result=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
       fs.writeFileSync(path.join(output,name+'.png'),Buffer.from(result.data,'base64'));
     };
     const choose=async id=>evaluate('document.getElementById("cloudDevice").value='+JSON.stringify(id)+';document.getElementById("cloudDevice").dispatchEvent(new Event("change"))');
@@ -65,7 +70,7 @@ async function main(){
       await evaluate('document.getElementById("disconnectButton").click()');
       await until('!boatMonitor.link.wanted&&!boatMonitor.link.connected');
       const after=await card();assert.equal(after.updated,before.updated,'A normal disconnect keeps the last valid update');
-      assert.equal(after.datetime,before.datetime);assert.equal(after.latency,'--');assert.equal(after.status,'未连接');
+      assert.equal(after.datetime,before.datetime);assert.equal(after.latency,'--');assert.equal(after.uplink,'--');assert.equal(after.total,'--');assert.equal(after.status,'未连接');
       return after;
     };
     await send('Runtime.enable');await send('Page.enable');await send('Network.enable');
@@ -84,13 +89,25 @@ async function main(){
     assert.ok(Number(current.count.replaceAll(',',''))>=4);assert.match(current.updated,/\d{4}\/\d{2}\/\d{2}.*\d{2}:\d{2}:\d{2}/);
     assert.ok(Math.abs(Date.now()-Date.parse(current.datetime))<3000);assert.match(current.latency,/^\d+ ms$/);
     assert.ok(parseInt(current.latency)>=50&&parseInt(current.latency)<1000,'Local 80 ms forwarding fixture is estimated within freshness limit');
+    assert.equal(current.uplink,'--');assert.equal(current.total,'--','Legacy telemetry must not disguise forwarding delay as total delay');
+    fixture.timing={uplinkDelayMs:120.25,uplinkRttMs:160.5,uplinkUncertaintyMs:82.25};
+    await until('document.getElementById("deviceUplinkLatency").textContent==="120 ms"&&document.getElementById("deviceTotalLatency").textContent!=="--"');
+    current=await card();assert.ok(Math.abs(parseInt(current.total)-parseInt(current.latency)-120)<=1,'Only two known segments produce a total');
+    assert.equal(await evaluate('document.getElementById("diagnosticTotalLatency").textContent===document.getElementById("deviceTotalLatency").textContent'),true);
+    assert.match(await evaluate('document.getElementById("deviceUplinkLatency").title'),/往返 161 ms.*±83 ms/);
+    await shot('device-card-uplink-connected');
+    fixture.timing={uplinkDelayMs:'120',uplinkRttMs:-1,uplinkUncertaintyMs:null};
+    await until('document.getElementById("deviceUplinkLatency").textContent==="--"&&document.getElementById("deviceTotalLatency").textContent==="--"');
+    assert.equal(await evaluate('boatMonitor.link.connected'),true,'Invalid latency metadata cannot interrupt valid telemetry');
+    fixture.timing=null;await wait(150);await evaluate('window.dispatchEvent(new Event("resize"))');
+    assert.equal((await card()).total,'--');
     assert.equal(await evaluate('document.querySelector(".vessel-emblem img").complete&&document.querySelector(".vessel-emblem img").naturalWidth>0'),true);
     await shot('device-card-cloud-connected');await disconnect();await shot('device-card-cloud-disconnected');
     await choose(ids[1]);current=await card();assert.equal(current.name,ids[1]);assert.equal(current.count,'0');assert.equal(current.updated,'--');assert.equal(current.datetime,'');assert.equal(current.latency,'--');
     emit(ids[0]);await wait(150);assert.deepEqual(await card(),current,'Old boat telemetry cannot change the selected second boat');
-    fixture.deviceId=ids[1];await connect();current=await card();assert.equal(current.name,ids[1]);assert.equal(current.count,'0');assert.equal(current.updated,'--');
+    fixture.deviceId=ids[1];fixture.timing={uplinkDelayMs:45,uplinkRttMs:70,uplinkUncertaintyMs:37};await connect();current=await card();assert.equal(current.name,ids[1]);assert.equal(current.count,'0');assert.equal(current.updated,'--');assert.equal(current.uplink,'--');assert.equal(current.total,'--');
     fixture.feed=true;await until('boatMonitor.link.connected&&document.getElementById("deviceLastUpdate").textContent!=="--"');
-    assert.equal((await card()).name,ids[1]);await shot('device-card-cloud-second');await disconnect();
+    assert.equal((await card()).name,ids[1]);await until('document.getElementById("deviceUplinkLatency").textContent==="45 ms"');await shot('device-card-cloud-second');await disconnect();
     await choose(ids[2]);current=await card();assert.equal(current.name,ids[2]);assert.equal(current.count,'0');assert.equal(current.updated,'--');
     fixture.deviceId=ids[2];await connect();fixture.feed=true;await until('boatMonitor.link.connected&&document.getElementById("deviceLastUpdate").textContent!=="--"');
     assert.equal((await card()).title,'MQTT 设备 ID：'+ids[2]);
@@ -99,10 +116,22 @@ async function main(){
     await evaluate('document.getElementById("themeToggle").click()');await until('document.documentElement.dataset.theme==="light"');await shot('device-card-cloud-light');
     current=await disconnect();assert.equal(current.chip,'MQTT');assert.equal(current.name,ids[2]);assert.notEqual(current.count,'0');assert.notEqual(current.updated,'--');assert.equal(current.latency,'--');
     await connect();fixture.feed=true;await until('boatMonitor.link.connected');current=await card();assert.equal(current.chip,'MQTT');assert.equal(current.name,ids[2]);
+    await evaluate('location.hash="#diagnostics"');await until('!document.getElementById("view-diagnostics").hidden');
+    for(const [width,theme] of [[375,'dark'],[320,'light']]){
+      await send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:true});
+      await evaluate('if(document.documentElement.dataset.theme!=='+JSON.stringify(theme)+')document.getElementById("themeToggle").click();document.getElementById("diagnostics").scrollIntoView()');
+      await wait(250);
+      assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,width+'px page must fit');
+      assert.equal(await evaluate('document.getElementById("diagnostics").scrollWidth<=document.getElementById("diagnostics").clientWidth'),true,width+'px latency diagnostics must fit');
+      assert.equal(await evaluate('document.getElementById("diagnosticUplinkLatency").textContent'), '45 ms');
+      assert.match(await evaluate('document.getElementById("diagnosticTotalLatency").textContent'),/^\d+ ms$/);
+      await pageShot('device-card-uplink-mobile-'+width+'-'+theme);
+    }
     assert.deepEqual(errors,[]);
-    console.log('Chrome device card passed: local login/API/SSE; MQTT IDs including 64 characters; count, recent update, forwarding estimate; disconnect retains last update; switch clears old vessel data; MQTT reconnect; dark/light screenshots; no production requests.');
+    console.log('Chrome device card passed: local login/API/SSE; MQTT IDs including 64 characters; forwarding/uplink/total estimates, legacy/invalid unknown handling; disconnect and switch clear latency; MQTT reconnect; 375/320px dark/light diagnostics screenshots; no production requests.');
   }finally{
     clearInterval(feed);socket?.close();browser.kill();server.closeAllConnections?.();await new Promise(resolve=>server.close(resolve));
+    if(path.dirname(run)===output&&path.basename(run).startsWith('device-card-state-'))fs.rmSync(run,{recursive:true,force:true});
   }
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

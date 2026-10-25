@@ -2,8 +2,10 @@
 'use strict';
 const {EventEmitter}=require('node:events');
 const crypto=require('node:crypto');
+const {performance}=require('node:perf_hooks');
 const protocol=require('../public/utils/uart4Protocol');
 const parameters=require('./parameter-protocol');
+const {unwrapTelemetry,isSyncResponse,UplinkClock}=require('./latency-protocol');
 const DEVICE_ID=/^[A-Za-z0-9_-]{1,64}$/;
 const LAYOUT=[
   [0,64,1,1,protocol.decodeFrame],
@@ -21,10 +23,10 @@ function validateTelemetry(payload){
 }
 
 class CloudBridge extends EventEmitter {
-  constructor({env=process.env,connect,now=Date.now,maxDevices=64,staleMs=3000,tickMs=1000,parameterFreshMs=2500,parameterTimeoutMs=5000,flashTimeoutMs=20000}={}){
+  constructor({env=process.env,connect,now=Date.now,monotonicNow=()=>performance.now(),maxDevices=64,staleMs=3000,tickMs=1000,parameterFreshMs=2500,parameterTimeoutMs=5000,flashTimeoutMs=20000}={}){
     super();
     this.enabled=env.BOAT_CLOUD_ENABLED==='1';
-    this.env=env;this.connect=connect;this.now=now;this.maxDevices=maxDevices;
+    this.env=env;this.connect=connect;this.now=now;this.monotonicNow=monotonicNow;this.maxDevices=maxDevices;
     this.staleMs=staleMs;this.tickMs=tickMs;this.devices=new Map();
     this.parameterFreshMs=parameterFreshMs;this.parameterTimeoutMs=parameterTimeoutMs;this.flashTimeoutMs=flashTimeoutMs;this.pendingParameters=new Map();this.parameterSequence=crypto.randomBytes(4).readUInt32LE();
     this.brokerConnected=false;this.client=null;this.timer=null;this.stopped=false;this.generation=0;
@@ -62,7 +64,7 @@ class CloudBridge extends EventEmitter {
     if(this.stopped||this.brokerConnected===connected)return;
     this.brokerConnected=connected;
     // Broker 重连后旧缓存仍保持离线；必须等到新的非 retained 遥测。
-    if(!connected)for(const device of this.devices.values()){device.live=false;device.capability=null;this.cancelParameters(device.id,503,'云端连接已断开，参数结果未知，请读取确认');}
+    if(!connected)for(const device of this.devices.values()){device.live=false;device.capability=null;device.uplinkClock.reset();this.cancelParameters(device.id,503,'云端连接已断开，参数结果未知，请读取确认');}
     this.emit('state',{brokerConnected:connected,device:null});
   }
   snapshot(device){
@@ -82,7 +84,7 @@ class CloudBridge extends EventEmitter {
       this.cancelParameters(offline[0].id,503,'设备连接已变化，参数结果未知，请读取确认');
       this.devices.delete(offline[0].id);
     }
-    const device={id,lastReceivedAt:null,status:'unknown',lastStatusAt:null,live:false,announcedOnline:false,announcedParametersReady:false,capability:null,consumedToken:null};
+    const device={id,lastReceivedAt:null,status:'unknown',lastStatusAt:null,live:false,announcedOnline:false,announcedParametersReady:false,capability:null,consumedToken:null,uplinkClock:new UplinkClock()};
     this.devices.set(id,device);return device;
   }
   acceptMessage(topic,payload,packet={}){
@@ -90,21 +92,27 @@ class CloudBridge extends EventEmitter {
     const parts=topic.split('/');
     if(parts.length!==3||parts[0]!==this.prefix||!DEVICE_ID.test(parts[1]))return false;
     if(parts[2]==='telemetry'){
-      if(packet.retain||!validateTelemetry(payload))return false;
+      const receivedAt=this.now(),receivedMono=this.monotonicNow();
+      if(packet.retain)return false;
+      const telemetry=unwrapTelemetry(payload);
+      if(!telemetry||!validateTelemetry(telemetry.payload))return false;
       const device=this.obtain(parts[1]);if(!device)return false;
-      device.lastReceivedAt=this.now();device.live=true;
+      device.lastReceivedAt=receivedAt;device.live=true;
+      device.uplinkClock.observe(telemetry.session);
+      const timing=telemetry.session?device.uplinkClock.estimate(telemetry.tick,receivedMono):null;
       // 新遥测证明设备已上线，避免旧的 retained offline 覆盖本次连接。
       if(device.status==='offline')device.status='unknown';
       device.announcedOnline=true;
       this.emit('state',this.state(device.id));
-      this.emit('telemetry',{deviceId:device.id,receivedAt:device.lastReceivedAt,payload:payload.toString('base64'),ageMs:0});
+      this.emit('telemetry',{deviceId:device.id,receivedAt:device.lastReceivedAt,payload:telemetry.payload.toString('base64'),ageMs:0,...timing});
+      if(telemetry.session)this.probeUplinkClock(device);
       return true;
     }
     if(parts[2]==='status'&&payload.length<=7){
       const value=payload.toString('utf8');if(!['online','offline'].includes(value))return false;
       const device=this.obtain(parts[1]);if(!device)return false;
       device.status=value;device.lastStatusAt=this.now();
-      if(value==='offline'){device.live=false;device.capability=null;this.cancelParameters(device.id,503,'设备已离线，参数结果未知，请读取确认');}
+      if(value==='offline'){device.live=false;device.capability=null;device.uplinkClock.reset();this.cancelParameters(device.id,503,'设备已离线，参数结果未知，请读取确认');}
       this.emit('state',this.state(device.id));return true;
     }
     if(parts[2]==='parameter-capability'){
@@ -114,12 +122,25 @@ class CloudBridge extends EventEmitter {
       device.capability={...value,receivedAt:this.now()};this.emit('state',this.state(device.id));return true;
     }
     if(parts[2]==='parameter-response'){
-      if(packet.retain)return false;const value=parameters.response(payload),pending=this.pendingParameters.get(parts[1]);
+      if(packet.retain)return false;
+      // BTS1 是只读校时诊断，不续遥测在线时间，也不完成/消费任何 BPC1 参数事务。
+      if(isSyncResponse(payload)){
+        const device=this.devices.get(parts[1]);
+        return !!(device&&this.snapshot(device).online&&device.uplinkClock.accept(payload,this.monotonicNow()));
+      }
+      const value=parameters.response(payload),pending=this.pendingParameters.get(parts[1]);
       if(!value||!pending||value.token!==pending.token||value.uptimeMs!==pending.uptimeMs||value.sequence!==pending.sequence)return false;
       const device=this.devices.get(parts[1]);if(!this.parameterLive(device)){this.cancelParameters(parts[1],503,'设备数据已过期，参数结果未知，请读取确认');return false;}
       this.finishParameters(parts[1],null,value.frame);return true;
     }
     return false;
+  }
+  probeUplinkClock(device){
+    if(!this.client||typeof this.client.publish!=='function'||this.client.connected===false||this.client.disconnecting||this.pendingParameters.has(device.id))return;
+    const clock=device.uplinkClock,pending=clock.probe(this.monotonicNow());if(!pending)return;
+    // 复用已部署的参数主题ACL；不同magic/精确长度使校时不会进入控制/Flash队列。
+    try{this.client.publish(this.prefix+'/'+device.id+'/parameter-command',pending.payload,{qos:0,retain:false},error=>{if(error)clock.cancel(pending);});}
+    catch(_){clock.cancel(pending);}
   }
   parameterLive(device){
     if(!device||!this.brokerConnected||!device.live||device.status==='offline'||!device.capability||device.lastReceivedAt===null)return false;
@@ -155,6 +176,7 @@ class CloudBridge extends EventEmitter {
   refresh(){
     for(const device of this.devices.values()){
       const online=this.snapshot(device).online;
+      if(!online)device.uplinkClock.reset();else device.uplinkClock.expire(this.monotonicNow());
       if(!this.parameterLive(device))this.cancelParameters(device.id,503,'设备数据已过期，参数结果未知，请读取确认');
       const parametersReady=this.parametersReady(device);
       if(online!==device.announcedOnline||parametersReady!==device.announcedParametersReady){device.announcedOnline=online;device.announcedParametersReady=parametersReady;this.emit('state',this.state(device.id));}

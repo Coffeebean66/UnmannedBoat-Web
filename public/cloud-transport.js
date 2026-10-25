@@ -2,6 +2,8 @@
 (() => {
   'use strict';
   const {UART4StreamParser,decodeParameterFrame}=BoatModules.uart4Protocol;
+  // 缺少校时元数据时保留未知，不能把字符串、负数或异常大值显示成有效延迟。
+  const validDelay=value=>Number.isFinite(value)&&value>=0&&value<=60000?value:null;
   class CloudBoatLink extends EventTarget {
     constructor() {
       super();this.parser=new UART4StreamParser();this.generation=0;this.devices=[];
@@ -202,6 +204,10 @@
             frame.receivedAtMonotonic=now-age;
             // 只估计服务器至浏览器的转发耗时，不能当作船端全链路延迟或 RTT。
             frame.cloudForwardDelayMs=this.clockKnown&&Number.isFinite(packet.receivedAt)?Math.max(0,wallAge):null;
+            // 上行耗时由后台通过船端时钟校准估计；老固件/校时失效逐包回到未知。
+            frame.cloudUplinkDelayMs=validDelay(packet.uplinkDelayMs);
+            frame.cloudUplinkRttMs=validDelay(packet.uplinkRttMs);
+            frame.cloudUplinkUncertaintyMs=validDelay(packet.uplinkUncertaintyMs);
             this.emit('frame',frame);
           }
           this.notify();

@@ -11,7 +11,8 @@
   const users=new BoatUserManagementPanel({toast});
   const wgs=(latitude,longitude)=>Number.isFinite(latitude)&&Number.isFinite(longitude)&&Math.abs(latitude)<=90&&Math.abs(longitude)<=180?{latitude,longitude}:null;
   const track=new M.boatTrack.BoatTrack(wgs);
-  const state={latest:{},history:[],chartMode:'speed',lastReceived:null,lastUpdateAt:null,forwardDelayMs:null,deviceId:null};
+  const state={latest:{},history:[],chartMode:'speed',lastReceived:null,lastUpdateAt:null,forwardDelayMs:null,
+    uplinkDelayMs:null,uplinkRttMs:null,uplinkUncertaintyMs:null,deviceId:null};
   let map,marker,mapVectors,trackRevision=-1,lastLocation,hadFix=false,viewResizeFrame;
   let chartPalette;
   const set=(id,value)=>{const text=value==null?'--':String(value);if($(id).textContent!==text)$(id).textContent=text;};
@@ -189,7 +190,21 @@
     const updated=sameDevice&&Number.isFinite(state.lastUpdateAt)?new Date(state.lastUpdateAt):null;
     set('deviceLastUpdate',updated?updated.toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}):'--');
     if(updated)$('deviceLastUpdate').dateTime=updated.toISOString();else $('deviceLastUpdate').removeAttribute('datetime');
-    set('deviceLatency',link.connected&&sameDevice&&Number.isFinite(state.forwardDelayMs)?Math.round(state.forwardDelayMs)+' ms':'--');
+    const forward=link.connected&&sameDevice&&Number.isFinite(state.forwardDelayMs)?state.forwardDelayMs:null;
+    const uplink=link.connected&&sameDevice&&Number.isFinite(state.uplinkDelayMs)?state.uplinkDelayMs:null;
+    const total=forward!==null&&uplink!==null?forward+uplink:null;
+    const delayText=value=>value===null?'--':Math.round(value)+' ms';
+    set('deviceLatency',delayText(forward));
+    set('deviceUplinkLatency',delayText(uplink));
+    set('deviceTotalLatency',delayText(total));
+    set('diagnosticForwardLatency',delayText(forward));
+    set('diagnosticUplinkLatency',delayText(uplink));
+    set('diagnosticTotalLatency',delayText(total));
+    const uplinkTitle=uplink===null?'船端上报且完成校时后显示；旧固件、断线或校时失效时未知。':
+      '估计 STM32 发出遥测至服务器收到的耗时，不含传感器采样。'+
+      (Number.isFinite(state.uplinkRttMs)?'校时网络往返 '+Math.round(state.uplinkRttMs)+' ms。':'')+
+      (Number.isFinite(state.uplinkUncertaintyMs)?'上行估计误差约 ±'+Math.ceil(state.uplinkUncertaintyMs)+' ms。':'');
+    $('deviceUplinkLatency').title=uplinkTitle;$('diagnosticUplinkLatency').title=uplinkTitle;
   }
   function render() {
     if(document.hidden)return;
@@ -226,6 +241,9 @@
     if(now-at>=1000)return;
     state.lastReceived=at;state.lastUpdateAt=Date.now();
     state.forwardDelayMs=Number.isFinite(frame.cloudForwardDelayMs)?frame.cloudForwardDelayMs:null;
+    state.uplinkDelayMs=Number.isFinite(frame.cloudUplinkDelayMs)?frame.cloudUplinkDelayMs:null;
+    state.uplinkRttMs=Number.isFinite(frame.cloudUplinkRttMs)?frame.cloudUplinkRttMs:null;
+    state.uplinkUncertaintyMs=Number.isFinite(frame.cloudUplinkUncertaintyMs)?frame.cloudUplinkUncertaintyMs:null;
     if(frame.motors)state.latest.status={frame,at};
     if(frame.boat) {
       state.latest.boat={frame,at};
@@ -245,7 +263,9 @@
     $('disconnectButton').disabled=!link.connected&&!waiting&&!link.busy;
   }
   function clearLive() {
-    state.latest={};state.history=[];state.lastReceived=null;state.forwardDelayMs=null;viewer.reset();horizon.reset();track.stop();track.breakSegment();
+    state.latest={};state.history=[];state.lastReceived=null;state.forwardDelayMs=null;
+    state.uplinkDelayMs=null;state.uplinkRttMs=null;state.uplinkUncertaintyMs=null;
+    viewer.reset();horizon.reset();track.stop();track.breakSegment();
     marker?.remove();marker=null;lastLocation=null;hadFix=false;updateMapAvailability(false);
   }
   link.addEventListener('connection',({detail:c})=>{
@@ -349,7 +369,7 @@
   };
   on('cloudLogout',()=>cloud.logout());
   cloud.initialize().catch(()=>{cloud.message='无法读取云端配置，请检查服务器连接';renderCloud();});
-  set('supportNotice','无人船通过 MQTT 向服务器上报，浏览器通过同源 HTTP/SSE 接收实时数据。远程访问建议使用 HTTPS；地图底图需要联网。');
+  set('supportNotice','无人船通过 MQTT 向服务器上报，浏览器通过同源 HTTP/SSE 接收实时数据。船→云延迟在船端校时完成后显示；合计为船→云估计值与云→网页转发耗时之和，不含传感器采样或画面绘制。旧固件或校时失效时显示 --。远程访问建议使用 HTTPS；地图底图需要联网。');
   readChartPalette();setupMap();mapVectors=new MapVelocityView(map);render();
   function refreshWorkspace() {
     // 切页保留连接与历史，待新容器布局完成后恢复地图、图表和三维画面。
