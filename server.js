@@ -6,10 +6,11 @@ const {createCloudApi}=require('./server/cloud-api');
 const {createAccountApi}=require('./server/account-api');
 const {createUpdateApi,readCurrentRelease}=require('./server/update-api');
 const {createMapConfigApi,MAP_CONTENT_SECURITY_POLICY}=require('./server/map-config');
+const {createMqttDeviceApi}=require('./server/mqtt-device-api');
 const {version:packageVersion}=require('./package.json');
 const ROOT=path.join(__dirname,'public');
 const MIME={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json; charset=utf-8','.glb':'model/gltf-binary','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon','.txt':'text/plain; charset=utf-8'};
-function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},apiOptions={},updateOptions={},accountOptions={},mapOptions={}}={}) {
+function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},apiOptions={},updateOptions={},accountOptions={},mapOptions={},mqttAdminOptions={}}={}) {
   const base=fs.realpathSync(root);
   const bridge=cloud||new CloudBridge({env,...cloudOptions});
   const accounts=createAccountApi({...accountOptions,env});
@@ -18,6 +19,7 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
   const current=readCurrentRelease({version:packageVersion,releasePath:updateOptions.releasePath,instanceId:updateOptions.instanceId});
   const updateApi=createUpdateApi({...updateOptions,env,current,accounts});
   const mapApi=createMapConfigApi({...mapOptions,env,accounts});
+  const mqttDeviceApi=createMqttDeviceApi({...mqttAdminOptions,accounts});
   const handler=async(req,res)=>{
     res.setHeader('X-Content-Type-Options','nosniff');
     res.setHeader('Referrer-Policy','strict-origin-when-cross-origin');
@@ -32,6 +34,7 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
       const url=new URL(req.url||'/','http://localhost');
       if(await mapApi.handle(req,res,url))return;
       if(await accounts.handle(req,res,url))return;
+      if(await mqttDeviceApi.handle(req,res,url))return;
       if(await updateApi.handle(req,res,url))return;
       if(await api.handle(req,res,url))return;
     }catch(_){if(!res.headersSent)return fail(500,'Service unavailable');res.destroy();return;}
@@ -59,7 +62,7 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
   };
   const server=key&&cert?https.createServer({key,cert},handler):http.createServer(handler);
   const originalClose=server.close.bind(server);
-  server.close=(callback)=>{mapApi.close();accounts.close();updateApi.close();api.close();bridge.stop();return originalClose(callback);};
+  server.close=(callback)=>{mqttDeviceApi.close();mapApi.close();accounts.close();updateApi.close();api.close();bridge.stop();return originalClose(callback);};
   server.boatCloud=bridge;server.boatCloudApi=api;server.boatUpdateApi=updateApi;server.boatRelease=current;server.boatAccounts=accounts;
   bridge.start();
   return server;
