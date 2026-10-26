@@ -349,6 +349,7 @@
       element.className = options.className || '';
       element.innerHTML = options.html || '';
       const size = options.iconSize || [30, 30], anchor = options.iconAnchor || [15, 15];
+      const interactive = options.interactive !== false || typeof options.onClick === 'function';
       const view = this;
       let native, nativeProvider, attached = false, removed = false, opacity = 1;
       const wrapper = {
@@ -364,19 +365,20 @@
             const offset = scope.AMap.Pixel ? new scope.AMap.Pixel(x, y) : { x, y };
             native = new scope.AMap.Marker({
               position: [point.longitude, point.latitude], content: element, offset, anchor: 'top-left',
-              zIndex: 120 + (options.zIndexOffset || 0), clickable: options.interactive !== false, bubble: true
+              zIndex: 120 + (options.zIndexOffset || 0), clickable: interactive, bubble: true, title: options.title || ''
             });
             this.native = native;
             native.setMap(view.map);
           } else {
             native = scope.L.marker([point.latitude, point.longitude], {
               icon: scope.L.divIcon({ className: options.className || '', html: element.innerHTML, iconSize: size, iconAnchor: anchor }),
-              interactive: options.interactive !== false, keyboard: options.interactive !== false,
+              interactive, keyboard: interactive, title: options.title || '', alt: options.ariaLabel || options.title || '',
               zIndexOffset: options.zIndexOffset || 0
             });
             this.native = native;
             native.addTo(view.map);
           }
+          if (typeof options.onClick === 'function' && typeof native.on === 'function') native.on('click', options.onClick);
           attached = true;
           if (typeof native.setOpacity === 'function' && element.style.opacity) element.style.opacity = '';
           if (opacity !== 1) this.setOpacity(opacity);
@@ -385,6 +387,7 @@
           if (!native) return;
           const current = this.getElement();
           if (typeof current?.innerHTML === 'string') element.innerHTML = current.innerHTML;
+          if (typeof options.onClick === 'function' && typeof native.off === 'function') native.off('click', options.onClick);
           if (nativeProvider === 'amap') native.setMap(null); else native.remove();
           attached = false;
         },
@@ -471,6 +474,51 @@
         else this.map.setCenter([point.longitude, point.latitude], options.animate === false);
       } else this.map.setView([point.latitude, point.longitude], zoom, options);
       return this;
+    }
+
+    fitLocations(values, options = {}) {
+      if (!this.ready || !Array.isArray(values)) return false;
+      const locations = [], seen = new Set();
+      for (const value of values) {
+        const raw = fix(value);
+        if (!raw) continue;
+        const key = raw.latitude + ',' + raw.longitude;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        locations.push({ raw, projected: this.project(raw) });
+      }
+      if (!locations.length) return false;
+
+      const maxZoom = Math.max(3, Math.min(this.provider === 'amap' ? 20 : 19,
+        Number.isFinite(options.maxZoom) ? options.maxZoom : 16));
+      const singleZoom = Math.max(3, Math.min(maxZoom,
+        Number.isFinite(options.singleZoom) ? options.singleZoom : 15));
+      const animate = options.animate !== false;
+      if (locations.length === 1) {
+        this.setView(locations[0].raw, singleZoom, { animate });
+        return true;
+      }
+
+      if (this.provider === 'osm') {
+        if (typeof this.map.fitBounds !== 'function') return false;
+        this.map.fitBounds(locations.map(({ projected }) => [projected.latitude, projected.longitude]), {
+          padding: options.padding || [32, 32], maxZoom, animate
+        });
+        return true;
+      }
+
+      const latitudes = locations.map(({ projected }) => projected.latitude);
+      const longitudes = locations.map(({ projected }) => projected.longitude);
+      if (typeof scope.AMap?.Bounds !== 'function' || typeof this.map.setBounds !== 'function') return false;
+      const lngLat = (longitude, latitude) => typeof scope.AMap.LngLat === 'function'
+        ? new scope.AMap.LngLat(longitude, latitude) : [longitude, latitude];
+      const bounds = new scope.AMap.Bounds(
+        lngLat(Math.min(...longitudes), Math.min(...latitudes)),
+        lngLat(Math.max(...longitudes), Math.max(...latitudes))
+      );
+      this.map.setBounds(bounds, !animate);
+      if (this.getZoom() > maxZoom) this.setZoom(maxZoom);
+      return true;
     }
 
     getCenter() {

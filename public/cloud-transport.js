@@ -157,7 +157,7 @@
     async connect(id=this.selectedId) {
       window.BoatAuth?.assertMonitor();
       if(!this.enabled)throw Error('服务器尚未启用 MQTT 云端监测');
-      if(!id)throw Error('请先选择云端无人船');
+      if(!/^[A-Za-z0-9_-]{1,64}$/.test(id||''))throw Error('请先选择有效的云端无人船');
       this.disconnect('正在连接云端…');this.selectedId=id;this.wanted=true;
       this.parser=new UART4StreamParser();this.connecting=true;this.message='正在连接云端，等待实时遥测';
       const token=this.generation;this.notify();

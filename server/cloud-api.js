@@ -17,7 +17,8 @@ function createCloudApi({bridge,env=process.env,now=Date.now,maxSessions=128,max
   }
   const expectedPassword=hash(env.BOAT_CLOUD_PASSWORD||'');
   const sessions=new Map(),attempts=new Map(),clients=new Set();
-  let closed=false;
+  let closed=false,fleetTimer=null,fleetIds='',fleetBroker=null;
+  const fleetSent=new Map(),FLEET_INTERVAL_MS=250;
   const json=(res,status,value)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
   const local=req=>['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
   const secure=req=>!!req.socket.encrypted||(local(req)&&req.headers['x-forwarded-proto']==='https')||configuredOrigin.startsWith('https:');
@@ -40,6 +41,8 @@ function createCloudApi({bridge,env=process.env,now=Date.now,maxSessions=128,max
   function closeClient(client,force=false){
     if(!clients.delete(client))return;
     clearInterval(client.timer);
+    clearTimeout(client.drainTimer);if(client.onDrain)client.res.removeListener('drain',client.onDrain);
+    if(client.fleet&&![...clients].some(item=>item.fleet)){clearInterval(fleetTimer);fleetTimer=null;fleetSent.clear();fleetIds='';fleetBroker=null;}
     if(force&&typeof client.res.destroy==='function')client.res.destroy();else client.res.end();
   }
   function closeSession(key){for(const client of [...clients])if(client.key===key)closeClient(client);}
@@ -49,10 +52,50 @@ function createCloudApi({bridge,env=process.env,now=Date.now,maxSessions=128,max
   function send(client,event,data){
     if(!activeKey(client.key))return closeClient(client);
     if(client.res.destroyed||client.res.writableEnded)return closeClient(client);
-    if(client.res.writableLength>32768||!client.res.write('event: '+event+'\ndata: '+JSON.stringify(data)+'\n\n'))closeClient(client,true);
+    const encoded='event: '+event+'\ndata: '+JSON.stringify(data)+'\n\n';
+    if(client.backpressured||client.res.writableLength>32768)return closeClient(client,true);
+    if(!client.res.write(encoded)){
+      // 64艘船首次快照可超过Node单次写入高水位；只容许这一份有上限的快照等待drain，不继续排队。
+      if(client.fleet&&event==='fleet'&&Buffer.byteLength(encoded)<=131072){
+        client.backpressured=true;client.onDrain=()=>{client.backpressured=false;clearTimeout(client.drainTimer);client.onDrain=null;};
+        client.res.once('drain',client.onDrain);client.drainTimer=setTimeout(()=>closeClient(client,true),2000);client.drainTimer.unref?.();
+      }else closeClient(client,true);
+    }
   }
-  function onTelemetry(message){for(const client of clients)if(client.device===message.deviceId)send(client,'telemetry',message);}
-  function onState(message){for(const client of clients)if(!message.device||message.device.id===client.device)send(client,'state',bridge.state(client.device));}
+  const fleetSnapshot=()=>{
+    const state=typeof bridge.fleetList==='function'?bridge.fleetList():bridge.list();
+    return {...state,devices:state.devices.map(device=>({...device,summary:device.summary??null})),serverTime:now()};
+  };
+  const identity=devices=>devices.map(device=>device.id).sort().join('\0');
+  function rememberFleet(state){
+    fleetIds=identity(state.devices);fleetBroker=state.brokerConnected;fleetSent.clear();
+    for(const device of state.devices)fleetSent.set(device.id,{at:now(),text:JSON.stringify(device),online:device.online});
+  }
+  function broadcastFleet(state){
+    for(const client of [...clients])if(client.fleet)send(client,'fleet',state);
+    if([...clients].some(client=>client.fleet))rememberFleet(state);
+  }
+  function flushFleet(immediateOffline=false){
+    if(![...clients].some(client=>client.fleet))return;
+    const state=fleetSnapshot();
+    if(identity(state.devices)!==fleetIds||state.brokerConnected!==fleetBroker)return broadcastFleet(state);
+    for(const device of state.devices){
+      const previous=fleetSent.get(device.id),text=JSON.stringify(device);
+      if(previous?.text===text)continue;
+      const urgent=!device.online&&(immediateOffline||previous?.online);
+      if(!urgent&&previous&&now()-previous.at<FLEET_INTERVAL_MS)continue;
+      for(const client of [...clients])if(client.fleet)send(client,'fleet-device',{brokerConnected:state.brokerConnected,device,serverTime:state.serverTime});
+      if([...clients].some(client=>client.fleet))fleetSent.set(device.id,{at:now(),text,online:device.online});
+    }
+  }
+  function onTelemetry(message){
+    for(const client of [...clients])if(!client.fleet&&client.device===message.deviceId)send(client,'telemetry',message);
+    // 原始遥测可能是64船×10Hz；总览由共用250ms定时器合并，不在每一包重算整个船队。
+  }
+  function onState(message){
+    for(const client of [...clients])if(!client.fleet&&(!message.device||message.device.id===client.device))send(client,'state',bridge.state(client.device));
+    if(!message.device||!fleetSent.has(message.device.id)||(!message.device.online&&fleetSent.get(message.device.id).online))flushFleet(true);
+  }
   if(enabled){bridge.on('telemetry',onTelemetry);bridge.on('state',onState);}
   async function readJson(req,limit=1024){
     if(!/^application\/json(?:\s*;|$)/i.test(String(req.headers['content-type']||'')))throw {status:415};
@@ -117,19 +160,25 @@ function createCloudApi({bridge,env=process.env,now=Date.now,maxSessions=128,max
     const session=sessionFor(req);
     if(!session){json(res,401,{error:'Login required'});return true;}
     if(url.pathname==='/api/cloud/devices'&&req.method==='GET'){json(res,200,{...bridge.list(),serverTime:now()});return true;}
-    if(url.pathname==='/api/cloud/events'&&req.method==='GET'){
-      const device=url.searchParams.get('device');
-      if(!DEVICE_ID.test(device||'')){json(res,400,{error:'Invalid device ID'});return true;}
+    if(url.pathname==='/api/cloud/fleet'&&req.method==='GET'){json(res,200,fleetSnapshot());return true;}
+    if(['/api/cloud/events','/api/cloud/fleet/events'].includes(url.pathname)&&req.method==='GET'){
+      const fleet=url.pathname==='/api/cloud/fleet/events',device=fleet?null:url.searchParams.get('device');
+      if(!fleet&&!DEVICE_ID.test(device||'')){json(res,400,{error:'Invalid device ID'});return true;}
       if(clients.size>=maxClients||[...clients].filter(client=>client.key===session.key).length>=maxClientsPerSession){json(res,503,{error:'Stream limit reached'});return true;}
       res.writeHead(200,{'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-store','Connection':'keep-alive','X-Accel-Buffering':'no'});
       res.flushHeaders();req.setTimeout(0);res.setTimeout(0);
-      const client={res,key:session.key,device,timer:null};clients.add(client);
+      const client={res,key:session.key,device,fleet,timer:null};clients.add(client);
       req.once('close',()=>closeClient(client));res.once('error',()=>closeClient(client));
-      send(client,'state',bridge.state(device));
+      if(fleet){
+        const state=fleetSnapshot();send(client,'fleet',state);
+        if(!fleetTimer&&clients.has(client)){
+          rememberFleet(state);fleetTimer=setInterval(()=>flushFleet(),FLEET_INTERVAL_MS);fleetTimer.unref?.();
+        }
+      }else send(client,'state',bridge.state(device));
       if(!clients.has(client))return true;
       client.timer=setInterval(()=>{
         if(!activeKey(client.key))return closeClient(client);
-        if(!res.write(': heartbeat\n\n'))closeClient(client,true);
+        if(client.backpressured||!res.write(': heartbeat\n\n'))closeClient(client,true);
       },heartbeatMs);client.timer.unref?.();
       return true;
     }
@@ -137,6 +186,7 @@ function createCloudApi({bridge,env=process.env,now=Date.now,maxSessions=128,max
   }
   function close(){
     if(closed)return;closed=true;
+    clearInterval(fleetTimer);fleetTimer=null;fleetSent.clear();
     for(const client of [...clients])closeClient(client);
     for(const operation of parameterOperations)operation.controller.abort();parameterOperations.clear();
     bridge?.removeListener('telemetry',onTelemetry);bridge?.removeListener('state',onState);

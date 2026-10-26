@@ -26,6 +26,7 @@
 .mqtt-device-reconnect-notice { margin:10px 0 0; padding:9px 11px; border-radius:5px; background:var(--warn-bg); color:var(--warn); font-size:11px; line-height:1.8; overflow-wrap:anywhere; }
 .mqtt-device-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
 .mqtt-device-actions button { min-height:34px; font-size:11px; }
+.mqtt-device-add { min-height:34px; font-size:11px; }
 .mqtt-device-status { margin-top:12px; color:var(--muted); font-size:11px; line-height:1.8; overflow-wrap:anywhere; }
 .mqtt-device-status[data-tone="error"] { color:var(--danger); }
 .mqtt-device-status[data-tone="success"] { color:var(--success); }

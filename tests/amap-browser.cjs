@@ -181,8 +181,8 @@ async function settingsBrowser(){
   const api="fetch('/api/map/config').then(response=>response.json())";
   const fill=(key,code)=>"document.getElementById('amapKey').value="+JSON.stringify(key)+";document.getElementById('amapSecurityCode').value="+JSON.stringify(code)+";for(const id of ['amapKey','amapSecurityCode'])document.getElementById(id).dispatchEvent(new Event('input',{bubbles:true}))";
   const open=async({evaluate,until})=>{
-    await evaluate("document.getElementById('settingsToggle').click()");
-    await until("document.getElementById('settingsDialog').open && !document.getElementById('mapSettingsForm').hidden && !document.getElementById('mapSettingsSave').disabled");
+    await evaluate("document.getElementById('platformSettingsToggle').click()");
+    await until("document.getElementById('platformSettingsDialog').open && !document.getElementById('mapSettingsForm').hidden && !document.getElementById('mapSettingsSave').disabled");
   };
   await withServer(accounts,'settings-admin',async context=>{
     const {evaluate,until,send,viewportShot,settingsRequests,failures,sdkRequests}=context;
@@ -222,11 +222,11 @@ async function settingsBrowser(){
     for(const width of [1440,320]){
       await send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:width<600});
       await evaluate("document.getElementById('mapSettings').scrollIntoView({block:'center',behavior:'instant'})");await wait(200);
-      assert.equal(await evaluate("document.documentElement.scrollWidth<=innerWidth && document.getElementById('settingsDialog').scrollWidth<=document.getElementById('settingsDialog').clientWidth && document.querySelector('.dialog-scroll').scrollWidth<=document.querySelector('.dialog-scroll').clientWidth"),true,'Map settings do not overflow at '+width);
+      assert.equal(await evaluate("document.documentElement.scrollWidth<=innerWidth && document.getElementById('platformSettingsDialog').scrollWidth<=document.getElementById('platformSettingsDialog').clientWidth && document.querySelector('#platformSettingsDialog .dialog-scroll').scrollWidth<=document.querySelector('#platformSettingsDialog .dialog-scroll').clientWidth"),true,'Map settings do not overflow at '+width);
       assert.equal(await evaluate("['amapKey','amapSecurityCode'].every(id=>{const input=document.getElementById(id),parent=input.closest('label').getBoundingClientRect(),r=input.getBoundingClientRect();return r.left>=parent.left-1&&r.right<=parent.right+1;})"),true,'Map inputs fit their labels at '+width);
       await viewportShot('amap-settings-admin-'+width);
     }
-    await evaluate("document.getElementById('settingsClose').click();document.getElementById('accountLogout').click()");await until('!BoatAuth.user && !BoatAuth.busy');
+    await evaluate("document.getElementById('platformSettingsClose').click();document.getElementById('accountLogout').click()");await until('!BoatAuth.user && !BoatAuth.busy');
     await login(context,'visitor',accounts.BOAT_GUEST_PASSWORD);
     assert.equal(await evaluate("document.getElementById('mapSettings').hidden"),true,'Guest cannot see map administration');
     assert.equal(await evaluate("document.getElementById('amapKey').value"),'','Account downgrade clears the administrator key field');
@@ -248,8 +248,8 @@ async function settingsBrowser(){
   },options);
   await withServer({},'settings-legacy',async context=>{
     const {evaluate,until,viewportShot}=context;
-    await until('BoatAuth.ready');await evaluate("document.getElementById('settingsToggle').click()");
-    await until("document.getElementById('settingsDialog').open && !document.getElementById('mapSettings').hidden");
+    await until('BoatAuth.ready');await evaluate("document.getElementById('platformSettingsToggle').click()");
+    await until("document.getElementById('platformSettingsDialog').open && !document.getElementById('mapSettings').hidden");
     assert.equal(await evaluate("document.getElementById('mapSettingsForm').hidden"),true,'Legacy deployments do not expose an unauthenticated settings form');
     assert.match(await evaluate("document.getElementById('mapSettingsAccess').textContent"),/账户|管理员|登录/);
     assert.equal(await evaluate("fetch('/api/map/settings').then(response=>response.status)"),503,'Legacy deployments refuse unauthenticated configuration access');

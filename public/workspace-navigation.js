@@ -2,6 +2,7 @@
 (() => {
   'use strict';
   const views = {
+    fleet: { title:'船队总览', english:'FLEET OVERVIEW', description:'同时接收所有无人船状态，选择一艘查看详细监测与控制数据。' },
     overview: { title:'船况概览', english:'VESSEL OVERVIEW', description:'快速掌握船速、航向、定位与姿态，进入对应页面查看详情。' },
     navigation: { title:'船位与轨迹', english:'NAVIGATION & TRACK', description:'查看实时船位、速度方向与航行轨迹，独立调整地图视野。' },
     attitude: { title:'三维姿态', english:'VESSEL ATTITUDE', description:'观察三维船体姿态和 IMU / RTK 测量数据。' },
@@ -12,13 +13,39 @@
   const panels = new Map([...document.querySelectorAll('[data-workspace-view]')].map(panel => [panel.dataset.workspaceView,panel]));
   if (!panels.has('overview')) return;
   const links = [...document.querySelectorAll('.side-nav a,.mobile-nav a')];
+  const boatNav = document.getElementById('singleBoatNav');
+  const boatNavName = document.getElementById('singleBoatNavName');
+  const breadcrumbView = document.getElementById('workspaceBreadcrumbView');
+  const breadcrumbBoat = document.getElementById('workspaceBreadcrumbBoat');
   const shared = {
     navigation:document.getElementById('navigation'),
     attitude:document.getElementById('attitude'),
     sensors:document.getElementById('sensorTelemetry')
   };
   const title = document.getElementById('viewTitle');
-  let current = null;
+  let current = null, selectedBoatId = '';
+
+  function updateBreadcrumb() {
+    if (breadcrumbView) breadcrumbView.textContent = views[current]?.title || '';
+    if (breadcrumbBoat) {
+      breadcrumbBoat.textContent = selectedBoatId;
+      breadcrumbBoat.hidden = !selectedBoatId || current === 'fleet';
+    }
+  }
+
+  function setBoatSelected(selectedId) {
+    const id = typeof selectedId === 'string' ? selectedId.trim() : '';
+    const changed = id !== selectedBoatId;
+    selectedBoatId = id;
+    if (boatNav) {
+      boatNav.hidden = !id;
+      // 遥测会反复同步同一船只，不能覆盖用户手动折叠菜单的选择。
+      if (!id) boatNav.open = false;
+      else if (changed) boatNav.open = true;
+    }
+    if (boatNavName) boatNavName.textContent = id || '未选择';
+    updateBreadcrumb();
+  }
 
   // 实际面板始终只有一份，换页不重建对象，也不会重新建立设备连接。
   function mount(panel, slotName) {
@@ -36,7 +63,7 @@
       mount(shared.sensors,'attitude-sensors');
     }
   }
-  function validView(id) { return Object.hasOwn(views,id) && panels.has(id) ? id : 'overview'; }
+  function validView(id) { return Object.hasOwn(views,id) && panels.has(id) ? id : (panels.has('fleet') ? 'fleet' : 'overview'); }
   function routeFromLocation() { return validView(window.location.hash.slice(1)); }
   function writeHash(view, replace) {
     const hash = '#'+view;
@@ -49,6 +76,7 @@
   function navigate(id, {replace=false,focus=true,history:recordHistory=true} = {}) {
     const view = validView(id), previous = current, changed = view !== previous;
     if (recordHistory) writeHash(view,replace);
+    if (boatNav) boatNav.open = !!selectedBoatId && view !== 'fleet';
     if (changed) {
       mountShared(view);
       panels.forEach((panel,name) => { panel.hidden = name !== view; });
@@ -59,6 +87,7 @@
       const english = document.getElementById('viewEnglish'), subtitle = document.getElementById('viewSubtitle');
       if (english) english.textContent = meta.english;
       if (subtitle) subtitle.textContent = meta.description;
+      updateBreadcrumb();
       document.title = meta.title+' · 无人船监测平台';
       links.forEach(link => {
         const destination = link.hash.slice(1), selected = destination === view;
@@ -93,7 +122,9 @@
   }
   window.addEventListener('popstate',restoreLocation);
   window.addEventListener('hashchange',restoreLocation);
+  window.addEventListener('boat-selection-change',event=>setBoatSelected(event.detail?.selectedId));
   if ('scrollRestoration' in window.history) window.history.scrollRestoration = 'manual';
-  window.BoatWorkspace = Object.freeze({get current(){return current;},navigate});
+  window.BoatWorkspace = Object.freeze({get current(){return current;},navigate,setBoatSelected});
+  setBoatSelected('');
   navigate(routeFromLocation(),{replace:true,focus:false});
 })();

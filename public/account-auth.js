@@ -109,10 +109,10 @@
     $('accountNotice').hidden = !accountMode || (state.ready && !!state.user);
     $('accountNoticeText').textContent = state.message;
     $('accountRetry').hidden = state.ready;
-    for (const id of ['settingsToggle', 'sidebarSettings', 'settingsEntry', 'updateToggle']) $(id).hidden = !state.canManage;
+    for (const id of ['settingsToggle', 'sidebarSettings', 'settingsEntry', 'platformSettingsToggle', 'sidebarPlatformSettings', 'updateToggle']) if ($(id)) $(id).hidden = !state.canManage;
     document.querySelector('.settings-callout').hidden = !state.canManage;
     if (!state.canManage) {
-      $('settingsDialog').close(); $('updateDialog').close();
+      $('settingsDialog').close(); $('platformSettingsDialog')?.close(); $('updateDialog').close();
     }
     if (state.user) dialog.close();
     if (state.ready && state.enabled && !state.user && !firstPrompt) { firstPrompt = true; openLogin(); }
