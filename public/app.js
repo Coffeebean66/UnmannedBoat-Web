@@ -10,10 +10,11 @@
   const mapSettings=new BoatMapSettingsPanel();
   const users=new BoatUserManagementPanel({toast});
   const mqttDevices=new BoatMqttDeviceSettingsPanel();
+  const videoView=new BoatVideoView();
   const fleet=new BoatFleetLink(cloud);
-  const fleetView=new BoatFleetView({onSelect:id=>selectBoat(id)});
+  const fleetView=new BoatFleetView({onSelect:id=>selectBoat(id),onConfigure:id=>openBoatSettings(id).catch(error=>toast(error.message)),onVideo:id=>openBoatVideo(id).catch(error=>toast(error.message))});
   const fleetMapView=new BoatFleetMapView({onSelect:id=>selectBoat(id)});
-  let parameterDeviceId='';
+  let parameterDeviceId='',parameterOpenSequence=0,videoOpenSequence=0;
   const wgs=(latitude,longitude)=>Number.isFinite(latitude)&&Number.isFinite(longitude)&&Math.abs(latitude)<=90&&Math.abs(longitude)<=180?{latitude,longitude}:null;
   const track=new M.boatTrack.BoatTrack(wgs);
   const state={latest:{},history:[],chartMode:'speed',lastReceived:null,lastUpdateAt:null,forwardDelayMs:null,
@@ -213,6 +214,7 @@
   }
   function render() {
     if(document.hidden)return;
+    syncParameterAccess();
     const fleetPage=window.BoatWorkspace?.current==='fleet',fleetState=fleet.state();
     const badgeOnline=fleetPage?fleetState.streamConnected&&fleetState.brokerConnected:link.connected;
     set('connectionBadge',fleetPage?(badgeOnline?'船队在线':cloud.authenticated?'船队连接中':'未登录'):(link.connected?'已连接':'未连接'));
@@ -312,18 +314,55 @@
   });
   on('mapCenter',()=>{if(!map?.ready)toast('地图尚未就绪，请查看地图底部提示');else if(lastLocation)map.setView(lastLocation,16);else toast('尚无有效定位');});
   $('mapFollow').onchange=()=>{if($('mapFollow').checked&&lastLocation&&map?.ready)map.setView(lastLocation,16);};
-  const openSettings=()=>{window.BoatAuth?.assertManage();$('settingsDialog').showModal();};
+  function parameterAccess() {
+    return {canManage:!!window.BoatAuth?.canManage,parameterBusy:params.busy||!!link.pending};
+  }
+  function syncParameterAccess() {
+    const access=parameterAccess(),selected=!!(cloud.authenticated&&cloud.selectedId);
+    if(fleetView.state.canManage!==access.canManage||fleetView.state.parameterBusy!==access.parameterBusy)fleetView.update(access);
+    const offline=!cloud.devices.some(device=>device.id===cloud.selectedId&&device.online);
+    for(const id of ['settingsToggle','settingsEntry']){
+      $(id).hidden=!access.canManage||!selected;
+      $(id).disabled=access.parameterBusy||offline;
+    }
+    document.querySelector('.settings-callout').hidden=!access.canManage||!selected;
+  }
+  async function openBoatSettings(id=cloud.selectedId) {
+    window.BoatAuth?.assertManage();
+    if(!cloud.authenticated||!/^[A-Za-z0-9_-]{1,64}$/.test(id||''))throw Error('请从对应无人船卡片进入调参设置');
+    if(params.busy||link.pending)throw Error('请等待当前无人船的参数操作完成，再打开调参设置');
+    const request=++parameterOpenSequence,accountGeneration=window.BoatAuth?.generation;
+    const selecting=selectBoat(id,false),generation=cloud.generation;
+    const selected=await selecting;
+    // 快速点击多张船卡、切船或登出后，迟到的打开流程不能改变当前调参对象。
+    if(request!==parameterOpenSequence||!selected||generation!==cloud.generation||cloud.selectedId!==id||!cloud.wanted||accountGeneration!==window.BoatAuth?.generation)return;
+    window.BoatAuth?.assertManage();
+    renderCloud();
+    $('settingsDialog').dataset.deviceId=id;
+    if(!$('settingsDialog').open)$('settingsDialog').showModal();
+  }
+  const openSettings=()=>openBoatSettings();
+  async function openBoatVideo(id) {
+    if(!cloud.authenticated||!cloud.devices.some(device=>device.id===id))throw Error('请先登录并选择已接入的无人船');
+    const request=++videoOpenSequence,accountGeneration=window.BoatAuth?.generation;
+    const selecting=selectBoat(id,false),generation=cloud.generation;
+    if(!await selecting||request!==videoOpenSequence||generation!==cloud.generation||cloud.selectedId!==id||!cloud.wanted||accountGeneration!==window.BoatAuth?.generation)return;
+    window.BoatWorkspace?.navigate('video');
+  }
   const openPlatformSettings=()=>{window.BoatAuth?.assertManage();$('platformSettingsDialog').showModal();users.open();mqttDevices.open();mapSettings.open();};
   on('settingsToggle',openSettings);
   on('settingsEntry',openSettings);
-  on('sidebarSettings',openSettings);
   on('settingsClose',()=>$('settingsDialog').close());
+  $('settingsDialog').addEventListener('close',()=>{if(!$('settingsDialog').open)delete $('settingsDialog').dataset.deviceId;});
   on('platformSettingsToggle',openPlatformSettings);
   on('sidebarPlatformSettings',openPlatformSettings);
   on('platformSettingsClose',()=>$('platformSettingsDialog').close());
   $('platformSettingsDialog').addEventListener('close',()=>{users.close();mqttDevices.close();mapSettings.close();});
   window.addEventListener('pagehide',()=>{users.destroy();mqttDevices.destroy();},{once:true});
-  for(const [id,kind] of [['readParameters','read'],['writeParameters','write'],['saveFlash','flash']])on(id,()=>params.command(kind));
+  for(const [id,kind] of [['readParameters','read'],['writeParameters','write'],['saveFlash','flash']])on(id,async()=>{
+    if(!$('settingsDialog').open||$('settingsDialog').dataset.deviceId!==cloud.selectedId)throw Error('调参对象已变化，请从对应无人船重新进入');
+    try{await params.command(kind);}finally{syncParameterAccess();}
+  });
   on('fillTuning',()=>params.tune());
   on('helpToggle',()=>{$('parameterHelp').hidden=!$('parameterHelp').hidden;});
   on('exportParameters',()=>{
@@ -362,6 +401,9 @@
     set('connectionText',statusMessage);updateConnectionButtons();
     renderDeviceSummary(link.parser.getStats());
     const target=s.authenticated?s.selectedId:'';
+    videoView.update({deviceId:target,descriptor:s.devices.find(device=>device.id===target)?.video||null,
+      authenticated:s.authenticated&&(!window.BoatAuth||window.BoatAuth.canMonitor),streaming:s.streaming,
+      allowedOrigins:s.videoConfig?.allowedOrigins||[]});
     window.dispatchEvent(new CustomEvent('boat-selection-change',{detail:{selectedId:target}}));
     if(target!==parameterDeviceId){
       parameterDeviceId=target;params.reset(false);
@@ -369,42 +411,45 @@
       $('settingsDialog').close();
     }
     set('parameterDeviceName',target||'尚未选择无人船');
-    set('parameterDeviceNotice',target?'当前操作对象：'+target+'。参数和 Flash 命令只发给这艘船；切换后需要重新读取。':'请在船队总览选择一艘船，或使用顶部设备列表连接后再读取参数。');
-    fleetView.update(fleet.state());
+    set('parameterDeviceNotice',target?'当前操作对象：'+target+'。参数和 Flash 命令只发给这艘船；切换后需要重新读取。':'请从对应无人船卡片的“调参设置”进入，再读取当前船的参数。');
+    fleetView.update({...fleet.state(),...parameterAccess()});
+    syncParameterAccess();
   }
   cloud.addEventListener('cloudstate',({detail})=>renderCloud(detail));
   cloud.addEventListener('authrequired',()=>set('cloudStatus',window.BoatAuth?.enabled===true?'请使用平台账户重新登录':'请输入访问密码登录云端'));
   function renderSourceAccess(){
     const guest=window.BoatAuth?.user?.role==='guest';
     if(!cloud.selectedId){
-      set('sourceHint',guest?'船队总览同时监测所有船舶；选择一艘查看详情。访客可监测，调参需要管理员。':'船队总览同时接收所有无人船；选择船卡或顶部设备列表查看单船详情，平台设置无需连接船舶。');
+      set('sourceHint',guest?'船队总览同时监测所有船舶；选择一艘查看详情。访客可监测，调参需要管理员。':'选择船卡查看单船详情，或点击该船的“调参设置”独立调参；平台设置管理用户、接入账号与地图。');
       set('sourceDescription','MQTT 云端 · 尚未选择详情船舶');
       set('cloudReadOnlyNotice','请先选择并连接需要调参的无人船，再读取当前船的参数。平台设置与船端调参分别管理。');
       return;
     }
-    set('sourceHint',guest?'访客账户仅可查看遥测、地图和轨迹；设备调参需要管理员账户。':cloud.readOnly?cloud.parameterReadOnlyReason:'云端调参已就绪：管理员可读取、写入参数，调试完成后手动保存到 Flash。');
+    set('sourceHint',guest?'访客账户可查看遥测、地图、轨迹和船载视频；设备调参需要管理员账户。':cloud.readOnly?cloud.parameterReadOnlyReason:'云端调参已就绪：管理员可读取、写入参数，调试完成后手动保存到 Flash。');
     set('sourceDescription',cloud.readOnly?'MQTT 云端 · 只读监测':'MQTT 云端 · 可远程调参');
     set('cloudReadOnlyNotice',cloud.readOnly?cloud.parameterReadOnlyReason+'；已保留的本地草稿仍可保存预设或导出。':'当前通过云端操作设备参数，成功提示以 STM32 响应为准。超时或断连后，写入可能已经生效，请先读取确认再重试。Flash 保存仍需满足停机保护。');
   }
   link.addEventListener('permissionchange',({detail})=>{detail.capabilityOnly?params.updateButtons():params.reset(true);updateConnectionButtons();renderCloud();renderSourceAccess();render();});
   async function selectBoat(id,showDetails=true) {
-    if(!/^[A-Za-z0-9_-]{1,64}$/.test(id||''))return;
+    if(!/^[A-Za-z0-9_-]{1,64}$/.test(id||''))return false;
     if(cloud.selectedId===id&&(cloud.wanted||cloud.connected)){
-      if(showDetails)window.BoatWorkspace?.navigate('overview');return;
+      if(showDetails)window.BoatWorkspace?.navigate('overview');return true;
     }
     // 先撤销旧船正在等待的命令，再建立新船的独立解析器。
     link.disconnect('正在切换无人船');params.reset(false);track.clear();state.deviceId=null;state.lastUpdateAt=null;
     if(showDetails)window.BoatWorkspace?.navigate('overview');
-    try{await cloud.connect(id);}catch(error){toast(error.message);}
+    const connecting=cloud.connect(id),generation=cloud.generation;
+    try{await connecting;}catch(error){toast(error.message);return false;}
     renderCloud();render();
+    return generation===cloud.generation&&cloud.selectedId===id&&cloud.wanted;
   }
   $('cloudDevice').onchange=()=>selectBoat($('cloudDevice').value,false);
   fleet.addEventListener('fleetstate',({detail})=>{
-    fleetView.update(detail);
+    fleetView.update({...detail,...parameterAccess()});
     fleetMapView.update(detail);
     // 总览已通过同一认证通道发现新船，设备下拉框同步而无需等待10秒轮询。
     if(detail.streamConnected&&cloud.authenticated){
-      cloud.devices=detail.devices.map(device=>({id:device.id,online:device.online,parametersReady:device.parametersReady}));
+      cloud.devices=detail.devices.map(device=>({id:device.id,online:device.online,parametersReady:device.parametersReady,video:device.video||null}));
       if(cloud.devices.some(device=>device.id===cloud.selectedId&&device.parametersReady))cloud.parameterCapableId=cloud.selectedId;
       renderCloud();
     }
@@ -426,6 +471,7 @@
   set('supportNotice','无人船通过 MQTT 向服务器上报，浏览器通过同源 HTTP/SSE 接收实时数据。船→云延迟在船端校时完成后显示；合计为船→云估计值与云→网页转发耗时之和，不含传感器采样或画面绘制。旧固件或校时失效时显示 --。远程访问建议使用 HTTPS；地图底图需要联网。');
   readChartPalette();setupMap();mapVectors=new MapVelocityView(map);render();
   function refreshWorkspace() {
+    videoView.setVisible(window.BoatWorkspace?.current==='video'&&!document.hidden);
     // 切页保留连接与历史，待新容器布局完成后恢复地图、图表和三维画面。
     viewer.visible=false;viewer.stop();cancelAnimationFrame(viewResizeFrame);
     viewResizeFrame=requestAnimationFrame(()=>{
@@ -441,13 +487,14 @@
   const timer=setInterval(render,200);
   const cloudTimer=setInterval(()=>{if(cloud.enabled&&cloud.authenticated&&!document.hidden)cloud.refreshDevices().catch(()=>{});},10000);
   document.addEventListener('visibilitychange',()=>{
+    videoView.setVisible(window.BoatWorkspace?.current==='video'&&!document.hidden);
     if(document.hidden)cloud.suspend();else cloud.resume();
     if(!document.hidden)render();
   });
-  window.addEventListener('pagehide',()=>{cancelAnimationFrame(viewResizeFrame);clearInterval(timer);clearInterval(cloudTimer);viewer.stop();mapSettings.destroy();fleetMapView.destroy();fleet.destroy();fleetView.destroy();link.disconnect();});
+  window.addEventListener('pagehide',()=>{cancelAnimationFrame(viewResizeFrame);clearInterval(timer);clearInterval(cloudTimer);videoView.destroy();viewer.stop();mapSettings.destroy();fleetMapView.destroy();fleet.destroy();fleetView.destroy();link.disconnect();});
   window.addEventListener('pageshow',event=>{if(event.persisted)location.reload();});
   window.addEventListener('resize',()=>render());
   window.addEventListener('boat-theme-change',()=>{readChartPalette();map?.setTheme(document.documentElement.dataset.theme);fleetMapView.setTheme(document.documentElement.dataset.theme);render();});
   // 提供浏览器控制台诊断入口，界面不显示原始字节流。
-  window.boatMonitor={link,params,viewer,horizon,track,map,mapVectors,mapSettings,mqttDevices,fleet,fleetView,fleetMapView,selectBoat};
+  window.boatMonitor={link,params,viewer,horizon,track,map,mapVectors,mapSettings,mqttDevices,fleet,fleetView,fleetMapView,videoView,selectBoat,openBoatSettings,openBoatVideo};
 })();

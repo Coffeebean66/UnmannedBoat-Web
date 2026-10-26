@@ -6,7 +6,7 @@
   const validDelay=value=>Number.isFinite(value)&&value>=0&&value<=60000?value:null;
   class CloudBoatLink extends EventTarget {
     constructor() {
-      super();this.parser=new UART4StreamParser();this.generation=0;this.devices=[];
+      super();this.parser=new UART4StreamParser();this.generation=0;this.devices=[];this.videoConfig={allowedOrigins:[]};
       this.enabled=false;this.configurationKnown=false;this.requiresLogin=true;this.authenticated=false;this.brokerConnected=false;
       this.pending=null;this.lastReadOnly=true;this.parameterCapableId='';
       this.selectedId='';this.wanted=false;this.live=false;this.serverOffset=0;this.clockKnown=false;
@@ -96,7 +96,7 @@
     }
     state(){return {enabled:this.enabled,requiresLogin:this.requiresLogin,authenticated:this.authenticated,
       brokerConnected:this.brokerConnected,devices:this.devices,selectedId:this.selectedId,streaming:this.wanted,
-      parametersReady:this.parametersReady,readOnly:this.readOnly,parameterBusy:!!this.pending,message:this.message};}
+      parametersReady:this.parametersReady,readOnly:this.readOnly,parameterBusy:!!this.pending,videoConfig:this.videoConfig,message:this.message};}
     notify(){
       const readOnly=this.readOnly;
       if(this.lastReadOnly!==readOnly){
@@ -122,6 +122,7 @@
       if(window.BoatAuth)await window.BoatAuth.whenReady();
       this.configurationKnown=false;
       const config=await this.api('config');this.configurationKnown=typeof config.enabled==='boolean';this.enabled=this.configurationKnown&&config.enabled;this.requiresLogin=!!config.requiresLogin;
+      this.videoConfig={allowedOrigins:Array.isArray(config.video?.allowedOrigins)?config.video.allowedOrigins.filter(origin=>typeof origin==='string'):[]};
       if(!this.enabled){this.message='服务器尚未启用 MQTT 云端监测';this.notify();return;}
       if(window.BoatAuth?.enabled!==false&&window.BoatAuth&&!window.BoatAuth.canMonitor){this.authenticated=false;this.message='请先登录监测平台';this.notify();return;}
       try{await this.refreshDevices();}catch(error){if(error.status!==401)throw error;}

@@ -19,7 +19,10 @@
   <link rel="stylesheet" href="fleet.css">
   <link rel="stylesheet" href="settings-layout.css">
   <link rel="stylesheet" href="console.css">
+  <link rel="stylesheet" href="video.css">
   <script defer src="vendor/leaflet/leaflet.js"></script>
+  <script defer src="vendor/hls/hls.min.js"></script>
+  <script defer src="vendor/mpegts/mpegts.js"></script>
   <script defer src="utils-bundle.js"></script>
   <script defer src="parameter-data.js"></script>
   <script defer src="account-auth.js"></script>
@@ -37,6 +40,7 @@
   <script defer src="user-management.js"></script>
   <script defer src="mqtt-device-settings.js"></script>
   <script defer src="fleet-view.js"></script>
+  <script defer src="video-view.js"></script>
   <script defer src="app.js"></script>
   <script defer src="update-panel.js"></script>
 </head>
@@ -52,7 +56,6 @@
       <button id="disconnectButton" class="ghost" disabled>断开</button>
       <button id="themeToggle" class="icon-button" aria-label="切换到浅色主题" title="切换到浅色主题"><span data-icon="sun"></span></button>
       <button id="platformSettingsToggle" class="settings-button" aria-haspopup="dialog" aria-controls="platformSettingsDialog"><span data-icon="settings"></span>平台设置</button>
-      <button id="settingsToggle" class="settings-button" aria-haspopup="dialog" aria-controls="settingsDialog"><span data-icon="sliders"></span>调参设置</button>
       <button id="updateToggle" class="update-button" aria-haspopup="dialog" aria-controls="updateDialog"><span data-icon="download"></span>更新<span id="updateBusyDot" class="update-busy-dot" hidden aria-label="正在更新"></span></button>
     </div>
   </header>
@@ -69,6 +72,8 @@
           <a href="#analysis"><span data-icon="chart"></span><span>控制曲线</span><span class="nav-index">05</span></a>
           <a href="#propulsion"><span data-icon="motor"></span><span>推进系统</span><span class="nav-index">06</span></a>
           <a href="#diagnostics"><span data-icon="activity"></span><span>通信诊断</span><span class="nav-index">07</span></a>
+          <a href="#video"><span data-icon="video"></span><span>视频监控</span><span class="nav-index">08</span></a>
+          <button id="settingsToggle" type="button" class="nav-parameter-button" aria-haspopup="dialog" aria-controls="settingsDialog" hidden><span data-icon="sliders"></span><span>调参设置</span></button>
         </div>
       </details>
     </nav>
@@ -82,12 +87,11 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <button id="sidebarSettings" class="sidebar-setting"><span data-icon="settings"></span>参数设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.22.0</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.24.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
-    <nav class="mobile-nav" aria-label="快捷导航"><a href="#fleet">船队</a><a href="#overview">单船</a><a href="#navigation">轨迹</a><a href="#attitude">姿态</a><a href="#analysis">曲线</a><a href="#propulsion">电机</a><a href="#diagnostics">诊断</a></nav>
+    <nav class="mobile-nav" aria-label="快捷导航"><a href="#fleet">船队</a><a href="#overview">单船</a><a href="#navigation">轨迹</a><a href="#attitude">姿态</a><a href="#analysis">曲线</a><a href="#propulsion">电机</a><a href="#diagnostics">诊断</a><a href="#video">视频</a></nav>
     <main class="page" id="mainContent">
       <nav class="workspace-breadcrumb" aria-label="当前位置"><a href="#fleet" data-view-link><span data-icon="dashboard"></span>工作台</a><span aria-hidden="true">/</span><span id="workspaceBreadcrumbBoat" hidden></span><span id="workspaceBreadcrumbView" aria-current="page">船队总览</span></nav>
       <section class="hero">
@@ -257,7 +261,7 @@
           <div class="chart-readouts"><div><span>目标</span><b id="chartTarget">--</b></div><div><span>实际</span><b id="chartActual">--</b></div><div><span>误差</span><b id="chartError">--</b></div></div>
           <p id="chartSummary" class="sr-only" aria-live="off">--</p>
         </article>
-        <aside class="workspace-note"><span data-icon="help"></span><p>曲线显示最近 12 秒的目标与实际变化，切换页面会继续采集；断流时曲线留空。需要调参时，可随时打开顶部“设置”。</p></aside>
+        <aside class="workspace-note"><span data-icon="help"></span><p>曲线显示最近 12 秒的目标与实际变化，切换页面会继续采集；断流时曲线留空。需要调参时，从对应无人船卡片或当前船菜单打开“调参设置”。</p></aside>
       </section>
       <section id="view-propulsion" class="workspace-view propulsion-workspace" data-workspace-view="propulsion" aria-labelledby="viewTitle" hidden>
         <section id="propulsion">
@@ -284,6 +288,18 @@
           </div>
         </article>
       </section>
+      <section id="view-video" class="workspace-view video-workspace" data-workspace-view="video" aria-labelledby="viewTitle" hidden>
+        <article class="card video-card">
+          <div class="video-heading"><div><h2 id="videoTitle">船载实时画面</h2><p>独立视频通道 · 与当前无人船同步切换</p></div><span id="videoDeviceName" class="video-device">未选择无人船</span></div>
+          <div class="video-stage">
+            <video id="boatVideo" controls muted playsinline preload="none" aria-label="当前无人船摄像头画面"></video>
+            <div id="videoEmpty" class="video-empty"><span data-icon="video"></span><p id="videoMessage">请选择一艘无人船查看视频</p></div>
+          </div>
+          <div class="video-toolbar"><span id="videoStatus" class="video-status" role="status">等待视频地址</span><div class="video-buttons"><button id="videoPlay" type="button" class="primary" disabled>播放</button><button id="videoStop" type="button" class="ghost" disabled>停止</button><button id="videoRetry" type="button" class="ghost" disabled>重新连接</button><button id="videoFullscreen" type="button" class="ghost" disabled>全屏</button></div></div>
+          <dl class="video-details"><div><dt>播放格式</dt><dd id="videoFormat">--</dd></div><div><dt>视频来源</dt><dd id="videoSource">--</dd></div><div><dt>地址更新时间</dt><dd id="videoUpdated">--</dd></div></dl>
+        </article>
+        <aside class="workspace-note"><span data-icon="help"></span><p>画面由船载摄像头的视频服务提供。离开此页或停止播放可释放视频连接；视频状态与电控遥测在线状态分别显示。</p></aside>
+      </section>
       <footer><span>UNMANNED VESSEL MONITOR <b>/</b> 无人船监测平台</span><span>MQTT 云端监测与调参</span></footer>
     </main>
   </div>
@@ -296,7 +312,7 @@
   </dialog>
   <dialog id="platformSettingsDialog" class="platform-settings-dialog" aria-labelledby="platformSettingsTitle">
     <div class="dialog-head"><div class="title-with-icon"><span class="card-icon blue" data-icon="settings"></span><div><p class="eyebrow">PLATFORM SETTINGS</p><h2 id="platformSettingsTitle">平台设置</h2></div></div><button id="platformSettingsClose" class="ghost">返回监控<span data-icon="close"></span></button></div>
-    <div class="dialog-scroll"><p class="platform-settings-intro">管理整个平台的用户、无人船接入账号与地图配置。无需选择或连接无人船；单船 PID 与电控参数请进入“调参设置”。</p>
+    <div class="dialog-scroll"><p class="platform-settings-intro">管理整个平台的用户、无人船接入账号与地图配置。单船 PID 与电控参数请从对应船只卡片的“调参设置”进入。</p>
       <section id="userManagement" class="user-management" aria-labelledby="userManagementTitle" hidden>
         <div class="user-management-heading">
           <div class="user-management-title"><span class="card-icon blue" data-icon="settings"></span><div><h3 id="userManagementTitle">用户与账户</h3><p>PLATFORM USERS · 仅管理员可操作</p></div></div>
@@ -366,7 +382,7 @@
   </dialog>
   <dialog id="settingsDialog" class="vessel-settings-dialog" aria-labelledby="settingsTitle">
     <div class="dialog-head"><div class="title-with-icon"><span class="card-icon teal" data-icon="sliders"></span><div><p class="eyebrow">VESSEL PARAMETERS</p><h2 id="settingsTitle">无人船调参设置</h2></div></div><button id="settingsClose" class="ghost">返回监控<span data-icon="close"></span></button></div>
-    <div class="dialog-scroll"><div class="parameter-device-context"><div><span>当前调参对象</span><strong id="parameterDeviceName">未选择无人船</strong></div><span class="chip">单船独立操作</span></div><p id="parameterDeviceNotice" class="parameter-device-notice">请先在船队总览选择无人船并等待实时数据，再读取和修改参数。</p>
+    <div class="dialog-scroll"><div class="parameter-device-context"><div><span>当前调参对象</span><strong id="parameterDeviceName">未选择无人船</strong></div><span class="chip">单船独立操作</span></div><p id="parameterDeviceNotice" class="parameter-device-notice">请从对应无人船卡片进入，等待实时数据后点击“读取参数”。</p>
       <h3 class="device-settings-heading">无人船电控参数<span>读取、写入与 Flash 保存需要设备在线</span></h3>
       <p id="cloudReadOnlyNotice" class="cloud-readonly">云端调参需要管理员账户和支持该功能的固件；操作结果以设备响应为准。</p>
       <div class="settings-intro"><div class="workflow"><span><b>1</b>读取当前参数</span><i>→</i><span><b>2</b>调整并写入</span><i>→</i><span><b>3</b>调好后存入 Flash</span></div><p>方向修改和 Flash 保存需 CH6 低档、两路停稳且反馈正常满 1 秒。</p></div>

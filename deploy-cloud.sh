@@ -84,6 +84,7 @@ topic write boats/boat-01/parameter-capability
 user boat-web-bridge
 topic read boats/+/telemetry
 topic read boats/+/status
+topic read boats/+/video
 topic write boats/+/parameter-command
 topic read boats/+/parameter-response
 topic read boats/+/parameter-capability
@@ -97,8 +98,8 @@ allow_anonymous false
 password_file /etc/unmanned-boat-web/passwd
 acl_file /etc/unmanned-boat-web/acl
 max_connections 32
-max_packet_size 1024
-message_size_limit 512
+max_packet_size 8192
+message_size_limit 4096
 max_inflight_messages 10
 max_queued_messages 20
 max_queued_bytes 65536

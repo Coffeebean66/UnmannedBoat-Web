@@ -2,6 +2,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),http=require('node:http');
 const {createServer}=require('../server');
 const {readMapConfig,MAP_CONTENT_SECURITY_POLICY}=require('../server/map-config');
+const {getVideoContentSecurityPolicy}=require('../server/video-protocol');
 const KEY='0123456789abcdef0123456789abcdef',CODE='fedcba9876543210fedcba9876543210';
 
 async function fixture(t,env={}){
@@ -55,7 +56,7 @@ test('地图 API 是只读配置入口，没有任意 URL 转发或修改接口'
 
 test('CSP 兼容真实高德 SDK 初始化，同时限制外部资源、内联事件和站点边界',async t=>{
   const request=await fixture(t);const response=await request('/');
-  assert.equal(response.headers['content-security-policy'],MAP_CONTENT_SECURITY_POLICY);
+  assert.equal(response.headers['content-security-policy'],getVideoContentSecurityPolicy(MAP_CONTENT_SECURITY_POLICY,{}));
   const directives=new Map(MAP_CONTENT_SECURITY_POLICY.split('; ').map(value=>{const [name,...sources]=value.split(' ');return [name,sources];}));
   // 真实 SDK 的 WebGL/WASM 初始化、尺寸检测和 JSONP 均需要这些能力；
   // 仅能构造 AMap.Map 的模拟 SDK 不足以覆盖原来的空白底图故障。
@@ -78,4 +79,18 @@ test('CSP 兼容真实高德 SDK 初始化，同时限制外部资源、内联�
   for(const sources of directives.values())assert.equal(sources.includes('https:'),false,'no unrestricted HTTPS source');
   assert.deepEqual(scripts.filter(source=>source.startsWith('http')),['https://webapi.amap.com','https://a.amap.com','https://restapi.amap.com','https://mapplugin.amap.com']);
   for(const source of ['blob:','data:','https://evil.test'])assert.equal(scripts.includes(source),false,source);
+});
+
+test('服务器CSP仅向媒体与连接放行已配置视频来源，页面和API返回一致策略',async t=>{
+  const request=await fixture(t,{BOAT_VIDEO_ALLOWED_ORIGINS:'https://video.test http://127.0.0.1:9000'});
+  const page=await request('/'),api=await request('/api/cloud/config');
+  assert.equal(page.headers['content-security-policy'],api.headers['content-security-policy']);
+  const policy=new Map(page.headers['content-security-policy'].split('; ').map(value=>{const [key,...sources]=value.split(' ');return [key,sources];}));
+  assert.deepEqual(policy.get('media-src'),["'self'",'blob:','https://video.test','http://127.0.0.1:9000']);
+  for(const origin of ['https://video.test','http://127.0.0.1:9000']){
+    assert.ok(policy.get('connect-src').includes(origin));
+    for(const directive of ['script-src','img-src','style-src'])assert.ok(!policy.get(directive).includes(origin));
+  }
+  assert.doesNotMatch(page.headers['content-security-policy'],/\*/);
+  assert.throws(()=>createServer({env:{BOAT_VIDEO_ALLOWED_ORIGINS:'https://video.test; script-src https:'}}),/BOAT_VIDEO_ALLOWED_ORIGINS/);
 });

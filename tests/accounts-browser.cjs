@@ -34,7 +34,7 @@ async function main() {
       await until('!!window.BoatAuth.user && !document.getElementById("accountLoginDialog").open && !window.BoatAuth.busy');
       await until('document.getElementById("cloudDevice").value==="boat-mqtt-test" && !document.getElementById("connectButton").disabled');
     };
-    const visible = id => evaluate('getComputedStyle(document.getElementById(' + JSON.stringify(id) + ')).display!=="none"');
+    const visible = id => evaluate('document.getElementById(' + JSON.stringify(id) + ')?.checkVisibility({checkVisibilityCSS:true})===true');
     await send('Runtime.enable'); await send('Page.enable'); await send('Page.addScriptToEvaluateOnNewDocument', { source: fixtureScript });
     await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
     await send('Page.navigate', { url: 'http://127.0.0.1:' + server.address().port });
@@ -43,7 +43,7 @@ async function main() {
     assert.equal(await evaluate('document.getElementById("connectButton").disabled'), true); await shot('accounts-desktop-login');
     await login('observer', 'browser-guest-test-only');
     assert.equal(await evaluate('document.getElementById("accountName").textContent'), 'observer · 访客');
-    for (const id of ['updateToggle', 'settingsToggle', 'sidebarSettings', 'settingsEntry']) assert.equal(await visible(id), false);
+    for (const id of ['updateToggle', 'settingsToggle', 'settingsEntry']) assert.equal(await visible(id), false);
     assert.equal(await evaluate('document.getElementById("cloudLoginOpen").hidden'), true);
     await evaluate('document.getElementById("connectButton").click()'); await until('boatMonitor.link.connected');
     for (const expression of ['boatMonitor.link.request("read")', 'boatMonitor.link.request("write",{})', 'boatMonitor.params.command("flash")']) {
@@ -58,21 +58,29 @@ async function main() {
     assert.equal(await evaluate('document.documentElement.scrollWidth>innerWidth'), false); await shot('accounts-mobile-guest');
     await evaluate('document.getElementById("accountLogout").click()'); await until('!BoatAuth.user && !BoatAuth.busy');
     assert.equal(await evaluate('boatMonitor.link.connected'), false);
+    // 新页面没有沿用上一位监测用户的已选船ID，验证管理员尚未选船时的入口状态。
+    await send('Page.navigate', { url: 'http://127.0.0.1:' + server.address().port });
+    await until('!!window.boatMonitor && BoatAuth.ready && document.getElementById("accountLoginDialog").open');
     await evaluate('document.getElementById("accountLoginOpen").click()'); await login('operator', 'browser-admin-test-only');
-    assert.equal(await visible('updateToggle'), true); assert.equal(await visible('settingsToggle'), true);
-    await evaluate('document.getElementById("connectButton").click()'); await until('boatMonitor.link.connected');
-    await evaluate('boatMonitor.params.command("read")'); assert.equal(server.mqttFixture.calls.length, 1);
+    assert.equal(await visible('updateToggle'), true); assert.equal(await visible('settingsToggle'), false);
+    assert.equal(await evaluate('document.getElementById("settingsToggle").hidden'),true);
+    const configure='document.querySelector(".fleet-card[data-device-id=boat-mqtt-test] .fleet-parameter-button")';
+    await until(configure+'&&!'+configure+'.hidden&&!'+configure+'.disabled');await evaluate(configure+'.click()');
+    await until('document.getElementById("settingsDialog").open&&boatMonitor.link.connected');
+    assert.equal(await evaluate('document.getElementById("parameterDeviceName").textContent'),'boat-mqtt-test');
+    await until('!document.getElementById("readParameters").disabled');await evaluate('document.getElementById("readParameters").click()');
+    await until('!!boatMonitor.params.confirmed&&!boatMonitor.params.busy');assert.equal(server.mqttFixture.calls.length, 1);
     assert.equal(server.mqttFixture.calls[0].deviceId, 'boat-mqtt-test'); assert.equal(server.mqttFixture.calls[0].kind, 'read');
     assert.ok(await evaluate('!!boatMonitor.params.confirmed'));
-    await evaluate('document.getElementById("updateToggle").click()'); await until('/安装|启用/.test(document.getElementById("updateStatus").textContent)');
+    await evaluate('document.getElementById("settingsClose").click();document.getElementById("updateToggle").click()'); await until('/安装|启用/.test(document.getElementById("updateStatus").textContent)');
     assert.equal(await evaluate('document.getElementById("updateLoginForm").hidden'), true); await shot('accounts-mobile-admin-update');
     await evaluate('document.getElementById("updateClose").click();document.getElementById("accountLogout").click()'); await until('!BoatAuth.user && !BoatAuth.busy');
     assert.equal(await evaluate('boatMonitor.params.confirmed'), null);
     await evaluate('document.getElementById("accountLoginOpen").click()'); await login('observer', 'browser-guest-test-only');
     assert.equal(await visible('updateToggle'), false);
     await evaluate('document.getElementById("connectButton").click()'); await until('boatMonitor.link.wanted');
-    for (let i = 0; i < 60 && server.boatCloudApi.getClientCount() === 0; i++) await wait(25);
-    assert.equal(server.boatCloudApi.getClientCount(), 1);
+    for (let i = 0; i < 60 && server.boatCloudApi.getClientCount() < 2; i++) await wait(25);
+    assert.equal(server.boatCloudApi.getClientCount(), 2,'One fleet summary stream and one selected-boat telemetry stream');
     await evaluate('document.getElementById("accountLogout").click()'); await until('!BoatAuth.user && !BoatAuth.busy');
     assert.equal(server.boatCloudApi.getClientCount(), 0); assert.equal(await evaluate('boatMonitor.link.wanted'), false);
     assert.equal(await evaluate('[...Object.values(localStorage),...Object.values(sessionStorage)].some(value=>String(value).includes("browser-admin-test-only")||String(value).includes("browser-guest-test-only"))'), false);

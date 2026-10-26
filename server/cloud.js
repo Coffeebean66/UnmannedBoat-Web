@@ -6,6 +6,7 @@ const {performance}=require('node:perf_hooks');
 const protocol=require('../public/utils/uart4Protocol');
 const parameters=require('./parameter-protocol');
 const {unwrapTelemetry,isSyncResponse,UplinkClock}=require('./latency-protocol');
+const {decodeVideoDescriptor}=require('./video-protocol');
 const DEVICE_ID=/^[A-Za-z0-9_-]{1,64}$/;
 const LAYOUT=[
   [0,64,1,1,protocol.decodeFrame],
@@ -79,6 +80,14 @@ class CloudBridge extends EventEmitter {
         if(this.stopped||generation!==this.generation)return;
         if(error||granted?.some(subscription=>subscription.qos>=128)){this.setBrokerConnected(false);return;}
         this.setBrokerConnected(true);
+        if(this.stopped||generation!==this.generation)return;
+        // 旧 Broker 可能还没有视频 ACL；可选视频订阅失败不能阻断电控遥测、参数或更新健康检查。
+        try{
+          this.client.subscribe([this.prefix+'/+/video'],{qos:0,rap:true},()=>{
+            if(this.stopped||generation!==this.generation)return;
+            // 仅必需主题的订阅结果决定 brokerConnected，视频授权结果不修改连接状态。
+          });
+        }catch(_){/* 可选订阅的同步错误同样不改变已就绪的必需链路。 */}
       });
     });
     for(const event of ['offline','close','disconnect','error'])this.client.on(event,()=>{this.generation++;this.setBrokerConnected(false);});
@@ -95,7 +104,7 @@ class CloudBridge extends EventEmitter {
   snapshot(device){
     return {id:device.id,online:!!(this.brokerConnected&&device.live&&device.status!=='offline'&&
       device.lastReceivedAt!==null&&this.now()-device.lastReceivedAt<=this.staleMs),
-      lastReceivedAt:device.lastReceivedAt,status:device.status,lastStatusAt:device.lastStatusAt,parametersReady:this.parametersReady(device)};
+      lastReceivedAt:device.lastReceivedAt,status:device.status,lastStatusAt:device.lastStatusAt,parametersReady:this.parametersReady(device),video:device.video?{...device.video}:null};
   }
   list(){return {brokerConnected:this.brokerConnected,devices:[...this.devices.values()].map(device=>this.snapshot(device))};}
   fleetSnapshot(device){const snapshot=this.snapshot(device);return {...snapshot,summary:snapshot.online?fleetSummary(device.fleetTelemetry,this.now()):null};}
@@ -111,13 +120,21 @@ class CloudBridge extends EventEmitter {
       this.cancelParameters(offline[0].id,503,'设备连接已变化，参数结果未知，请读取确认');
       this.devices.delete(offline[0].id);
     }
-    const device={id,lastReceivedAt:null,status:'unknown',lastStatusAt:null,live:false,announcedOnline:false,announcedParametersReady:false,capability:null,consumedToken:null,fleetTelemetry:null,uplinkClock:new UplinkClock()};
+    const device={id,lastReceivedAt:null,status:'unknown',lastStatusAt:null,live:false,announcedOnline:false,announcedParametersReady:false,capability:null,consumedToken:null,fleetTelemetry:null,video:null,uplinkClock:new UplinkClock()};
     this.devices.set(id,device);return device;
   }
   acceptMessage(topic,payload,packet={}){
     if(this.stopped||!this.enabled||!this.brokerConnected||typeof topic!=='string'||!Buffer.isBuffer(payload))return false;
     const parts=topic.split('/');
     if(parts.length!==3||parts[0]!==this.prefix||!DEVICE_ID.test(parts[1]))return false;
+    if(parts[2]==='video'){
+      const descriptor=decodeVideoDescriptor(payload);if(!descriptor)return false;
+      // 视频地址是可 retained 的配置；收到地址不代表有画面，也不延长单片机遥测或参数能力。
+      const device=descriptor.enabled===false?this.devices.get(parts[1]):this.obtain(parts[1]);
+      if(!device)return descriptor.enabled===false;
+      device.video=descriptor.enabled===false?null:{...descriptor,receivedAt:this.now(),retained:packet.retain===true};
+      this.emit('state',this.state(device.id));return true;
+    }
     if(parts[2]==='telemetry'){
       const receivedAt=this.now(),receivedMono=this.monotonicNow();
       if(packet.retain)return false;

@@ -4,7 +4,7 @@ const fs=require('node:fs'),fsp=fs.promises,path=require('node:path'),crypto=req
 const {spawn}=require('node:child_process');
 const USER=/^[A-Za-z0-9_-]{1,64}$/,REVISION=/^[a-f0-9]{64}$/;
 const DEFAULTS=Object.freeze({configDir:'/etc/unmanned-boat-web',brokerUnit:'/etc/systemd/system/unmanned-boat-mqtt.service',mosquittoPasswd:'/usr/bin/mosquitto_passwd',systemctl:'/usr/bin/systemctl',checkOwnership:true});
-const FILES=['passwd','acl','access.txt'],JOURNAL='.mqtt-device-transaction.json',LOCK='.mqtt-device-admin.lock';
+const FILES=['passwd','acl','access.txt','mosquitto.conf'],LEGACY_FILES=FILES.slice(0,3),JOURNAL='.mqtt-device-transaction.json',LOCK='.mqtt-device-admin.lock';
 const fail=(message,status=503)=>Object.assign(Error(message),{status});
 function validateInput(input){
   if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(k=>!['username','password','revision'].includes(k))||typeof input.username!=='string'||!USER.test(input.username)||typeof input.revision!=='string'||!REVISION.test(input.revision))throw fail('设备账号或配置版本无效，请重新读取设备列表',400);
@@ -16,6 +16,37 @@ function validateCreateInput(input){
   const {deviceId,...credentials}=input;validateInput(credentials);
   if(!Object.hasOwn(credentials,'password'))throw fail('新增设备必须设置接入密码',400);
   return input;
+}
+function validateVideoInput(input){
+  if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).sort().join(',')!=='deviceId,password,username'||
+    typeof input.deviceId!=='string'||!USER.test(input.deviceId)||typeof input.username!=='string'||!USER.test(input.username)||typeof input.password!=='string'||
+    input.password.length<6||input.password.length>64||! /^[!-9;-~]+$/.test(input.password))throw fail('视频账号需提供有效设备 ID、用户名及 6～64 位不含冒号或空白的 ASCII 密码',400);
+  return input;
+}
+// Mosquitto 的盐化哈希可直接校验相同密码，重复执行配置不会无故重启 Broker。
+async function passwordMatches(password,encoded){
+  const parts=String(encoded||'').split('$');let candidate,expected;
+  try{
+    if(parts[1]==='7'&&parts.length===5){
+      const iterations=Number(parts[2]);if(!Number.isInteger(iterations)||iterations<1||iterations>1000000)return false;
+      expected=Buffer.from(parts[4],'base64');if(expected.length!==64)return false;
+      candidate=await new Promise((resolve,reject)=>crypto.pbkdf2(password,Buffer.from(parts[3],'base64'),iterations,64,'sha512',(error,value)=>error?reject(error):resolve(value)));
+    }else if(parts[1]==='6'&&parts.length===4){
+      expected=Buffer.from(parts[3],'base64');if(expected.length!==64)return false;
+      candidate=crypto.createHash('sha512').update(password).update(Buffer.from(parts[2],'base64')).digest();
+    }else return false;
+    return expected.length===candidate.length&&crypto.timingSafeEqual(expected,candidate);
+  }catch(_){return false;}
+}
+function videoBrokerConfiguration(text){
+  let result=text;
+  for(const [key,minimum]of [['max_packet_size',8192],['message_size_limit',4096]]){
+    const expression=new RegExp('^'+key+'[ \\t]+([^\\r\\n]+)[\\r]?$','gm'),matches=[...result.matchAll(expression)];
+    if(matches.length>1||matches.length&&!/^[0-9]+$/.test(matches[0][1].trim()))throw fail('MQTT 报文大小配置不明确，未修改视频账号');
+    if(!matches.length)result=result.trimEnd()+'\n'+key+' '+minimum+'\n';
+    else {const size=Number(matches[0][1].trim());if(!Number.isSafeInteger(size)||size<0||key==='max_packet_size'&&size===0)throw fail('MQTT 报文大小配置无效，未修改视频账号');if(size!==0&&size<minimum)result=result.replace(expression,key+' '+minimum);}
+  }
+  return result;
 }
 async function ordinary(file,{directory=false,ownership=true,max=262144}={}){
   const s=await fsp.lstat(file);
@@ -48,16 +79,18 @@ function parseConfigurations(passwd,acl,env){
     if(!m||passwordUsers.has(m[1]))throw fail('MQTT 密码文件格式无效或账号重复');passwordUsers.set(m[1],m[2]);
   }
   if(!passwordUsers.has(bridge))throw fail('MQTT 桥接账号缺失');
-  const blocks=acl.split(/(?=^user[ \t]+)/m),seen=new Set(),devices=[];
+  const blocks=acl.split(/(?=^user[ \t]+)/m),seen=new Set(),devices=[],videos=[];let bridgeBlockIndex=-1;
   for(let index=0;index<blocks.length;index++){
     const lines=blocks[index].split(/\r?\n/).map(x=>x.trim()).filter(x=>x&&!x.startsWith('#'));
     if(!lines.length)continue;
     const match=lines[0].match(/^user[ \t]+([A-Za-z0-9_-]{1,64})$/);
     if(!match||seen.has(match[1])||!passwordUsers.has(match[1]))throw fail('MQTT 权限配置含未知或重复账号');
     const username=match[1];seen.add(username);
-    if(username===bridge)continue;
+    if(username===bridge){bridgeBlockIndex=index;continue;}
     const telemetry=lines.slice(1).map(line=>line.match(new RegExp('^topic[ \\t]+write[ \\t]+'+prefix+'/([A-Za-z0-9_-]{1,64})/telemetry$'))).filter(Boolean);
     if(!telemetry.length){
+      const video=lines.length===2&&lines[1].match(new RegExp('^topic[ \\t]+write[ \\t]+'+prefix+'/([A-Za-z0-9_-]{1,64})/video$'));
+      if(video)videos.push({deviceId:video[1],username,blockIndex:index});
       // 无关账号可以保留，但不能被本功能管理。
       if(lines.slice(1).some(line=>!/^topic[ \t]+(?:read|write|readwrite|deny)[ \t]+\S+$/.test(line)))throw fail('MQTT 权限文件含不支持的规则');
       continue;
@@ -71,7 +104,7 @@ function parseConfigurations(passwd,acl,env){
     devices.push({deviceId,username,blockIndex:index});
   }
   if(!seen.has(bridge)||!devices.length||devices.length>64)throw fail('受管理设备或桥接权限缺失，最多支持 64 个设备');
-  return {devices,blocks,passwordUsers,prefix};
+  return {devices,videos,blocks,passwordUsers,prefix,bridgeBlockIndex};
 }
 function revisionFor(passwd,acl){return crypto.createHash('sha256').update(passwd).update('\0').update(acl).digest('hex');}
 function publicSnapshot(config){return {devices:config.devices.map(({deviceId,username})=>({deviceId,username})),revision:config.revision,canCreate:true};}
@@ -129,13 +162,14 @@ function createMqttDeviceManager(options={}){
     let record;try{record=await readOrdinary(file(JOURNAL),config.checkOwnership,1048576);}catch(error){if(error.code==='ENOENT')return;throw error;}
     if(process.platform!=='win32'&&(record.stat.mode&0o077)!==0)throw fail('MQTT 恢复记录权限异常，需要服务器管理员检查');
     let value;try{value=JSON.parse(record.text);}catch(_){throw fail('MQTT 恢复记录无效，需要服务器管理员检查');}
-    if(value?.version!==1||Object.keys(value).sort().join(',')!=='files,version'||!value.files||Object.keys(value.files).sort().join(',')!==FILES.slice().sort().join(','))throw fail('MQTT 恢复记录无效，需要服务器管理员检查');
-    for(const name of FILES){
+    const restoredFiles=value?.version===1?LEGACY_FILES:value?.version===2?FILES:null;
+    if(!restoredFiles||Object.keys(value).sort().join(',')!=='files,version'||!value.files||Object.keys(value.files).sort().join(',')!==restoredFiles.slice().sort().join(','))throw fail('MQTT 恢复记录无效，需要服务器管理员检查');
+    for(const name of restoredFiles){
       const saved=value.files[name];
       if(!saved||typeof saved.text!=='string'||Buffer.byteLength(saved.text)>262144||!Number.isInteger(saved.mode)||(saved.mode&0o022)!==0||saved.mode<0||saved.mode>0o777||!Number.isInteger(saved.gid)||saved.gid<0)throw fail('MQTT 恢复记录无效，需要服务器管理员检查');
       await ordinary(file(name),{ownership:config.checkOwnership});
     }
-    for(const name of FILES){const saved=value.files[name];await atomicWrite(file(name),saved.text,{uid:0,gid:saved.gid,mode:saved.mode},config.checkOwnership);}
+    for(const name of restoredFiles){const saved=value.files[name];await atomicWrite(file(name),saved.text,{uid:0,gid:saved.gid,mode:saved.mode},config.checkOwnership);}
     await service();await fsp.unlink(file(JOURNAL));await syncDirectory(root);
   }
   async function acquire(){
@@ -176,10 +210,12 @@ function createMqttDeviceManager(options={}){
     }finally{await fsp.unlink(temporary).catch(()=>{});}
   }
   async function commit(before,texts){
-    const transaction={version:1,files:Object.fromEntries(FILES.map(name=>[name,{text:before.records[name].text,mode:process.platform==='win32'?(name==='access.txt'?0o600:0o640):before.records[name].stat.mode&0o777,gid:before.records[name].stat.gid}]))};
+    const current=await snapshot();
+    if(current.records['runtime.env'].text!==before.records['runtime.env'].text||FILES.some(name=>current.records[name].text!==before.records[name].text))throw fail('MQTT 配置在保存前发生变化，请重新读取',409);
+    const transaction={version:2,files:Object.fromEntries(FILES.map(name=>[name,{text:before.records[name].text,mode:process.platform==='win32'?(name==='access.txt'?0o600:0o640):before.records[name].stat.mode&0o777,gid:before.records[name].stat.gid}]))};
     const handle=await fsp.open(file(JOURNAL),'wx',0o600);try{await handle.writeFile(JSON.stringify(transaction)+'\n','utf8');await handle.sync();}finally{await handle.close();}await syncDirectory(root);
     try{
-      for(const name of FILES)await atomicWrite(file(name),texts[name],before.records[name].stat,config.checkOwnership);
+      for(const name of FILES)await atomicWrite(file(name),texts[name]??before.records[name].text,before.records[name].stat,config.checkOwnership);
       await service();
       // 只有配置重新读取成功后才提交，任何中断均会留下恢复记录供下次启动回滚。
       const after=await snapshot();await fsp.unlink(file(JOURNAL));await syncDirectory(root);
@@ -191,6 +227,31 @@ function createMqttDeviceManager(options={}){
   }
   return {
     list:()=>serialized(async()=>publicSnapshot(await snapshot())),
+    // 仅供受信任的 root CLI 使用；不增加网页或 Unix socket 的改视频账号路由。
+    configureVideo:input=>{
+      try{validateVideoInput(input);}catch(error){return Promise.reject(error);}
+      return serialized(async()=>{
+        const before=await snapshot(),existing=before.videos.find(item=>item.username===input.username);
+        if(!before.devices.some(item=>item.deviceId===input.deviceId))throw fail('请先为该船建立受管理的 MQTT 设备账号',404);
+        if(before.passwordUsers.has(input.username)&&(!existing||existing.deviceId!==input.deviceId))throw fail('视频用户名已被其他账号或设备占用，不能覆盖',409);
+        if(before.videos.some(item=>item.deviceId===input.deviceId&&item.username!==input.username))throw fail('该船已存在其他视频账号，请使用原视频用户名修改',409);
+        const topic=before.prefix+'/'+input.deviceId+'/video',bridgeRule='topic read '+before.prefix+'/+/video';
+        const bridgeBlock=before.blocks[before.bridgeBlockIndex],bridgeRules=bridgeBlock.split(/\r?\n/).map(line=>line.trim().replace(/[ \t]+/g,' '));
+        const samePassword=!!existing&&await passwordMatches(input.password,before.passwordUsers.get(input.username)),broker=videoBrokerConfiguration(before.records['mosquitto.conf'].text);
+        if(samePassword&&bridgeRules.includes(bridgeRule)&&broker===before.records['mosquitto.conf'].text)return {ok:true,...publicSnapshot(before),requiresReconnect:false,video:{deviceId:input.deviceId,username:input.username,topic}};
+        const hash=samePassword?before.passwordUsers.get(input.username):await passwordHash(input.username,input.password);
+        const check=await snapshot();if(check.revision!==before.revision||check.records['runtime.env'].text!==before.records['runtime.env'].text)throw fail('MQTT 配置在保存前发生变化，请重新读取',409);
+        let nextPasswd=before.records.passwd.text;
+        if(existing)nextPasswd=nextPasswd.split(/\r?\n/).map(line=>line.startsWith(input.username+':')?input.username+':'+hash:line).join('\n');
+        else nextPasswd=nextPasswd.replace(/\n?$/,'\n')+input.username+':'+hash+'\n';
+        const blocks=before.blocks.slice();
+        if(!bridgeRules.includes(bridgeRule))blocks[before.bridgeBlockIndex]=bridgeBlock.trimEnd()+'\n'+bridgeRule+'\n\n';
+        if(!existing)blocks.push('\nuser '+input.username+'\ntopic write '+topic+'\n');
+        const access=before.records['access.txt'].text.trimEnd()+'\n\nMQTT video publisher configured.\nVideo device ID: '+input.deviceId+'\nVideo username: '+input.username+'\nVideo publish topic: '+topic+'\nVideo password: (not stored here; use the private provisioning configuration)\n';
+        const result=await commit(before,{passwd:nextPasswd,acl:blocks.join(''),'access.txt':access,'mosquitto.conf':broker});
+        return {...result,video:{deviceId:input.deviceId,username:input.username,topic}};
+      });
+    },
     create:input=>{
       try{validateCreateInput(input);}catch(error){return Promise.reject(error);}
       return serialized(async()=>{
@@ -272,4 +333,4 @@ if(require.main===module){
     server.on('error',()=>{console.error('MQTT administrator worker socket failed');process.exitCode=1;});
   })().catch(()=>{console.error('MQTT administrator worker startup failed');process.exitCode=1;});
 }
-module.exports={createMqttDeviceManager,createMqttDeviceWorker,validateInput,validateCreateInput,parseConfigurations,sanitizeAccess};
+module.exports={createMqttDeviceManager,createMqttDeviceWorker,validateInput,validateCreateInput,validateVideoInput,passwordMatches,videoBrokerConfiguration,parseConfigurations,sanitizeAccess};

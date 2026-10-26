@@ -1,10 +1,16 @@
 {
   "name": "unmanned-boat-monitor-web",
-  "version": "1.22.0",
+  "version": "1.24.0",
   "private": true,
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "description": "无人船监测平台网页版静态服务器",
-  "dependencies": {"mqtt": "^5.14.1"},
+  "dependencies": {
+    "hls.js": "1.7.3",
+    "mpegts.js": "1.8.2",
+    "mqtt": "^5.14.1"
+  },
   "scripts": {
     "start": "node server.js",
     "build": "node build-bundle.js",

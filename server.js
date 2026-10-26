@@ -6,12 +6,14 @@ const {createCloudApi}=require('./server/cloud-api');
 const {createAccountApi}=require('./server/account-api');
 const {createUpdateApi,readCurrentRelease}=require('./server/update-api');
 const {createMapConfigApi,MAP_CONTENT_SECURITY_POLICY}=require('./server/map-config');
+const {getVideoContentSecurityPolicy}=require('./server/video-protocol');
 const {createMqttDeviceApi}=require('./server/mqtt-device-api');
 const {version:packageVersion}=require('./package.json');
 const ROOT=path.join(__dirname,'public');
 const MIME={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json; charset=utf-8','.glb':'model/gltf-binary','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon','.txt':'text/plain; charset=utf-8'};
 function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},apiOptions={},updateOptions={},accountOptions={},mapOptions={},mqttAdminOptions={}}={}) {
   const base=fs.realpathSync(root);
+  const contentSecurityPolicy=getVideoContentSecurityPolicy(MAP_CONTENT_SECURITY_POLICY,env);
   const bridge=cloud||new CloudBridge({env,...cloudOptions});
   const accounts=createAccountApi({...accountOptions,env});
   const api=createCloudApi({bridge,env,...apiOptions,accounts});
@@ -24,8 +26,8 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
     res.setHeader('X-Content-Type-Options','nosniff');
     res.setHeader('Referrer-Policy','strict-origin-when-cross-origin');
     res.setHeader('X-Frame-Options','DENY');
-    // 业务脚本和模型本地加载；高德官方地图 SDK 及地图资源使用明确的域名白名单。
-    res.setHeader('Content-Security-Policy',MAP_CONTENT_SECURITY_POLICY);
+    // 地图与视频使用明确来源；视频授权只扩展连接和媒体，不扩大脚本来源。
+    res.setHeader('Content-Security-Policy',contentSecurityPolicy);
     const fail=(status,text)=>{res.writeHead(status,{'Content-Type':'text/plain; charset=utf-8'});res.end(text);};
     let pathname;
     try{pathname=decodeURIComponent((req.url||'/').split('?')[0]);}catch(_){return fail(400,'Invalid path');}

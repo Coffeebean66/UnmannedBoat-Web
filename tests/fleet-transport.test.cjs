@@ -51,6 +51,22 @@ test('Broker断连清除全部摘要，迟到快照不覆盖较新的多船状�
   h.advance(1);stream.send('fleet',{...h.packet([h.device('boat-a'),h.device('boat-b')]),brokerConnected:false});
   assert.ok(h.fleet.state().devices.every(d=>d.online===false&&d.summary===null));
 });
+
+test('视频字段随船队快照独立保留，视频更新和视频单独上线不续期遥测',async t=>{
+  const h=setup();t.after(()=>h.fleet.destroy());h.change();await flush();const stream=h.streams[0];
+  const video={version:1,url:'https://video.test/live.m3u8',format:'hls',title:'船载摄像头',receivedAt:100000,retained:true};
+  const first={...h.device('boat-a'),video};stream.send('fleet',h.packet([first]));
+  let result=h.fleet.state().devices[0];assert.equal(result.video.url,video.url);assert.equal(result.summary.speedMps,1);
+  h.advance(1000);stream.send('fleet-device',{...h.packet([]),device:{...first,video:{...video,url:'https://video.test/new.m3u8',receivedAt:101000}}});
+  result=h.fleet.state().devices[0];assert.equal(result.summary,null);assert.equal(result.lastReceivedAt,100000);
+  assert.equal(result.video.url,'https://video.test/new.m3u8');
+  stream.send('fleet-device',{...h.packet([]),device:{id:'boat-camera',online:false,lastReceivedAt:null,parametersReady:false,video}});
+  result=h.fleet.state().devices.find(device=>device.id==='boat-camera');
+  assert.equal(result.online,false);assert.equal(result.lastReceivedAt,null);assert.equal(result.summary,null);assert.equal(result.parametersReady,false);assert.equal(result.video.url,video.url);
+  stream.send('fleet',{...h.packet([{...first,online:false,video}]),brokerConnected:false});
+  result=h.fleet.state().devices[0];assert.equal(result.online,false);assert.equal(result.summary,null);assert.equal(result.video.url,video.url);
+  stream.send('fleet-device',{...h.packet([]),device:{...first,video:null}});assert.equal(h.fleet.state().devices[0].video,null);
+});
 test('退出/更换身份立即清空，旧SSE和迟到HTTP不能恢复上一会话',async t=>{
   const h=setup();t.after(()=>h.fleet.destroy());let release;h.block(()=>new Promise(resolve=>release=resolve));
   h.change();const stream=h.streams[0];stream.send('fleet',h.packet([h.device('boat-a')]));

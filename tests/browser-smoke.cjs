@@ -38,7 +38,7 @@ async function main(){
       const r=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:true,clip});fs.writeFileSync(path.join(output,name+'.png'),Buffer.from(r.data,'base64'));
     };
     const deviceSummary=()=>evaluate("(()=>{const text=id=>document.getElementById(id).textContent;return {state:document.getElementById('deviceSummary').dataset.state,name:text('deviceName'),source:text('sourceChip'),connection:text('deviceConnectionState'),frames:text('frameCount'),updated:text('deviceLastUpdate'),datetime:document.getElementById('deviceLastUpdate').getAttribute('datetime'),latency:text('deviceLatency')};})()");
-    const views=['fleet','overview','navigation','attitude','analysis','propulsion','diagnostics'];
+    const views=['fleet','overview','navigation','attitude','analysis','propulsion','diagnostics','video'];
     const assertView=async id=>{
       await until('BoatWorkspace.current==='+JSON.stringify(id));
       assert.deepEqual(await evaluate("[...document.querySelectorAll('.workspace-view[data-workspace-view]')].filter(panel=>!panel.hidden&&panel.getBoundingClientRect().width>0).map(panel=>panel.dataset.workspaceView)"),[id],'Only the selected workspace page is visible');
@@ -50,6 +50,13 @@ async function main(){
       await evaluate("document.querySelector((innerWidth<=740?'.mobile-nav':'.side-nav')+' a[href=\"#"+id+"\"]').click()");
       await assertView(id);await wait(200);
       assert.ok(await evaluate('Math.abs(scrollY)<1'),'Page changes start at the top instead of scrolling to a content anchor');
+    };
+    const openSettings=async()=>{
+      await view('fleet');
+      const button="document.querySelector('.fleet-card[data-device-id=\"boat-mqtt-test\"] .fleet-parameter-button')";
+      await until(button+' && !'+button+'.hidden && !'+button+'.disabled');
+      await evaluate(button+'.click()');await until("document.getElementById('settingsDialog').open");
+      assert.equal(await evaluate("document.getElementById('parameterDeviceName').textContent"),'boat-mqtt-test');
     };
     const assertDeviceCardLayout=async width=>{
       const layout=await evaluate("(()=>{const card=document.getElementById('deviceSummary'),rect=card.getBoundingClientRect();return {width:rect.width,height:rect.height,visible:getComputedStyle(card).display!=='none'&&rect.width>0,overflow:card.scrollWidth>card.clientWidth,rows:[...card.querySelectorAll('dd')].map(row=>({overflow:row.scrollWidth>row.clientWidth,right:row.getBoundingClientRect().right})),right:rect.right};})()");
@@ -266,7 +273,8 @@ async function main(){
     await view('overview');
     await assertCombinedTelemetry();await assertImuLayout(1440);await shot('light-imu');await sensorShot('light-sensors');
     await evaluate("document.getElementById('themeToggle').click()");
-    await evaluate("document.getElementById('settingsToggle').click();document.getElementById('readParameters').click()");await until('!!boatMonitor.params.confirmed && !boatMonitor.params.busy');
+    await openSettings();await until("!document.getElementById('readParameters').disabled");
+    await evaluate("document.getElementById('readParameters').click()");await until('!!boatMonitor.params.confirmed && !boatMonitor.params.busy');
     assert.equal(await evaluate("document.getElementById('parameterStatus').dataset.tone"),'success');
     assert.equal(await evaluate("document.getElementById('toast').parentElement.id"),'settingsDialog');
     assert.equal(await evaluate("document.querySelector('[data-key=kpX2PerMps]').value"),'80');
@@ -306,11 +314,11 @@ async function main(){
       }
       await view('overview');
       assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,'Page overflow at '+width);await shot('mobile-'+width);
-      await evaluate("document.getElementById('settingsToggle').click();document.querySelector('.dialog-scroll').scrollTop=0");
+      await openSettings();await evaluate("document.querySelector('#settingsDialog .dialog-scroll').scrollTop=0");
       assert.equal(await evaluate("document.getElementById('settingsDialog').scrollWidth<=document.getElementById('settingsDialog').clientWidth"),true);await shot('mobile-settings-'+width);
       await evaluate("document.getElementById('presets').scrollIntoView({behavior:'instant',block:'center'})");
       assert.equal(await evaluate("document.querySelector('.dialog-scroll').scrollWidth<=document.querySelector('.dialog-scroll').clientWidth"),true,'Settings content overflow at '+width);await shot('mobile-presets-'+width);
-      await evaluate("document.getElementById('settingsClose').click();startTelemetry()");await wait(250);await shot('mobile-live-'+width);
+      await evaluate("document.getElementById('settingsClose').click();startTelemetry()");await view('overview');await wait(250);await shot('mobile-live-'+width);
       assert.ok(await evaluate('Number('+vector('target')+'.dataset.length)')>0,'Velocity arrows visible at '+width);
       assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,'Live page overflow at '+width);
       await view('attitude');await evaluate("document.getElementById('imuPanel').scrollIntoView({block:'center',behavior:'instant'})");
@@ -371,7 +379,7 @@ async function main(){
     await evaluate("document.getElementById('mapVectorsToggle').click()");await until("!!document.querySelector('.map-velocity-anchor')");
     await evaluate("location.hash='#unknown-page'");await assertView('fleet');
     assert.deepEqual(errors,[]);
-    console.log('PASS: seven independent workspace pages, desktop/mobile navigation, URL/back/forward/reload/unknown route, focus and aria-current, preserved MQTT/map/WebGL/parser/track instances, larger map/3D/chart views, hidden-animation stop and visible-frame recovery; real local HTTP/SSE packets without Web Bluetooth, parameters/Flash rejection/timeout, settings/presets/themes, map vectors/track/expiry, current-device metadata, simultaneous RTK/IMU telemetry and horizon, reconnect, 320/375/640/768/1024/1440/1920px.');
+    console.log('PASS: eight independent workspace pages, desktop/mobile navigation, URL/back/forward/reload/unknown route, focus and aria-current, preserved MQTT/map/WebGL/parser/track instances, larger map/3D/chart views, hidden-animation stop and visible-frame recovery; real local HTTP/SSE packets without Web Bluetooth, parameters/Flash rejection/timeout, settings/presets/themes, map vectors/track/expiry, current-device metadata, simultaneous RTK/IMU telemetry and horizon, reconnect, 320/375/640/768/1024/1440/1920px.');
     console.log('Screenshots: '+output);
   }finally{socket?.close();browser.kill();await new Promise(resolve=>server.close(resolve));}
 }

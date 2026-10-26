@@ -9,7 +9,7 @@ function payload(){
   }
   return Buffer.concat(frames).toString('base64');
 }
-function setup({serverClock=true,serverOffset=0}={}){
+function setup({serverClock=true,serverOffset=0,videoConfig}={}){
   let now=10000,wall=1770000000000,authorized=true,brokerConnected=true;
   const streams=[],timers=new Map();let timerId=0;
   class FakeEventSource extends EventTarget {
@@ -22,7 +22,7 @@ function setup({serverClock=true,serverOffset=0}={}){
     setInterval:fn=>{const id=++timerId;timers.set(id,fn);return id;},clearInterval:id=>timers.delete(id),
     fetch:async(url,options)=>{
       let status=200,body=serverClock?{serverTime:wall+serverOffset}:{};
-      if(url.endsWith('/config'))body={...body,enabled:true,requiresLogin:true};
+      if(url.endsWith('/config'))body={...body,enabled:true,requiresLogin:true,...(videoConfig===undefined?{}:{video:videoConfig})};
       else if(url.endsWith('/login')){authorized=true;body.ok=true;}
       else if(url.endsWith('/session')){authorized=false;body.ok=true;}
       else if(!authorized){status=401;body.error='auth';}
@@ -36,6 +36,18 @@ function setup({serverClock=true,serverOffset=0}={}){
     advance:ms=>{now+=ms;wall+=ms;},setAuthorized:value=>authorized=value,setBroker:value=>brokerConnected=value};
 }
 async function connected(h){await h.cloud.initialize();await h.cloud.connect('boat-123');return h.streams.at(-1);}
+test('视频来源配置随云端状态公开，旧后台或无效配置按仅同源处理且不恢复遥测',async()=>{
+  for(const [config,expected]of [[undefined,[]],[null,[]],[{allowedOrigins:'https://video.test'},[]],
+    [{allowedOrigins:['https://video.test','http://127.0.0.1:9000',null,123]},['https://video.test','http://127.0.0.1:9000']]]){
+    const h=setup({videoConfig:config});let last;
+    h.cloud.addEventListener('cloudstate',event=>last=event.detail);
+    assert.deepEqual(Array.from(h.cloud.videoConfig.allowedOrigins),[]);
+    await h.cloud.initialize();
+    assert.deepEqual(Array.from(h.cloud.videoConfig.allowedOrigins),expected);
+    assert.deepEqual(Array.from(last.videoConfig.allowedOrigins),expected);
+    assert.equal(h.cloud.connected,false);assert.equal(h.cloud.lastPayloadAt,null);
+  }
+});
 test('云端通道建立不伪装成实时设备；完整176字节沿用UART4解析和接收年龄',async()=>{
   const h=setup(),frames=[],connections=[];h.cloud.addEventListener('frame',e=>frames.push(e.detail));h.cloud.addEventListener('connection',e=>connections.push(e.detail));
   const stream=await connected(h);stream.send('open',{});assert.equal(h.cloud.connected,false);

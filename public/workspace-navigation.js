@@ -8,7 +8,8 @@
     attitude: { title:'三维姿态', english:'VESSEL ATTITUDE', description:'观察三维船体姿态和 IMU / RTK 测量数据。' },
     analysis: { title:'控制曲线', english:'CONTROL ANALYSIS', description:'对比目标与实际船速、航向，辅助闭环调参。' },
     propulsion: { title:'推进系统', english:'PROPULSION SYSTEM', description:'监测双推进器转速、电压、电流和输出状态。' },
-    diagnostics: { title:'通信诊断', english:'COMMUNICATION DIAGNOSTICS', description:'检查通信链路、有效帧、CRC 与数据接收情况。' }
+    diagnostics: { title:'通信诊断', english:'COMMUNICATION DIAGNOSTICS', description:'检查通信链路、有效帧、CRC 与数据接收情况。' },
+    video: { title:'视频监控', english:'ONBOARD VIDEO', description:'查看当前无人船的船载摄像头画面，独立控制视频连接与播放。' }
   };
   const panels = new Map([...document.querySelectorAll('[data-workspace-view]')].map(panel => [panel.dataset.workspaceView,panel]));
   if (!panels.has('overview')) return;

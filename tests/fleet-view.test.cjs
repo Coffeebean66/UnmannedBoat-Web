@@ -16,13 +16,63 @@ function fixture(){
   const ids=['fleetTotal','fleetOnline','fleetOffline','fleetMoving','fleetVisibleCount','fleetStreamState','fleetSearch','fleetFilter','fleetCards','fleetEmpty','fleetEmptyTitle','fleetEmptyDescription','fleetRecentList','fleetRecentSummary','fleetRecentEmpty'];
   const nodes=Object.fromEntries(ids.map(id=>[id,new Element('div')]));nodes.fleetFilter.value='all';
   const document={hidden:false,getElementById:id=>nodes[id],createElement:tag=>new Element(tag)};
-  let now=1700000000000,tick,cleared=false;const selections=[];
+  let now=1700000000000,tick,cleared=false;const selections=[],configurations=[],videos=[];
   const window={setInterval:fn=>{tick=fn;return 1;},clearInterval:()=>{cleared=true;},document};
   vm.runInNewContext(source,{window,Date});
-  const view=new window.BoatFleetView({onSelect:id=>selections.push(id),document,now:()=>now});
+  const view=new window.BoatFleetView({onSelect:id=>selections.push(id),onConfigure:id=>configurations.push(id),onVideo:id=>videos.push(id),document,now:()=>now});
   const state={authenticated:true,enabled:true,brokerConnected:true,streamConnected:true,serverOffset:0,devices:[]};
-  return {view,nodes,state,selections,prepare:window.BoatFleetView.prepareDevice,get now(){return now;},advance:milliseconds=>{now+=milliseconds;tick();},get cleared(){return cleared;}};
+  return {view,nodes,state,selections,configurations,videos,prepare:window.BoatFleetView.prepareDevice,get now(){return now;},advance:milliseconds=>{now+=milliseconds;tick();},get cleared(){return cleared;}};
 }
+
+test('访客可查看各船视频，视频入口独立于遥测在线，旧节点在移船/停用/退出后失效',()=>{
+  const f=fixture();f.state.devices=[{id:'boat-01',online:false},{id:'boat-02',online:true}];
+  f.view.update(f.state);const a=f.view.cards.get('boat-01'),b=f.view.cards.get('boat-02');
+  assert.equal(a.videoButton.disabled,false);assert.equal(a.configureButton.hidden,true);
+  a.videoButton.fire('click');b.videoButton.fire('click');assert.deepEqual(f.videos,['boat-01','boat-02']);
+  assert.deepEqual(f.selections,[]);assert.deepEqual(f.configurations,[]);
+  f.view.update({...f.state,brokerConnected:false,streamConnected:false});a.videoButton.fire('click');assert.deepEqual(f.videos,['boat-01','boat-02','boat-01']);
+  f.view.update({...f.state,devices:[f.state.devices[1]]});a.videoButton.fire('click');assert.equal(f.videos.length,3);
+  f.view.update({...f.state,enabled:false});b.videoButton.fire('click');assert.equal(f.videos.length,3);
+  f.view.update({...f.state,authenticated:false});b.videoButton.fire('click');assert.equal(f.videos.length,3);
+  f.view.destroy();b.videoButton.fire('click');assert.equal(f.videos.length,3);
+});
+
+test('每艘船的调参按钮只打开对应设备，遥测和搜索更新保留按钮节点与目标',()=>{
+  const f=fixture();f.state.canManage=true;
+  f.state.devices=['boat-01','boat-02'].map(id=>({id,online:true,lastReceivedAt:f.now,summary:makeSummary(f.now)}));
+  f.view.update(f.state);const a=f.view.cards.get('boat-01'),b=f.view.cards.get('boat-02');
+  assert.equal(a.configureButton.hidden,false);assert.equal(a.configureButton.disabled,false);
+  a.configureButton.fire('click');b.configureButton.fire('click');assert.deepEqual(f.configurations,['boat-01','boat-02']);assert.deepEqual(f.selections,[]);
+  assert.match(b.configureButton.attributes['aria-label'],/boat-02/);assert.match(b.configureButton.title,/boat-02/);
+  f.state.selectedId='boat-02';f.state.devices[0].summary.speedMps=2.8;f.view.update(f.state);
+  f.nodes.fleetSearch.value='boat-02';f.nodes.fleetSearch.fire('input');
+  assert.equal(f.view.cards.get('boat-01').configureButton,a.configureButton);assert.equal(f.view.cards.get('boat-02').configureButton,b.configureButton);
+  b.configureButton.fire('click');assert.deepEqual(f.configurations,['boat-01','boat-02','boat-02']);f.view.destroy();
+});
+
+test('调参入口默认隐藏，访客、未登录、停用和退出后旧按钮均不能发起调参',()=>{
+  const f=fixture();f.state.devices=[{id:'boat-01',online:true,lastReceivedAt:f.now,summary:makeSummary(f.now)}];
+  f.view.update(f.state);const button=f.view.cards.get('boat-01').configureButton;
+  assert.equal(button.hidden,true);button.fire('click');assert.deepEqual(f.configurations,[]);
+  f.view.update({...f.state,canManage:true});assert.equal(button.hidden,false);
+  // 不依赖隐藏/disabled，状态刚变化而尚未绘制时也拒绝程序触发的点击。
+  f.view.state.canManage=false;button.fire('click');assert.deepEqual(f.configurations,[]);
+  f.view.update({...f.state,canManage:true,enabled:false});assert.equal(button.hidden,true);button.fire('click');
+  f.view.update({...f.state,canManage:true,authenticated:false});assert.equal(f.view.cards.size,0);button.fire('click');
+  assert.deepEqual(f.configurations,[]);f.view.destroy();
+});
+
+test('离线、任一监测通道断线和参数操作忙时禁止调参，恢复后可正常操作',()=>{
+  for(const changes of [{deviceOnline:false},{brokerConnected:false},{streamConnected:false},{parameterBusy:true}]){
+    const f=fixture();f.state.canManage=true;f.state.devices=[{id:'boat-01',online:changes.deviceOnline!==false,lastReceivedAt:f.now,summary:makeSummary(f.now)}];
+    Object.assign(f.state,changes);f.view.update(f.state);const button=f.view.cards.get('boat-01').configureButton;
+    assert.equal(button.hidden,false);assert.equal(button.disabled,true);assert.match(button.title,changes.parameterBusy?/等待/:/离线|通道/);assert.match(button.attributes['aria-label'],/boat-01/);
+    button.fire('click');assert.deepEqual(f.configurations,[]);
+    Object.assign(f.state,{brokerConnected:true,streamConnected:true,parameterBusy:false});f.state.devices[0].online=true;f.view.update(f.state);
+    assert.equal(button.disabled,false);button.fire('click');assert.deepEqual(f.configurations,['boat-01']);f.view.destroy();
+    button.fire('click');assert.deepEqual(f.configurations,['boat-01']);
+  }
+});
 test('两船速度、定位、电压互相独立，点击详情只选择对应设备，更新保留原按钮节点',()=>{
   const f=fixture();f.state.devices=[{id:'boat-01',online:true,lastReceivedAt:f.now,summary:makeSummary(f.now)},{id:'boat-02',online:true,lastReceivedAt:f.now,summary:makeSummary(f.now,{speedMps:2.6,latitude:32.5,voltageV:25.4})}];
   f.view.update(f.state);assert.equal(f.nodes.fleetTotal.textContent,'2');assert.equal(f.nodes.fleetMoving.textContent,'2');

@@ -122,7 +122,8 @@ class ParameterPanel {
       this.fill(frame.parameters);
       this.status(kind==='flash'?'已保存到 Flash，下次上电自动恢复':kind==='read'?'读取成功 · 已载入20项设备参数':'写入成功 · 已在设备运行中生效，尚未写入 Flash','success');
     } catch(error) {
-      if(error.uncertain){
+      // 旧船请求被取消后的迟到异常不能从新船表单恢复出旧草稿。
+      if(error.uncertain&&generation===this.link.generation){
         try{this.localDraft=this.form();}catch(_){if(this.confirmed)this.localDraft={...this.confirmed};}
         this.confirmed=null;
       }
