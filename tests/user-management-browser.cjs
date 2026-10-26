@@ -70,12 +70,12 @@ async function main() {
     const saved = async () => { await until('document.getElementById("userManagementStatus").dataset.tone==="success"&&!document.getElementById("userManagementCreate").disabled'); };
     const layout = async (width, theme, name) => {
       await send('Emulation.setDeviceMetricsOverride', { width, height: width < 600 ? 820 : 1000, deviceScaleFactor: 1, mobile: width < 600 });
-      await evaluate('if(document.documentElement.dataset.theme!==' + JSON.stringify(theme) + ')document.getElementById("themeToggle").click();document.querySelector("#settingsDialog .dialog-scroll").scrollTop=0');
+      await evaluate('if(document.documentElement.dataset.theme!==' + JSON.stringify(theme) + ')document.getElementById("themeToggle").click();document.querySelector("#platformSettingsDialog .dialog-scroll").scrollTop=0');
       await wait(200);
       assert.equal(await evaluate('document.documentElement.scrollWidth>innerWidth'), false, width + 'px page must fit');
-      assert.equal(await evaluate('document.getElementById("settingsDialog").scrollWidth>document.getElementById("settingsDialog").clientWidth+1'), false, width + 'px dialog must fit');
+      assert.equal(await evaluate('document.getElementById("platformSettingsDialog").scrollWidth>document.getElementById("platformSettingsDialog").clientWidth+1'), false, width + 'px dialog must fit');
       assert.equal(await evaluate('document.getElementById("userManagement").scrollWidth>document.getElementById("userManagement").clientWidth+1'), false, width + 'px user panel must fit');
-      if (theme === 'light') assert.equal(await evaluate('getComputedStyle(document.getElementById("userManagementRead")).color'), 'rgb(22, 36, 54)', 'light-theme utility buttons use the dark platform text color');
+      if (theme === 'light') assert.equal(await evaluate('getComputedStyle(document.getElementById("userManagementRead")).color'), 'rgb(50, 50, 81)', 'light-theme utility buttons use the dark platform text color');
       await shot(name);
     };
 
@@ -91,9 +91,9 @@ async function main() {
     await login('operator', 'browser-admin-test-only');
     await until('document.getElementById("cloudDevice").value==="boat-mqtt-test"&&!document.getElementById("connectButton").disabled');
     await evaluate('document.getElementById("connectButton").click()'); await until('boatMonitor.link.connected');
-    await evaluate('document.getElementById("settingsToggle").click()');
+    await evaluate('document.getElementById("platformSettingsToggle").click()');
     await until('document.getElementById("userManagementList").children.length===2&&!document.getElementById("userManagementCreate").disabled');
-    assert.equal(server.boatCloudApi.getClientCount(), 1);
+    assert.equal(server.boatCloudApi.getClientCount(), 2);
     const connectionCount = await evaluate('window.testConnections');
 
     await evaluate('document.getElementById("userManagementCreate").click()');
@@ -106,7 +106,7 @@ async function main() {
     assert.equal(await evaluate('document.getElementById("userManagementList").children.length'), 4);
     await edit('crew-01'); await fill('watcher-01', 'guest', 'watcher-new-password'); await save(); await saved();
     assert.equal(await evaluate('boatMonitor.link.connected'), true); assert.equal(await evaluate('window.testConnections'), connectionCount);
-    assert.equal(server.boatCloudApi.getClientCount(), 1);
+    assert.equal(server.boatCloudApi.getClientCount(), 2);
     const storage = fs.readFileSync(storeFile, 'utf8');
     for (const password of ['browser-admin-test-only', 'crew-initial-password', 'watcher-new-password', 'skipper-admin-password']) assert.ok(!storage.includes(password), 'passwords are never stored in plaintext');
     await layout(1440, 'dark', 'user-management-desktop');
@@ -131,12 +131,12 @@ async function main() {
     await until('!BoatAuth.busy&&document.getElementById("accountLoginError").textContent.length>0');
     assert.equal(await evaluate('!!BoatAuth.user'), false);
     await login('watcher-01', 'watcher-new-password');
-    assert.equal(await evaluate('document.getElementById("settingsToggle").hidden'), true);
+    assert.equal(await evaluate('document.getElementById("platformSettingsToggle").hidden'), true);
     assert.equal(await evaluate('fetch("/api/auth/users").then(response=>response.status)'), 403);
     await send('Page.navigate', { url }); await until('window.BoatAuth?.ready&&window.BoatAuth.user?.username==="watcher-01"');
     assert.equal(await evaluate('BoatAuth.user.role'), 'guest');
     await logout(); await login('skipper-02', 'skipper-admin-password');
-    await evaluate('document.getElementById("settingsToggle").click()');
+    await evaluate('document.getElementById("platformSettingsToggle").click()');
     await until('document.getElementById("userManagementList").children.length===4');
     assert.equal(await evaluate('document.getElementById("userManagement").hidden'), false);
     assert.equal(await evaluate('[...Object.values(localStorage),...Object.values(sessionStorage)].some(value=>/captain-new-password|watcher-new-password|skipper-admin-password|crew-initial-password/.test(String(value)))'), false);

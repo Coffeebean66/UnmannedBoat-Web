@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#061425">
+  <meta name="theme-color" content="#19191e">
   <title>无人船监测平台</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
@@ -16,48 +16,61 @@
   <link rel="stylesheet" href="user-management.css">
   <link rel="stylesheet" href="mqtt-device-settings.css">
   <link rel="stylesheet" href="workspace.css">
+  <link rel="stylesheet" href="fleet.css">
+  <link rel="stylesheet" href="settings-layout.css">
+  <link rel="stylesheet" href="console.css">
   <script defer src="vendor/leaflet/leaflet.js"></script>
   <script defer src="utils-bundle.js"></script>
   <script defer src="parameter-data.js"></script>
   <script defer src="account-auth.js"></script>
   <script defer src="cloud-transport.js"></script>
+  <script defer src="fleet-transport.js"></script>
   <script defer src="parameter-panel.js"></script>
   <script defer src="attitude-view.js"></script>
   <script defer src="artificial-horizon.js"></script>
   <script defer src="ui.js"></script>
   <script defer src="workspace-navigation.js"></script>
   <script defer src="map-view.js"></script>
+  <script defer src="fleet-map-view.js"></script>
   <script defer src="map-velocity-view.js"></script>
   <script defer src="map-settings.js"></script>
   <script defer src="user-management.js"></script>
   <script defer src="mqtt-device-settings.js"></script>
+  <script defer src="fleet-view.js"></script>
   <script defer src="app.js"></script>
   <script defer src="update-panel.js"></script>
 </head>
 <body>
-  <a class="skip-link" href="#overview">跳到监测内容</a>
+  <a class="skip-link" href="#fleet">跳到监测内容</a>
   <header class="topbar">
-    <a class="brand" href="#overview"><span class="brand-mark" data-icon="boat"></span><span>无人船监测平台<span class="brand-caption">UNMANNED VESSEL MONITOR</span></span></a>
-    <div class="topbar-context"><span class="title-dot"></span>航行监测中心<span class="topbar-divider"></span><time id="dashboardTime" aria-label="本地时间">--</time></div>
+    <a class="brand" href="#fleet"><span class="brand-mark" data-icon="boat"></span><span>无人船监测平台<span class="brand-caption">UNMANNED VESSEL MONITOR</span></span></a>
+    <div class="topbar-context"><span class="title-dot"></span>实时监测<span class="topbar-divider"></span><time id="dashboardTime" aria-label="本地时间">--</time></div>
     <div class="toolbar">
       <div id="accountControls" class="account-controls" hidden><span id="accountName" class="account-name" hidden></span><button id="accountLoginOpen" class="ghost">账户登录</button><button id="accountLogout" class="ghost" hidden>退出</button></div>
       <span id="connectionBadge" class="badge offline">未连接</span>
       <button id="connectButton" class="primary" disabled><span data-icon="radio"></span>连接无人船</button>
       <button id="disconnectButton" class="ghost" disabled>断开</button>
       <button id="themeToggle" class="icon-button" aria-label="切换到浅色主题" title="切换到浅色主题"><span data-icon="sun"></span></button>
-      <button id="settingsToggle" class="settings-button"><span data-icon="settings"></span>设置</button>
+      <button id="platformSettingsToggle" class="settings-button" aria-haspopup="dialog" aria-controls="platformSettingsDialog"><span data-icon="settings"></span>平台设置</button>
+      <button id="settingsToggle" class="settings-button" aria-haspopup="dialog" aria-controls="settingsDialog"><span data-icon="sliders"></span>调参设置</button>
       <button id="updateToggle" class="update-button" aria-haspopup="dialog" aria-controls="updateDialog"><span data-icon="download"></span>更新<span id="updateBusyDot" class="update-busy-dot" hidden aria-label="正在更新"></span></button>
     </div>
   </header>
   <aside class="sidebar" aria-label="主导航">
-    <div class="workspace-label">工作空间 <span>WEB</span></div>
+    <div class="workspace-label">监控工作台 <span>WORKSPACE</span></div>
     <nav class="side-nav">
-      <a href="#overview" class="active" aria-current="page"><span data-icon="dashboard"></span><span>船况概览</span><span class="nav-index">01</span></a>
-      <a href="#navigation"><span data-icon="map"></span><span>船位与轨迹</span><span class="nav-index">02</span></a>
-      <a href="#attitude"><span data-icon="compass"></span><span>三维姿态</span><span class="nav-index">03</span></a>
-      <a href="#analysis"><span data-icon="chart"></span><span>控制曲线</span><span class="nav-index">04</span></a>
-      <a href="#propulsion"><span data-icon="motor"></span><span>推进系统</span><span class="nav-index">05</span></a>
-      <a href="#diagnostics"><span data-icon="activity"></span><span>通信诊断</span><span class="nav-index">06</span></a>
+      <a href="#fleet" class="active" aria-current="page"><span data-icon="dashboard"></span><span>船队总览</span><span class="nav-index">01</span></a>
+      <details id="singleBoatNav" class="nav-dropdown" hidden>
+        <summary aria-controls="singleBoatNavLinks"><span class="nav-dropdown-icon" data-icon="boat"></span><span class="nav-dropdown-label">当前无人船</span><span id="singleBoatNavName" class="nav-dropdown-name">未选择</span><span class="nav-dropdown-chevron" data-icon="chevron"></span></summary>
+        <div id="singleBoatNavLinks" class="nav-dropdown-links" aria-label="当前无人船页面">
+          <a href="#overview"><span data-icon="boat"></span><span>单船概览</span><span class="nav-index">02</span></a>
+          <a href="#navigation"><span data-icon="map"></span><span>船位与轨迹</span><span class="nav-index">03</span></a>
+          <a href="#attitude"><span data-icon="compass"></span><span>三维姿态</span><span class="nav-index">04</span></a>
+          <a href="#analysis"><span data-icon="chart"></span><span>控制曲线</span><span class="nav-index">05</span></a>
+          <a href="#propulsion"><span data-icon="motor"></span><span>推进系统</span><span class="nav-index">06</span></a>
+          <a href="#diagnostics"><span data-icon="activity"></span><span>通信诊断</span><span class="nav-index">07</span></a>
+        </div>
+      </details>
     </nav>
     <section id="deviceSummary" class="vessel-summary" aria-label="当前连接设备" data-state="offline">
       <div class="vessel-summary-heading">当前设备<span id="sourceChip" class="chip">MQTT</span></div>
@@ -68,15 +81,17 @@
     </section>
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
+      <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
       <button id="sidebarSettings" class="sidebar-setting"><span data-icon="settings"></span>参数设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.18.0</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.22.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
-    <nav class="mobile-nav" aria-label="快捷导航"><a href="#overview">概览</a><a href="#navigation">轨迹</a><a href="#attitude">姿态</a><a href="#analysis">曲线</a><a href="#propulsion">电机</a><a href="#diagnostics">诊断</a></nav>
+    <nav class="mobile-nav" aria-label="快捷导航"><a href="#fleet">船队</a><a href="#overview">单船</a><a href="#navigation">轨迹</a><a href="#attitude">姿态</a><a href="#analysis">曲线</a><a href="#propulsion">电机</a><a href="#diagnostics">诊断</a></nav>
     <main class="page" id="mainContent">
+      <nav class="workspace-breadcrumb" aria-label="当前位置"><a href="#fleet" data-view-link><span data-icon="dashboard"></span>工作台</a><span aria-hidden="true">/</span><span id="workspaceBreadcrumbBoat" hidden></span><span id="workspaceBreadcrumbView" aria-current="page">船队总览</span></nav>
       <section class="hero">
-        <div class="hero-heading"><div class="workspace-heading"><h1 id="viewTitle" tabindex="-1">船况概览</h1><span id="viewEnglish">VESSEL OVERVIEW</span></div><p id="viewSubtitle" class="muted">关键船况、船位与实时姿态，集中掌握当前航行状态。</p></div>
+        <div class="hero-heading"><div class="workspace-heading"><h1 id="viewTitle" tabindex="-1">船队总览</h1><span id="viewEnglish">FLEET OVERVIEW</span></div><p id="viewSubtitle" class="muted">同时掌握多艘无人船状态，选择一艘查看实时数据与控制详情。</p></div>
         <span id="heroSourceLabel" class="hero-label"><span data-icon="radio"></span>MQTT 云端监测 <i>/</i> WGS84</span>
       </section>
       <div id="accountNotice" class="account-notice" hidden><span id="accountNoticeText">请登录后使用监测平台</span><div><button id="accountRetry" class="small-button" hidden>重试连接</button><button id="accountNoticeLogin" class="small-button primary">登录账户</button></div></div>
@@ -92,7 +107,32 @@
         <p id="sourceHint" class="muted">管理员可对支持云端调参的无人船远程设置参数；访客可查看实时监测。</p>
       </section>
       <p id="connectionText" class="workspace-connection" role="status">正在检查 MQTT 服务器配置…</p>
-      <section id="view-overview" class="workspace-view" data-workspace-view="overview" aria-labelledby="viewTitle">
+      <section id="view-fleet" class="workspace-view fleet-workspace" data-workspace-view="fleet" aria-labelledby="viewTitle">
+        <div class="fleet-toolbar"><span id="fleetStreamState" class="fleet-stream-state" role="status" data-tone="neutral">正在准备船队监测</span><span class="fleet-live-note">遥测实时更新 · 过期数据自动隐藏</span><button id="fleetRefresh" type="button" class="small-button"><span data-icon="refresh"></span>刷新船队</button></div>
+        <div class="fleet-counters" aria-label="船队概况">
+          <article><span>已接入无人船</span><strong id="fleetTotal">0</strong><small>全部接入设备</small><span class="fleet-stat-icon" data-icon="boat"></span></article>
+          <article data-kind="online"><span>当前在线</span><strong id="fleetOnline">0</strong><small>正在接收遥测</small><span class="fleet-stat-icon" data-icon="radio"></span></article>
+          <article data-kind="offline"><span>当前离线</span><strong id="fleetOffline">0</strong><small>等待重新连接</small><span class="fleet-stat-icon" data-icon="clock"></span></article>
+          <article data-kind="moving"><span>航行中</span><strong id="fleetMoving">0</strong><small>船速 ≥ 0.1 m/s</small><span class="fleet-stat-icon" data-icon="compass"></span></article>
+        </div>
+        <section class="fleet-directory" aria-labelledby="fleetDirectoryTitle"><div class="fleet-directory-heading"><div><h2 id="fleetDirectoryTitle">无人船状态 <span id="fleetVisibleCount">0 艘</span></h2><p>设备 ID 为船只名称；仅实时有效定位会显示在地图上。</p></div><div class="fleet-filters"><label for="fleetSearch"><span class="sr-only">搜索无人船 ID</span><input id="fleetSearch" type="search" maxlength="64" placeholder="搜索无人船 ID" autocomplete="off" spellcheck="false"></label><label for="fleetFilter"><span class="sr-only">筛选在线状态</span><select id="fleetFilter"><option value="all">全部船舶</option><option value="online">只看在线</option><option value="offline">只看离线</option></select></label></div></div>
+          <div id="fleetCards" class="fleet-cards" aria-label="无人船状态卡片"></div>
+          <div id="fleetEmpty" class="fleet-empty" role="status"><span class="fleet-empty-mark" aria-hidden="true">⌁</span><strong id="fleetEmptyTitle">等待无人船接入</strong><p id="fleetEmptyDescription">登录后自动接收所有已接入无人船；每艘船需要使用独立设备 ID。</p></div>
+        </section>
+        <div class="fleet-lower-grid">
+          <section class="fleet-panel fleet-map-panel" aria-labelledby="fleetMapTitle">
+            <div class="fleet-panel-heading"><div><h2 id="fleetMapTitle">船队位置</h2><p>有效 RTK 定位 · WGS84</p></div><div class="fleet-panel-actions"><button id="fleetMapFit" type="button" class="small-button" title="调整地图显示全部有效船位">重置视图</button><button id="fleetMapFullscreen" type="button" class="icon-button" aria-label="全屏地图" title="全屏地图"><span data-icon="maximize"></span></button></div></div>
+            <div class="fleet-map-frame"><div id="fleetMap" role="application" aria-label="船队实时位置地图"></div><div id="fleetMapStatus" class="fleet-map-status" role="status">等待有效定位</div></div>
+            <div id="fleetMapLegend" class="fleet-map-legend" aria-label="地图船只图例"><span class="fleet-map-empty-legend">尚无有效船位</span></div>
+          </section>
+          <section class="fleet-panel fleet-recent-panel" aria-labelledby="fleetRecentTitle">
+            <div class="fleet-panel-heading"><div><h2 id="fleetRecentTitle">最近遥测</h2><p id="fleetRecentSummary">等待船端数据</p></div><span class="fleet-recent-mark" aria-hidden="true"></span></div>
+            <div id="fleetRecentList" class="fleet-recent-list" aria-live="polite"></div>
+            <div id="fleetRecentEmpty" class="fleet-recent-empty">收到遥测后会显示最近更新的船只。</div>
+          </section>
+        </div>
+      </section>
+      <section id="view-overview" class="workspace-view" data-workspace-view="overview" aria-labelledby="viewTitle" hidden>
       <section class="grid metrics" aria-label="关键航行数据">
         <article class="card kpi-card speed-card">
           <div class="kpi-heading"><span class="card-icon blue" data-icon="gauge"></span><h2>实际船速 <small>Speed</small></h2></div>
@@ -254,9 +294,9 @@
       <div class="dialog-actions"><button id="accountLoginSubmit" class="primary" type="submit">登录</button></div>
     </form>
   </dialog>
-  <dialog id="settingsDialog" aria-labelledby="settingsTitle">
-    <div class="dialog-head"><div class="title-with-icon"><span class="card-icon teal" data-icon="sliders"></span><div><p class="eyebrow">PLATFORM & VESSEL SETTINGS</p><h2 id="settingsTitle">平台与电控设置</h2></div></div><button id="settingsClose" class="ghost">返回监控<span data-icon="close"></span></button></div>
-    <div class="dialog-scroll">
+  <dialog id="platformSettingsDialog" class="platform-settings-dialog" aria-labelledby="platformSettingsTitle">
+    <div class="dialog-head"><div class="title-with-icon"><span class="card-icon blue" data-icon="settings"></span><div><p class="eyebrow">PLATFORM SETTINGS</p><h2 id="platformSettingsTitle">平台设置</h2></div></div><button id="platformSettingsClose" class="ghost">返回监控<span data-icon="close"></span></button></div>
+    <div class="dialog-scroll"><p class="platform-settings-intro">管理整个平台的用户、无人船接入账号与地图配置。无需选择或连接无人船；单船 PID 与电控参数请进入“调参设置”。</p>
       <section id="userManagement" class="user-management" aria-labelledby="userManagementTitle" hidden>
         <div class="user-management-heading">
           <div class="user-management-title"><span class="card-icon blue" data-icon="settings"></span><div><h3 id="userManagementTitle">用户与账户</h3><p>PLATFORM USERS · 仅管理员可操作</p></div></div>
@@ -287,7 +327,7 @@
           <div class="mqtt-device-title"><span class="card-icon teal" data-icon="radio"></span><div><h3 id="mqttDeviceTitle">MQTT 设备账号</h3><p>DEVICE ACCESS · 仅管理员可操作</p></div></div>
           <button id="mqttDeviceRead" type="button" class="subtle">重新读取设备</button>
         </div>
-        <p class="mqtt-device-description">管理无人船接入本服务器的 MQTT 账号，与网页登录账户相互独立。无需设备在线；设备 ID 和主题保持不变，不修改网页桥接账号。</p>
+        <p class="mqtt-device-description">为新无人船建立独立设备 ID、MQTT 账号和主题权限，或修改已有设备的接入凭据，与网页登录账户相互独立。无需设备在线；编辑已有设备时 ID 和主题保持不变，不修改网页桥接账号。</p>
         <p id="mqttDeviceAccess" class="mqtt-device-access" hidden></p>
         <div id="mqttDeviceContent" hidden>
           <div class="mqtt-device-summary"><strong id="mqttDeviceCount">尚未读取</strong><span>修改持久保存，服务重启与网页更新后保留</span></div>
@@ -322,6 +362,11 @@
         </form>
         <p id="mapSettingsStatus" class="map-settings-status" role="status" aria-live="polite" data-tone="neutral">尚未读取平台地图配置。</p>
       </section>
+    </div>
+  </dialog>
+  <dialog id="settingsDialog" class="vessel-settings-dialog" aria-labelledby="settingsTitle">
+    <div class="dialog-head"><div class="title-with-icon"><span class="card-icon teal" data-icon="sliders"></span><div><p class="eyebrow">VESSEL PARAMETERS</p><h2 id="settingsTitle">无人船调参设置</h2></div></div><button id="settingsClose" class="ghost">返回监控<span data-icon="close"></span></button></div>
+    <div class="dialog-scroll"><div class="parameter-device-context"><div><span>当前调参对象</span><strong id="parameterDeviceName">未选择无人船</strong></div><span class="chip">单船独立操作</span></div><p id="parameterDeviceNotice" class="parameter-device-notice">请先在船队总览选择无人船并等待实时数据，再读取和修改参数。</p>
       <h3 class="device-settings-heading">无人船电控参数<span>读取、写入与 Flash 保存需要设备在线</span></h3>
       <p id="cloudReadOnlyNotice" class="cloud-readonly">云端调参需要管理员账户和支持该功能的固件；操作结果以设备响应为准。</p>
       <div class="settings-intro"><div class="workflow"><span><b>1</b>读取当前参数</span><i>→</i><span><b>2</b>调整并写入</span><i>→</i><span><b>3</b>调好后存入 Flash</span></div><p>方向修改和 Flash 保存需 CH6 低档、两路停稳且反馈正常满 1 秒。</p></div>

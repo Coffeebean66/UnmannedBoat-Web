@@ -1,0 +1,160 @@
+/* 船队工作台：参考 seabot 的卡片层级与间距，沿用平台主题和真实遥测。 */
+.fleet-workspace { display:grid;gap:20px; }
+html[data-workspace-view="fleet"] .hero { margin-bottom:20px; }
+html[data-workspace-view="fleet"] .source-panel { gap:10px 16px;margin-bottom:16px;padding:13px 16px;box-shadow:none; }
+html[data-workspace-view="fleet"] #sourceHint,html[data-workspace-view="fleet"] #connectionText { display:none; }
+.fleet-toolbar { display:flex;align-items:center;gap:12px;min-height:36px; }
+.fleet-toolbar .fleet-live-note { margin-left:auto;color:var(--faint);font-size:12px; }
+.fleet-toolbar .small-button { min-height:34px; }
+.fleet-stream-state { display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:8px;font-size:12px;padding:8px 12px;background:var(--panel);white-space:nowrap;color:var(--muted); }
+.fleet-stream-state::before { content:"";display:block;width:6px;height:6px;background:currentColor;border-radius:50%; }
+
+/* 指标左侧承载数值，右侧只用柔和图标强调类别。 */
+.fleet-counters { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:20px; }
+.fleet-counters article { position:relative;display:grid;align-content:center;gap:4px;min-width:0;min-height:112px;padding:18px 78px 18px 20px;border:1px solid var(--line);border-radius:14px;background:var(--panel); }
+.fleet-counters article>span:not(.fleet-stat-icon) { color:var(--muted);font-size:13px;line-height:1.5; }
+.fleet-counters strong { font-size:30px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.25;color:var(--text); }
+.fleet-counters small { color:var(--faint);font-size:10px;line-height:1.5; }
+.fleet-counters .fleet-stat-icon { position:absolute;right:20px;top:50%;display:grid;place-items:center;width:48px;height:48px;border-radius:12px;background:color-mix(in srgb,var(--blue) 10%,transparent);color:var(--blue);transform:translateY(-50%); }
+.fleet-counters .fleet-stat-icon svg { width:23px;height:23px; }
+.fleet-counters [data-kind=online] .fleet-stat-icon { color:var(--success);background:var(--success-bg); }
+.fleet-counters [data-kind=offline] .fleet-stat-icon { color:var(--muted);background:var(--soft); }
+.fleet-counters [data-kind=moving] .fleet-stat-icon { color:var(--blue); }
+
+.fleet-directory,.fleet-panel { min-width:0;border:1px solid var(--line);border-radius:14px;background:var(--panel); }
+.fleet-directory { padding:20px; }
+.fleet-directory-heading,.fleet-panel-heading { display:flex;align-items:center;justify-content:space-between;gap:16px; }
+.fleet-directory-heading { margin-bottom:18px; }
+.fleet-directory-heading h2,.fleet-panel-heading h2 { color:var(--text);font-size:16px;font-weight:600;line-height:1.5; }
+.fleet-directory-heading h2 span { margin-left:8px;color:var(--faint);font-size:12px;font-weight:400; }
+.fleet-directory-heading p,.fleet-panel-heading p { margin-top:5px;color:var(--muted);font-size:12px;line-height:1.6; }
+.fleet-filters { display:flex;gap:10px;flex-shrink:0; }
+.fleet-filters input,.fleet-filters select { min-height:38px;border:1px solid var(--line-strong);border-radius:8px;background:var(--panel);color:var(--text);font-size:12px;padding:8px 11px; }
+.fleet-filters input { width:200px; }.fleet-filters input::placeholder { color:var(--faint); }
+.fleet-cards { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px; }
+.fleet-card { min-width:0;border:1px solid var(--line);border-radius:10px;background:var(--bg);padding:16px;transition:border-color .15s,background .15s; }
+.fleet-card:hover { border-color:var(--line-strong);background:var(--soft); }
+.fleet-card[data-selected=true] { border-color:var(--blue); }
+.fleet-card-heading { display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px; }
+.fleet-card-identity { min-width:0; }
+.fleet-card h3 { overflow-wrap:anywhere;color:var(--text);font-size:15px;font-weight:650;line-height:1.5; }
+.fleet-card-status { display:inline-flex;align-items:center;gap:6px;flex:none;padding:5px 9px;border-radius:20px;background:var(--soft);color:var(--muted);font-size:11px;line-height:1.3;white-space:nowrap; }
+.fleet-card-status::before { content:"";width:5px;height:5px;border-radius:50%;background:currentColor; }
+.fleet-card[data-online=true] .fleet-card-status { background:var(--success-bg);color:var(--success); }
+.fleet-card-facts { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px;margin:0; }
+.fleet-card-facts>div { min-width:0; }
+.fleet-card-facts dt { margin-bottom:3px;color:var(--muted);font-size:11px;line-height:1.4; }
+.fleet-card-facts dd { display:flex;align-items:baseline;gap:4px;min-width:0;margin:0;color:var(--text);font-size:14px;line-height:1.5;font-variant-numeric:tabular-nums; }
+.fleet-card-facts dd b { overflow:hidden;text-overflow:ellipsis;font-weight:600; }
+.fleet-card-facts dd span { flex:none;color:var(--faint);font-size:10px; }
+.fleet-card-footer { display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:16px;padding-top:13px;border-top:1px solid var(--line); }
+.fleet-card-update { display:grid;gap:4px;min-width:0; }
+.fleet-card-fix,.fleet-card-age { color:var(--faint);font-size:10px;line-height:1.5; }
+.fleet-card-fix[data-valid=true] { color:var(--success); }
+.fleet-card-actions { display:flex;align-items:center;justify-content:flex-end;gap:10px;min-width:0; }
+.fleet-target { color:var(--muted);font-size:11px;white-space:nowrap; }
+.fleet-target b { color:var(--text);font-weight:600; }
+.fleet-detail-button { min-height:32px;padding:6px 10px;border-color:var(--line-strong);border-radius:7px;background:var(--panel);color:var(--text);font-size:11px; }
+.fleet-detail-button:hover:not(:disabled) { border-color:var(--blue);color:var(--blue); }
+.fleet-empty { display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;min-height:180px;text-align:center;border:1px dashed var(--line-strong);border-radius:10px;background:var(--bg);padding:28px 20px; }
+.fleet-empty-mark { color:var(--blue);font-size:36px;line-height:1; }
+.fleet-empty strong { color:var(--text);font-size:15px;font-weight:600; }
+.fleet-empty p { max-width:460px;color:var(--muted);font-size:12px;line-height:1.8; }
+
+.fleet-lower-grid { display:grid;grid-template-columns:minmax(0,1.55fr) minmax(280px,.8fr);gap:20px;align-items:stretch; }
+.fleet-panel { padding:20px; }
+.fleet-panel-heading { margin-bottom:16px; }
+.fleet-panel-actions { display:flex;align-items:center;gap:8px; }
+.fleet-panel-actions .icon-button { width:34px;height:34px;min-width:34px;min-height:34px;padding:7px;border-radius:7px; }
+.fleet-map-frame { position:relative;height:clamp(300px,34vw,410px);min-height:280px;overflow:hidden;border:1px solid var(--line);border-radius:10px;background:var(--soft); }
+#fleetMap { width:100%;height:100%;min-height:280px;background:var(--soft); }
+#fleetMap .leaflet-container { width:100%;height:100%;background:var(--soft); }
+.fleet-map-panel:fullscreen,.fleet-map-panel.is-fullscreen { position:fixed;inset:0;z-index:100;display:flex;flex-direction:column;border:0;border-radius:0;background:var(--bg);padding:20px; }
+.fleet-map-panel:fullscreen .fleet-map-frame,.fleet-map-panel.is-fullscreen .fleet-map-frame { flex:1;height:auto;min-height:320px; }
+.fleet-map-panel:fullscreen #fleetMap,.fleet-map-panel.is-fullscreen #fleetMap { height:100%; }
+.fleet-map-status { position:absolute;left:10px;bottom:10px;z-index:500;max-width:calc(100% - 20px);border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--muted);padding:7px 10px;font-size:11px;line-height:1.5;pointer-events:none; }
+.fleet-map-legend { display:flex;align-items:center;flex-wrap:wrap;gap:10px 16px;min-height:36px;padding:12px 2px 0; }
+.fleet-map-legend>span { display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:100%;color:var(--muted);font-size:11px; }
+.fleet-map-legend-label { min-width:0;overflow-wrap:anywhere; }
+.fleet-map-legend-swatch { display:inline-block;flex:none;width:8px;height:8px;border-radius:50%;background:var(--vessel-color,var(--muted)); }
+.fleet-map-legend>span[data-online=false] .fleet-map-legend-swatch { opacity:.48; }
+.fleet-map-empty-legend { color:var(--faint);font-size:11px; }
+.fleet-map-pin-shell { border:0!important;background:transparent!important;box-shadow:none!important; }
+.fleet-map-pin { display:grid;place-items:center;width:max-content;max-width:140px;min-width:26px;height:26px;border:1px solid #fff;border-radius:6px;background:var(--vessel-color,#5d87ff);box-shadow:0 2px 5px #0005;color:#fff;padding:0 6px;font-size:10px;font-weight:600;white-space:nowrap; }
+.fleet-map-pin-label { max-width:126px;overflow:hidden;text-overflow:ellipsis; }
+.fleet-map-pin[data-online=false] { opacity:.55;filter:grayscale(1); }
+.fleet-recent-panel { display:flex;flex-direction:column;min-height:0; }
+.fleet-recent-mark { width:7px;height:7px;flex:none;border-radius:50%;background:var(--success); }
+.fleet-recent-list { display:grid;align-content:start; }
+.fleet-recent-row { display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:5px 12px;width:100%;min-width:0;min-height:74px;padding:13px 6px;border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;text-align:left;white-space:normal; }
+.fleet-recent-row:last-child { border-bottom:0; }
+.fleet-recent-row:hover:not(:disabled) { border-color:var(--line);background:var(--soft); }
+.fleet-recent-row strong { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font-size:13px;font-weight:600; }
+.fleet-recent-status { grid-column:2;grid-row:1;color:var(--muted);font-size:11px; }
+.fleet-recent-row[data-online=true] .fleet-recent-status { color:var(--success); }
+.fleet-recent-row small { grid-column:1/-1;color:var(--faint);font-size:11px;font-weight:400;line-height:1.5; }
+.fleet-recent-row[data-selected=true] strong { color:var(--blue); }
+.fleet-recent-empty { display:flex;align-items:center;justify-content:center;flex:1;min-height:150px;color:var(--faint);font-size:12px;text-align:center; }
+
+@media(max-width:1200px) {
+  .fleet-counters { gap:14px; }
+  .fleet-counters article { padding:16px 62px 16px 16px; }
+  .fleet-counters .fleet-stat-icon { right:14px;width:38px;height:38px;border-radius:10px; }
+  .fleet-counters .fleet-stat-icon svg { width:21px;height:21px; }
+  .fleet-lower-grid { grid-template-columns:minmax(0,1.3fr) minmax(260px,.8fr); }
+  .fleet-directory-heading { align-items:flex-start;flex-direction:column;gap:14px; }
+  .fleet-filters { align-self:flex-end; }
+}
+@media(max-width:900px) {
+  .fleet-counters { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .fleet-counters article { min-height:104px; }
+  .fleet-card-footer { align-items:flex-start;flex-direction:column; }
+  .fleet-card-actions { width:100%;justify-content:space-between; }
+}
+@media(max-width:760px) {
+  .fleet-lower-grid { grid-template-columns:minmax(0,1fr); }
+  .fleet-recent-panel { min-height:240px; }
+  .fleet-toolbar { flex-wrap:wrap; }
+  .fleet-toolbar .fleet-live-note { flex:1 1 100%;order:3;margin:0; }
+  .fleet-directory-heading { align-items:stretch; }
+  .fleet-filters { align-self:stretch;width:100%; }
+  .fleet-filters label:first-child { flex:1;min-width:0; }
+  .fleet-filters input { width:100%; }
+}
+@media(max-width:640px) {
+  .fleet-workspace { gap:16px; }
+  .fleet-counters { gap:12px; }
+  .fleet-counters article { min-height:106px;padding:14px 50px 14px 14px; }
+  .fleet-counters article>span:not(.fleet-stat-icon) { font-size:12px; }
+  .fleet-counters strong { font-size:28px; }
+  .fleet-counters small { font-size:9px; }
+  .fleet-counters .fleet-stat-icon { right:12px;width:30px;height:30px;border-radius:8px; }
+  .fleet-counters .fleet-stat-icon svg { width:18px;height:18px; }
+  .fleet-directory,.fleet-panel { padding:16px; }
+  .fleet-cards { grid-template-columns:minmax(0,1fr);gap:14px; }
+  .fleet-card { padding:16px; }
+  .fleet-card-footer { flex-direction:row;align-items:center; }
+  .fleet-card-actions { width:auto;justify-content:flex-end; }
+  .fleet-panel-heading { gap:10px; }
+  .fleet-panel-heading h2,.fleet-directory-heading h2 { font-size:15px; }
+  .fleet-panel-heading p,.fleet-directory-heading p { font-size:11px; }
+  .fleet-map-frame { height:320px; }
+}
+@media(max-width:380px) {
+  .fleet-counters { gap:10px; }
+  .fleet-counters article { padding-left:12px;padding-right:44px; }
+  .fleet-counters .fleet-stat-icon { right:10px;width:27px;height:27px; }
+  .fleet-counters .fleet-stat-icon svg { width:17px;height:17px; }
+  .fleet-directory,.fleet-panel { padding:13px; }
+  .fleet-card { padding:14px; }
+  .fleet-card-heading { gap:8px; }
+  .fleet-card h3 { font-size:14px; }
+  .fleet-card-status { padding:5px 7px;font-size:10px; }
+  .fleet-card-footer { align-items:flex-start;flex-direction:column; }
+  .fleet-card-actions { width:100%;justify-content:space-between; }
+  .fleet-card-facts { column-gap:12px; }
+  .fleet-card-facts dd { font-size:13px; }
+  .fleet-filters { gap:7px; }
+  .fleet-filters input,.fleet-filters select { padding:7px 8px;font-size:11px; }
+}
+@media(prefers-reduced-motion:reduce) { .fleet-card { transition:none; } }

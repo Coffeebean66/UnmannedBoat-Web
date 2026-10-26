@@ -14,12 +14,37 @@ const LAYOUT=[
   [140,36,1,4,protocol.decodeImuFrame]
 ];
 
-function validateTelemetry(payload){
-  if(!Buffer.isBuffer(payload)||payload.length!==176)return false;
-  return LAYOUT.every(([offset,length,version,type,decode])=>{
+function decodeTelemetry(payload){
+  if(!Buffer.isBuffer(payload)||payload.length!==176)return null;
+  const frames=[];
+  for(const [offset,length,version,type,decode]of LAYOUT){
     const frame=payload.subarray(offset,offset+length);
-    return frame[2]===version&&frame[3]===type&&frame[4]===length&&!!decode(frame);
-  });
+    if(frame[2]!==version||frame[3]!==type||frame[4]!==length)return null;
+    const decoded=decode(frame);if(!decoded)return null;frames.push(decoded);
+  }
+  return frames;
+}
+function validateTelemetry(payload){return !!decodeTelemetry(payload);}
+
+// 总览只保留每船最近一包解析结果。独立源年龄决定每项的有效期限，不能用收包时间替代源时效。
+function fleetSummary(sample,now){
+  if(!sample||now<sample.receivedAt||now-sample.receivedAt>=1000)return null;
+  const [status,velocityFrame,boatFrame]=sample.frames,v=velocityFrame.velocity,b=boatFrame.boat;
+  const receivedAt=sample.receivedAt,packetUntil=receivedAt+1000;
+  const until=(age,valid)=>valid&&Number.isFinite(age)&&age>=0?Math.min(packetUntil,receivedAt+1000-age):null;
+  const boatUntil=until(b.ageMs,b.received),velocityUntil=until(v.ageMs,v.received&&v.fresh);
+  const live=expiry=>Number.isFinite(expiry)&&now<expiry;
+  const boatSpeed=live(boatUntil)&&b.feedbackValid,rtkSpeed=live(velocityUntil)&&v.velocityValid;
+  const boatHeading=live(boatUntil)&&b.headingValid,rtkHeading=live(velocityUntil)&&v.headingValid;
+  const validUntil={speedMps:boatSpeed?boatUntil:rtkSpeed?velocityUntil:null,targetSpeedMps:packetUntil,
+    headingDegrees:boatHeading?boatUntil:rtkHeading?velocityUntil:null,
+    position:live(velocityUntil)&&v.fixValid?velocityUntil:null,voltageV:null,controlMode:packetUntil};
+  const motor=status.motors.filter(item=>item.received&&item.displayValid&&live(until(item.feedbackAgeMs,true)));
+  if(motor.length)validUntil.voltageV=Math.min(...motor.map(item=>until(item.feedbackAgeMs,true)));
+  return {receivedAt,speedMps:boatSpeed?b.actualMps:rtkSpeed?Math.hypot(v.xMps,v.yMps):null,
+    targetSpeedMps:Math.abs(b.targetMps),headingDegrees:boatHeading?b.actualHeading:rtkHeading?v.headingDegrees:null,
+    latitude:validUntil.position===null?null:v.latitude,longitude:validUntil.position===null?null:v.longitude,
+    voltageV:motor.length?motor.reduce((sum,item)=>sum+item.voltageV,0)/motor.length:null,controlMode:b.controlMode,validUntil};
 }
 
 class CloudBridge extends EventEmitter {
@@ -64,7 +89,7 @@ class CloudBridge extends EventEmitter {
     if(this.stopped||this.brokerConnected===connected)return;
     this.brokerConnected=connected;
     // Broker 重连后旧缓存仍保持离线；必须等到新的非 retained 遥测。
-    if(!connected)for(const device of this.devices.values()){device.live=false;device.capability=null;device.uplinkClock.reset();this.cancelParameters(device.id,503,'云端连接已断开，参数结果未知，请读取确认');}
+    if(!connected)for(const device of this.devices.values()){device.live=false;device.capability=null;device.fleetTelemetry=null;device.uplinkClock.reset();this.cancelParameters(device.id,503,'云端连接已断开，参数结果未知，请读取确认');}
     this.emit('state',{brokerConnected:connected,device:null});
   }
   snapshot(device){
@@ -73,6 +98,8 @@ class CloudBridge extends EventEmitter {
       lastReceivedAt:device.lastReceivedAt,status:device.status,lastStatusAt:device.lastStatusAt,parametersReady:this.parametersReady(device)};
   }
   list(){return {brokerConnected:this.brokerConnected,devices:[...this.devices.values()].map(device=>this.snapshot(device))};}
+  fleetSnapshot(device){const snapshot=this.snapshot(device);return {...snapshot,summary:snapshot.online?fleetSummary(device.fleetTelemetry,this.now()):null};}
+  fleetList(){return {brokerConnected:this.brokerConnected,devices:[...this.devices.values()].map(device=>this.fleetSnapshot(device))};}
   get(id){const device=this.devices.get(id);return device?this.snapshot(device):null;}
   state(id){return {brokerConnected:this.brokerConnected,device:this.get(id)};}
   obtain(id){
@@ -84,7 +111,7 @@ class CloudBridge extends EventEmitter {
       this.cancelParameters(offline[0].id,503,'设备连接已变化，参数结果未知，请读取确认');
       this.devices.delete(offline[0].id);
     }
-    const device={id,lastReceivedAt:null,status:'unknown',lastStatusAt:null,live:false,announcedOnline:false,announcedParametersReady:false,capability:null,consumedToken:null,uplinkClock:new UplinkClock()};
+    const device={id,lastReceivedAt:null,status:'unknown',lastStatusAt:null,live:false,announcedOnline:false,announcedParametersReady:false,capability:null,consumedToken:null,fleetTelemetry:null,uplinkClock:new UplinkClock()};
     this.devices.set(id,device);return device;
   }
   acceptMessage(topic,payload,packet={}){
@@ -95,9 +122,9 @@ class CloudBridge extends EventEmitter {
       const receivedAt=this.now(),receivedMono=this.monotonicNow();
       if(packet.retain)return false;
       const telemetry=unwrapTelemetry(payload);
-      if(!telemetry||!validateTelemetry(telemetry.payload))return false;
+      const frames=telemetry&&decodeTelemetry(telemetry.payload);if(!frames)return false;
       const device=this.obtain(parts[1]);if(!device)return false;
-      device.lastReceivedAt=receivedAt;device.live=true;
+      device.lastReceivedAt=receivedAt;device.live=true;device.fleetTelemetry={receivedAt,frames};
       device.uplinkClock.observe(telemetry.session);
       const timing=telemetry.session?device.uplinkClock.estimate(telemetry.tick,receivedMono):null;
       // 新遥测证明设备已上线，避免旧的 retained offline 覆盖本次连接。
@@ -112,7 +139,7 @@ class CloudBridge extends EventEmitter {
       const value=payload.toString('utf8');if(!['online','offline'].includes(value))return false;
       const device=this.obtain(parts[1]);if(!device)return false;
       device.status=value;device.lastStatusAt=this.now();
-      if(value==='offline'){device.live=false;device.capability=null;device.uplinkClock.reset();this.cancelParameters(device.id,503,'设备已离线，参数结果未知，请读取确认');}
+      if(value==='offline'){device.live=false;device.capability=null;device.fleetTelemetry=null;device.uplinkClock.reset();this.cancelParameters(device.id,503,'设备已离线，参数结果未知，请读取确认');}
       this.emit('state',this.state(device.id));return true;
     }
     if(parts[2]==='parameter-capability'){

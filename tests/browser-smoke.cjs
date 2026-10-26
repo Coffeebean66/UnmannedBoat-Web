@@ -38,7 +38,7 @@ async function main(){
       const r=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:true,clip});fs.writeFileSync(path.join(output,name+'.png'),Buffer.from(r.data,'base64'));
     };
     const deviceSummary=()=>evaluate("(()=>{const text=id=>document.getElementById(id).textContent;return {state:document.getElementById('deviceSummary').dataset.state,name:text('deviceName'),source:text('sourceChip'),connection:text('deviceConnectionState'),frames:text('frameCount'),updated:text('deviceLastUpdate'),datetime:document.getElementById('deviceLastUpdate').getAttribute('datetime'),latency:text('deviceLatency')};})()");
-    const views=['overview','navigation','attitude','analysis','propulsion','diagnostics'];
+    const views=['fleet','overview','navigation','attitude','analysis','propulsion','diagnostics'];
     const assertView=async id=>{
       await until('BoatWorkspace.current==='+JSON.stringify(id));
       assert.deepEqual(await evaluate("[...document.querySelectorAll('.workspace-view[data-workspace-view]')].filter(panel=>!panel.hidden&&panel.getBoundingClientRect().width>0).map(panel=>panel.dataset.workspaceView)"),[id],'Only the selected workspace page is visible');
@@ -64,7 +64,7 @@ async function main(){
     await send('Page.addScriptToEvaluateOnNewDocument',{source:mock});await send('Page.navigate',{url:'http://127.0.0.1:'+server.address().port});
     await until('!!window.boatMonitor && !!window.boatMonitor.viewer.renderer && !!window.BoatWorkspace');assert.deepEqual(errors,[]);
     await evaluate('ensureTestLogin()');
-    await assertView('overview');
+    await assertView('fleet');
     await view('navigation');assert.equal(await evaluate('document.activeElement.id'),'viewTitle','Page navigation moves keyboard focus to the page heading');
     await view('attitude');await evaluate('history.back()');await assertView('navigation');await evaluate('history.forward()');await assertView('attitude');
     await view('overview');
@@ -258,7 +258,7 @@ async function main(){
     await mapShot('map-vectors-directions');
     await view('analysis');
     const canvasPixel="[...document.getElementById('chart').getContext('2d').getImageData(0,0,1,1).data]";
-    assert.deepEqual(await evaluate(canvasPixel),[6,21,37,255]);
+    assert.deepEqual(await evaluate(canvasPixel),[25,25,30,255]);
     await evaluate("document.getElementById('themeToggle').click()");
     assert.equal(await evaluate("document.documentElement.dataset.theme"),'light');
     assert.deepEqual(await evaluate(canvasPixel),[255,255,255,255]);
@@ -369,9 +369,9 @@ async function main(){
     await evaluate('connectTestBoat()');await wait(250);
     assert.equal(await evaluate("!!document.querySelector('.map-velocity-anchor')"),false,'Hidden arrows stay hidden when new data arrives');
     await evaluate("document.getElementById('mapVectorsToggle').click()");await until("!!document.querySelector('.map-velocity-anchor')");
-    await evaluate("location.hash='#unknown-page'");await assertView('overview');
+    await evaluate("location.hash='#unknown-page'");await assertView('fleet');
     assert.deepEqual(errors,[]);
-    console.log('PASS: six independent workspace pages, desktop/mobile navigation, URL/back/forward/reload/unknown route, focus and aria-current, preserved MQTT/map/WebGL/parser/track instances, larger map/3D/chart views, hidden-animation stop and visible-frame recovery; real local HTTP/SSE packets without Web Bluetooth, parameters/Flash rejection/timeout, settings/presets/themes, map vectors/track/expiry, current-device metadata, simultaneous RTK/IMU telemetry and horizon, reconnect, 320/375/640/768/1024/1440/1920px.');
+    console.log('PASS: seven independent workspace pages, desktop/mobile navigation, URL/back/forward/reload/unknown route, focus and aria-current, preserved MQTT/map/WebGL/parser/track instances, larger map/3D/chart views, hidden-animation stop and visible-frame recovery; real local HTTP/SSE packets without Web Bluetooth, parameters/Flash rejection/timeout, settings/presets/themes, map vectors/track/expiry, current-device metadata, simultaneous RTK/IMU telemetry and horizon, reconnect, 320/375/640/768/1024/1440/1920px.');
     console.log('Screenshots: '+output);
   }finally{socket?.close();browser.kill();await new Promise(resolve=>server.close(resolve));}
 }

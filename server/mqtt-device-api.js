@@ -38,7 +38,7 @@ function createMqttDeviceClient({ socketPath = SOCKET_PATH, timeoutMs = 30000 } 
       response.on('end', () => {
         if (response.statusCode !== 200) {
           // 子进程或组件错误详情可能包含配置内容，不直接转发给浏览器。
-          const messages = { 400: '设备账号格式不正确', 404: '设备不存在，请重新读取',
+          const messages = { 400: '设备账号格式不正确', 404: '设备不存在，请重新读取', 405: 'MQTT 管理组件版本较旧，请按 README 重新安装管理组件以支持新增无人船',
             409: '配置已变化、账号重名或组件正在处理请求，请重新读取后再操作' };
           return finish(fault(messages[response.statusCode] ? response.statusCode : 503,
             messages[response.statusCode] || '设备账号保存未确认，请重新读取；如持续失败请检查管理组件日志'));
@@ -65,7 +65,7 @@ function snapshot(data) {
     ids.add(device.deviceId); names.add(device.username);
     return { deviceId: device.deviceId, username: device.username };
   });
-  return { devices, revision: data.revision };
+  return { devices, revision: data.revision, ...(data.canCreate === true ? { canCreate: true } : {}) };
 }
 
 function validateInput(value) {
@@ -78,6 +78,13 @@ function validateInput(value) {
   }
   return { username: value.username, revision: value.revision,
     ...(Object.hasOwn(value, 'password') ? { password: value.password } : {}) };
+}
+
+function validateCreateInput(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.deviceId !== 'string' || !NAME.test(value.deviceId)) throw fault(400, '新设备 ID 需为1～64位字母、数字、下划线或短横线');
+  const { deviceId, ...credentials } = value, input = validateInput(credentials);
+  if (!Object.hasOwn(input, 'password')) throw fault(400, '新增无人船必须设置 MQTT 接入密码');
+  return { deviceId, ...input };
 }
 
 function readBody(req, timeoutMs) {
@@ -116,12 +123,13 @@ function createMqttDeviceApi({ accounts, client = createMqttDeviceClient(), body
     const collection = url.pathname === '/api/mqtt/devices';
     const match = url.pathname.match(/^\/api\/mqtt\/devices\/([A-Za-z0-9_-]{1,64})$/);
     if (!collection && !match) { json(res, 404, { error: '设备不存在' }); return true; }
-    if (!(collection && req.method === 'GET' || match && req.method === 'PATCH')) {
-      res.setHeader('Allow', collection ? 'GET' : 'PATCH'); json(res, 405, { error: '不支持此设备账号管理方法' }); return true;
+    const creating = collection && req.method === 'POST';
+    if (!(collection && req.method === 'GET' || creating || match && req.method === 'PATCH')) {
+      res.setHeader('Allow', collection ? 'GET, POST' : 'PATCH'); json(res, 405, { error: '不支持此设备账号管理方法' }); return true;
     }
-    const browserRead = collection && !req.headers.origin && (!req.headers['sec-fetch-site'] || req.headers['sec-fetch-site'] === 'same-origin');
+    const browserRead = collection && req.method === 'GET' && !req.headers.origin && (!req.headers['sec-fetch-site'] || req.headers['sec-fetch-site'] === 'same-origin');
     if (!browserRead && !accounts.sameOrigin(req)) { json(res, 403, { error: '请从本站发起设备账号操作' }); return true; }
-    if (collection) {
+    if (collection && req.method === 'GET') {
       try {
         const data = snapshot(await client('GET', '/devices'));
         if (active(session)) json(res, 200, { enabled: true, ...data });
@@ -136,11 +144,16 @@ function createMqttDeviceApi({ accounts, client = createMqttDeviceClient(), body
     if (writing) { json(res, 409, { error: '正在保存 MQTT 设备账号，请等待完成后重新读取' }); return true; }
     writing = true; let input;
     try {
-      try { input = validateInput(await readBody(req, bodyTimeoutMs)); }
+      try { input = (creating ? validateCreateInput : validateInput)(await readBody(req, bodyTimeoutMs)); }
       catch (error) { res.setHeader('Connection', 'close'); req.resume(); throw error; }
       // 请求体接收可能耗时，向特权组件派发前再次核验管理员会话。
       if (!active(session) || req.aborted || res.destroyed) throw fault(401, '账户会话已失效，请重新登录');
-      const result = await client('PUT', '/devices/' + match[1], input);
+      if (creating) {
+        const current = snapshot(await client('GET', '/devices'));
+        if (!current.canCreate) throw fault(503, 'MQTT 管理组件版本较旧，请按 README 重新运行 maintenance/install-mqtt-device-admin.sh 后添加无人船');
+        if (!active(session) || req.aborted || res.destroyed) throw fault(401, '账户会话已失效，请重新登录');
+      }
+      const result = await client(creating ? 'POST' : 'PUT', creating ? '/devices' : '/devices/' + match[1], input);
       delete input.password;
       const data = snapshot(result);
       if (result.ok !== true || typeof result.requiresReconnect !== 'boolean') throw fault(503, '设备管理组件响应异常，修改结果未确认，请重新读取');
@@ -155,4 +168,4 @@ function createMqttDeviceApi({ accounts, client = createMqttDeviceClient(), body
   } };
 }
 
-module.exports = { createMqttDeviceApi, createMqttDeviceClient, snapshot, validateInput, SOCKET_PATH };
+module.exports = { createMqttDeviceApi, createMqttDeviceClient, snapshot, validateInput, validateCreateInput, SOCKET_PATH };

@@ -121,3 +121,52 @@ test('HTTP worker accepts bounded fixed routes and emits only safe errors',async
   assert.equal((await fetch(base+'/devices/boat-01',{method:'PUT',body:'bad'})).status,415);
   assert.equal((await put({revision:data.revision,username:'new-name',password:'a'.repeat(3000)})).status,413);
 });
+
+test('new boat gets an independent account and exactly five own-topic permissions while existing credentials persist',async t=>{
+  const f=await fixture(t),before=await f.manager.list();assert.equal(before.canCreate,true);
+  const password='new-boat-test-Secret!23',created=await f.manager.create({deviceId:'boat-02',username:'vessel-two',password,revision:before.revision});
+  assert.deepEqual(created.devices,[{deviceId:'boat-01',username:'boat-01'},{deviceId:'boat-02',username:'vessel-two'}]);
+  assert.equal(created.requiresReconnect,true);assert.notEqual(created.revision,before.revision);
+  const passwd=await fsp.readFile(f.file('passwd'),'utf8');assert.ok(passwd.startsWith(f.initial.passwd));assert.match(passwd,/vessel-two:\$7\$/);assert.ok(!passwd.includes(password));
+  const nextAcl=await fsp.readFile(f.file('acl'),'utf8');assert.ok(nextAcl.startsWith(f.initial.acl));
+  assert.equal(nextAcl.slice(f.initial.acl.length).trim(),'user vessel-two\ntopic write boats/boat-02/telemetry\ntopic write boats/boat-02/status\ntopic read boats/boat-02/parameter-command\ntopic write boats/boat-02/parameter-response\ntopic write boats/boat-02/parameter-capability');
+  assert.equal(await fsp.readFile(f.file('runtime.env'),'utf8'),f.initial['runtime.env']);
+  assert.doesNotMatch(JSON.stringify(created),/password|\$7\$/);assert.ok(!(await fsp.readFile(f.file('access.txt'),'utf8')).includes(password));assert.equal(f.services.length,1);
+  assert.deepEqual((await createMqttDeviceManager(f.managerOptions).list()).devices,created.devices);
+});
+
+test('new boat validation and duplicate ID or account reject without hashing, restart or overwriting existing files',async t=>{
+  const f=await fixture(t),revision=(await f.manager.list()).revision,valid={deviceId:'boat-02',username:'vessel-two',password:'new-test-Password!23',revision};
+  for(const extra of [{deviceId:'boat-01'},{username:'boat-web-bridge'},{username:'weather-reader'},{revision:'b'.repeat(64)}])await assert.rejects(f.manager.create({...valid,...extra}),{status:409});
+  for(const extra of [{deviceId:'boat/02'},{deviceId:[]},{password:''},{password:'has:colon'},{password:'with space'},{revision:'invalid'},{command:'restart'},{username:'evil\nuser bridge'}])await assert.rejects(f.manager.create({...valid,...extra}),{status:400});
+  const missing={...valid};delete missing.password;await assert.rejects(f.manager.create(missing),{status:400});
+  for(const name of ['passwd','acl','access.txt','runtime.env'])assert.equal(await fsp.readFile(f.file(name),'utf8'),f.initial[name]);assert.equal(f.services.length,0);assert.equal(f.calls.length,0);
+});
+
+test('new boat creation respects custom topic prefixes and the 64-boat limit',async t=>{
+  const f=await fixture(t);await fsp.writeFile(f.file('runtime.env'),f.initial['runtime.env'].replace('PREFIX=boats','PREFIX=fleet'));await fsp.writeFile(f.file('acl'),f.initial.acl.replaceAll('boats/','fleet/'));
+  await f.manager.create({deviceId:'boat-02',username:'vessel-two',password:'test-Password!23',revision:(await f.manager.list()).revision});assert.match(await fsp.readFile(f.file('acl'),'utf8'),/topic write fleet\/boat-02\/telemetry/);
+  const g=await fixture(t);for(let i=2;i<=64;i++){await fsp.appendFile(g.file('passwd'),'boat-'+i+':$7$101$salt$hash\n');await fsp.appendFile(g.file('acl'),'\nuser boat-'+i+'\ntopic write boats/boat-'+i+'/telemetry\ntopic write boats/boat-'+i+'/status\n');}
+  const full=await g.manager.list();assert.equal(full.devices.length,64);await assert.rejects(g.manager.create({deviceId:'boat-65',username:'boat-65',password:'test-Password!23',revision:full.revision}),{status:409});assert.equal(g.services.length,0);assert.equal(g.calls.length,0);
+});
+
+test('new boat creation rolls back every file if Broker restart fails and leaves the existing boat usable',async t=>{
+  let restarts=0;const f=await fixture(t,{service:async()=>{if(++restarts===1)throw Error('restart failed');}});
+  await assert.rejects(f.manager.create({deviceId:'boat-02',username:'vessel-two',password:'test-Password!23',revision:(await f.manager.list()).revision}),{status:503});
+  for(const name of ['passwd','acl','access.txt','runtime.env'])assert.equal(await fsp.readFile(f.file(name),'utf8'),f.initial[name]);
+  assert.equal(restarts,2);assert.equal(fs.existsSync(f.file('.mqtt-device-transaction.json')),false);assert.equal((await f.manager.list()).devices.length,1);
+});
+
+test('new boat creation rejects concurrent external ACL changes before journal or account writes',async t=>{
+  const f=await fixture(t,{afterHash:async({file})=>fsp.appendFile(file('acl'),'\n# changed externally\n')});
+  await assert.rejects(f.manager.create({deviceId:'boat-02',username:'vessel-two',password:'test-Password!23',revision:(await f.manager.list()).revision}),{status:409});
+  assert.equal(await fsp.readFile(f.file('passwd'),'utf8'),f.initial.passwd);assert.equal(f.services.length,0);assert.equal(fs.existsSync(f.file('.mqtt-device-transaction.json')),false);
+});
+
+test('HTTP worker provisions a second boat using the bounded POST collection route',async t=>{
+  const f=await fixture(t),worker=createMqttDeviceWorker({manager:f.manager});await new Promise(resolve=>worker.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>worker.close(resolve)));
+  const base='http://127.0.0.1:'+worker.address().port,revision=(await f.manager.list()).revision;
+  const response=await fetch(base+'/devices',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({deviceId:'boat-02',username:'vessel-two',password:'test-Password!23',revision})});
+  assert.equal(response.status,200);assert.equal((await response.json()).devices.length,2);
+  assert.equal((await fetch(base+'/devices',{method:'POST',body:'not-json'})).status,415);
+});

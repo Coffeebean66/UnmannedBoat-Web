@@ -11,6 +11,12 @@ function validateInput(input){
   if(Object.hasOwn(input,'password')&&(typeof input.password!=='string'||input.password.length<8||input.password.length>64||! /^[!-9;-~]+$/.test(input.password)))throw fail('密码需为 8～64 位可打印 ASCII 字符，不能包含冒号或空白',400);
   return input;
 }
+function validateCreateInput(input){
+  if(!input||typeof input!=='object'||Array.isArray(input)||typeof input.deviceId!=='string'||!USER.test(input.deviceId))throw fail('新设备 ID 需为 1～64 位字母、数字、下划线或短横线',400);
+  const {deviceId,...credentials}=input;validateInput(credentials);
+  if(!Object.hasOwn(credentials,'password'))throw fail('新增设备必须设置接入密码',400);
+  return input;
+}
 async function ordinary(file,{directory=false,ownership=true,max=262144}={}){
   const s=await fsp.lstat(file);
   if(s.isSymbolicLink()||(directory?!s.isDirectory():!s.isFile())||s.nlink!==1&&!directory||!directory&&s.size>max||ownership&&(s.uid!==0||(s.mode&0o022)!==0))throw fail('MQTT 管理文件或目录权限不安全，操作已拒绝');
@@ -65,10 +71,10 @@ function parseConfigurations(passwd,acl,env){
     devices.push({deviceId,username,blockIndex:index});
   }
   if(!seen.has(bridge)||!devices.length||devices.length>64)throw fail('受管理设备或桥接权限缺失，最多支持 64 个设备');
-  return {devices,blocks,passwordUsers};
+  return {devices,blocks,passwordUsers,prefix};
 }
 function revisionFor(passwd,acl){return crypto.createHash('sha256').update(passwd).update('\0').update(acl).digest('hex');}
-function publicSnapshot(config){return {devices:config.devices.map(({deviceId,username})=>({deviceId,username})),revision:config.revision};}
+function publicSnapshot(config){return {devices:config.devices.map(({deviceId,username})=>({deviceId,username})),revision:config.revision,canCreate:true};}
 async function execute(file,args,{timeout=20000}={}){
   return new Promise((resolve,reject)=>{
     const child=spawn(file,args,{stdio:['ignore','ignore','ignore'],shell:false,env:{PATH:'/usr/sbin:/usr/bin:/sbin:/bin',LANG:'C.UTF-8'}});
@@ -169,8 +175,40 @@ function createMqttDeviceManager(options={}){
       return hash;
     }finally{await fsp.unlink(temporary).catch(()=>{});}
   }
+  async function commit(before,texts){
+    const transaction={version:1,files:Object.fromEntries(FILES.map(name=>[name,{text:before.records[name].text,mode:process.platform==='win32'?(name==='access.txt'?0o600:0o640):before.records[name].stat.mode&0o777,gid:before.records[name].stat.gid}]))};
+    const handle=await fsp.open(file(JOURNAL),'wx',0o600);try{await handle.writeFile(JSON.stringify(transaction)+'\n','utf8');await handle.sync();}finally{await handle.close();}await syncDirectory(root);
+    try{
+      for(const name of FILES)await atomicWrite(file(name),texts[name],before.records[name].stat,config.checkOwnership);
+      await service();
+      // 只有配置重新读取成功后才提交，任何中断均会留下恢复记录供下次启动回滚。
+      const after=await snapshot();await fsp.unlink(file(JOURNAL));await syncDirectory(root);
+      return {ok:true,...publicSnapshot(after),requiresReconnect:true};
+    }catch(_){
+      try{await recover();}catch(_){throw fail('MQTT 配置修改失败且恢复尚未完成；请暂停设备重连并联系服务器管理员检查管理服务');}
+      throw fail('MQTT 配置修改失败，已恢复原账号；请重新读取后再试');
+    }
+  }
   return {
     list:()=>serialized(async()=>publicSnapshot(await snapshot())),
+    create:input=>{
+      try{validateCreateInput(input);}catch(error){return Promise.reject(error);}
+      return serialized(async()=>{
+        const before=await snapshot();
+        if(input.revision!==before.revision)throw fail('设备账号配置已变化，请重新读取后添加',409);
+        if(before.devices.length>=64)throw fail('最多支持 64 艘无人船，不能继续添加',409);
+        if(before.devices.some(device=>device.deviceId===input.deviceId)||before.passwordUsers.has(input.username))throw fail('设备 ID 或 MQTT 账号已存在，不能覆盖现有设备或桥接账号',409);
+        const hash=await passwordHash(input.username,input.password);
+        const check=await snapshot();if(check.revision!==before.revision||check.records['runtime.env'].text!==before.records['runtime.env'].text)throw fail('MQTT 配置在保存前发生变化，请重新读取',409);
+        const base=before.prefix+'/'+input.deviceId+'/';
+        const acl='user '+input.username+'\n'+['write '+base+'telemetry','write '+base+'status','read '+base+'parameter-command','write '+base+'parameter-response','write '+base+'parameter-capability'].map(rule=>'topic '+rule).join('\n')+'\n';
+        // 新船只获得自身主题权限，不修改桥接账号、已有船的账号或主题。
+        const texts={passwd:before.records.passwd.text.replace(/\n?$/,'\n')+input.username+':'+hash+'\n',
+          acl:before.records.acl.text.replace(/\n?$/,'\n')+'\n'+acl,
+          'access.txt':before.records['access.txt'].text.trimEnd()+'\n\nMQTT device added from administrator settings.\nDevice ID: '+input.deviceId+'\nDevice username: '+input.username+'\nDevice password: (not stored here; use the password set by the administrator)\nConfigure this boat with its own device ID and credentials before connecting.\n'};
+        return commit(before,texts);
+      });
+    },
     update:(deviceId,input)=>{
       if(typeof deviceId!=='string'||!USER.test(deviceId))return Promise.reject(fail('设备 ID 无效',400));
       try{validateInput(input);}catch(error){return Promise.reject(error);}
@@ -185,18 +223,7 @@ function createMqttDeviceManager(options={}){
         const nextPasswd=before.records.passwd.text.split(/\r?\n/).map(line=>line.startsWith(device.username+':')?input.username+':'+hash:line).join('\n');
         const blocks=before.blocks.slice();blocks[device.blockIndex]=blocks[device.blockIndex].replace(/^user[ \t]+[^\r\n]+/m,'user '+input.username);
         const texts={passwd:nextPasswd,acl:blocks.join(''),'access.txt':sanitizeAccess(before.records['access.txt'].text,deviceId,input.username)};
-        const transaction={version:1,files:Object.fromEntries(FILES.map(name=>[name,{text:before.records[name].text,mode:process.platform==='win32'?(name==='access.txt'?0o600:0o640):before.records[name].stat.mode&0o777,gid:before.records[name].stat.gid}]))};
-        const handle=await fsp.open(file(JOURNAL),'wx',0o600);try{await handle.writeFile(JSON.stringify(transaction)+'\n','utf8');await handle.sync();}finally{await handle.close();}await syncDirectory(root);
-        try{
-          for(const name of FILES)await atomicWrite(file(name),texts[name],before.records[name].stat,config.checkOwnership);
-          await service();
-          // 只有配置重新读取成功后才提交，任何中断均会留下恢复记录供下次启动回滚。
-          const after=await snapshot();await fsp.unlink(file(JOURNAL));await syncDirectory(root);
-          return {ok:true,...publicSnapshot(after),requiresReconnect:true};
-        }catch(_){
-          try{await recover();}catch(_){throw fail('MQTT 配置修改失败且恢复尚未完成；请暂停设备重连并联系服务器管理员检查管理服务');}
-          throw fail('MQTT 配置修改失败，已恢复原账号；请重新读取后再试');
-        }
+        return commit(before,texts);
       });
     }
   };
@@ -218,11 +245,11 @@ function createMqttDeviceWorker(options={}){
     try{
       if(req.url==='/devices'&&req.method==='GET')return json(200,await manager.list());
       const match=req.url?.match(/^\/devices\/([A-Za-z0-9_-]{1,64})$/);
-      if(match&&req.method==='PUT'){
+      if(match&&req.method==='PUT'||req.url==='/devices'&&req.method==='POST'){
         if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']||''))throw fail('MQTT 请求需要 JSON 格式',415);
         if(Number(req.headers['content-length'])>2048)throw fail('MQTT 请求过大',413);
         const input=await readBody(req);if(req.aborted||res.destroyed)throw fail('请求已中断，未提交修改',400);
-        return json(200,await manager.update(match[1],input));
+        return json(200,match?await manager.update(match[1],input):await manager.create(input));
       }
       json(req.url==='/devices'||match?405:404,{error:'MQTT 管理接口或方法不支持'});
     }catch(error){req.resume();if(!res.destroyed)json(error.status||503,{error:error.status?error.message:'MQTT 管理组件不可用'});}
@@ -245,4 +272,4 @@ if(require.main===module){
     server.on('error',()=>{console.error('MQTT administrator worker socket failed');process.exitCode=1;});
   })().catch(()=>{console.error('MQTT administrator worker startup failed');process.exitCode=1;});
 }
-module.exports={createMqttDeviceManager,createMqttDeviceWorker,validateInput,parseConfigurations,sanitizeAccess};
+module.exports={createMqttDeviceManager,createMqttDeviceWorker,validateInput,validateCreateInput,parseConfigurations,sanitizeAccess};

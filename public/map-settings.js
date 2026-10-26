@@ -73,7 +73,7 @@
       } else if (!this._canManage()) this._clear();
       this._renderAccess();
       // 设置窗口已打开时登录管理员，可立即读取；普通账户状态轮询不会覆盖输入。
-      if (this._canManage() && this.document.getElementById('settingsDialog')?.open && !this.loaded && !this.busy) this.open();
+      if (this._canManage() && this.document.getElementById('platformSettingsDialog')?.open && !this.loaded && !this.busy) this.open();
     }
 
     _clear() {
@@ -120,6 +120,11 @@
     }
 
     read() { return this._run('GET'); }
+
+    close() {
+      const needsRefresh=this.needsRefresh;
+      this._clear();this.needsRefresh=needsRefresh;this._renderAccess();
+    }
 
     save() {
       if (!this._canManage() || this.busy || !this.loaded) return Promise.resolve(false);

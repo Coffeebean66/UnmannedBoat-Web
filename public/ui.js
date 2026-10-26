@@ -23,6 +23,8 @@
     sun:'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM12 2v2M12 20v2M2 12h2M20 12h2M5 5l1 1M18 18l1 1M5 19l1-1M18 6l1-1',
     sliders:'M4 5h4M12 5h8M4 12h10M18 12h2M4 19h2M10 19h10M8 2v6M14 9v6M6 16v6',
     download:'M12 3v12M7 10l5 5 5-5M4 16v5h16v-5',
+    refresh:'M20 7v5h-5M4 17v-5h5M5.6 9a7 7 0 0 1 11.8-2L20 12M4 12l2.6 5a7 7 0 0 0 11.8-2',
+    maximize:'M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3',
     copy:'M8 8h13v13H8zM16 8V3H3v13h5',
     help:'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20ZM9 8a3 3 0 1 1 4 3c-1 0-1 1-1 3M12 17v.1'
   };
@@ -34,28 +36,39 @@
     button.innerHTML=icon(dark?'sun':'moon');
     button.setAttribute('aria-label',dark?'切换到浅色主题':'切换到深色主题');
     button.title=button.getAttribute('aria-label');button.setAttribute('aria-pressed',String(dark));
-    document.querySelector('meta[name=theme-color]').content=dark?'#061425':'#f4f7fa';
+    document.querySelector('meta[name=theme-color]').content=dark?'#19191e':'#fafbfc';
     try{localStorage.setItem('boat_web_theme_v1',theme);}catch(_){}
     window.dispatchEvent(new Event('boat-theme-change'));
   }
   decorate();
-  // 首次打开使用深海蓝；显式选择过浅色的用户仍恢复原来的偏好。
+  // 首次打开使用深色后台主题；显式选择过的主题继续恢复。
   let theme='dark';try{const saved=localStorage.getItem('boat_web_theme_v1');if(saved==='light'||saved==='dark')theme=saved;}catch(_){}
   setTheme(theme);
+  // 账号和工具按钮在窄屏会换行，让固定侧栏从实际顶部栏下方开始。
+  const header=document.querySelector('.topbar');
+  const headerSize=typeof ResizeObserver==='function'&&header?new ResizeObserver(()=>{
+    const height=Math.ceil(header.getBoundingClientRect().height);
+    if(height)document.documentElement.style.setProperty('--header-height',height+'px');
+  }):null;
+  headerSize?.observe(header);
+  window.addEventListener('pagehide',()=>headerSize?.disconnect(),{once:true});
   document.getElementById('themeToggle').onclick=()=>setTheme(document.documentElement.dataset.theme==='dark'?'light':'dark');
   document.getElementById('sidebarSettings').onclick=()=>document.getElementById('settingsDialog').showModal();
   const clock=document.getElementById('dashboardTime');
   function updateClock(){if(!document.hidden){const now=new Date();clock.dateTime=now.toISOString();clock.textContent=now.toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});}}
   updateClock();const clockTimer=setInterval(updateClock,1000);
   window.addEventListener('pagehide',()=>clearInterval(clockTimer),{once:true});
-  const dialog=document.getElementById('settingsDialog');
+  const dialogs=['settingsDialog','platformSettingsDialog'].map(id=>document.getElementById(id)).filter(Boolean);
   const syncModal=()=>{
-    document.documentElement.classList.toggle('modal-open',dialog.open);
+    const dialog=dialogs.find(item=>item.open);
+    document.documentElement.classList.toggle('modal-open',!!dialog);
     // dialog 位于浏览器顶层，提示也要进入该层，避免校验错误被遮罩挡住。
-    const toast=document.getElementById('toast'),parent=dialog.open?dialog:document.body;
+    const toast=document.getElementById('toast'),parent=dialog||document.body;
     if(toast.parentElement!==parent)parent.append(toast);
   };
-  new MutationObserver(syncModal).observe(dialog,{attributes:true,attributeFilter:['open']});
-  dialog.addEventListener('close',syncModal);
+  for(const dialog of dialogs){
+    new MutationObserver(syncModal).observe(dialog,{attributes:true,attributeFilter:['open']});
+    dialog.addEventListener('close',syncModal);
+  }
   window.BoatUI={icon,decorate,setTheme};
 })();

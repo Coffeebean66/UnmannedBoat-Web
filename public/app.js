@@ -10,6 +10,10 @@
   const mapSettings=new BoatMapSettingsPanel();
   const users=new BoatUserManagementPanel({toast});
   const mqttDevices=new BoatMqttDeviceSettingsPanel();
+  const fleet=new BoatFleetLink(cloud);
+  const fleetView=new BoatFleetView({onSelect:id=>selectBoat(id)});
+  const fleetMapView=new BoatFleetMapView({onSelect:id=>selectBoat(id)});
+  let parameterDeviceId='';
   const wgs=(latitude,longitude)=>Number.isFinite(latitude)&&Number.isFinite(longitude)&&Math.abs(latitude)<=90&&Math.abs(longitude)<=180?{latitude,longitude}:null;
   const track=new M.boatTrack.BoatTrack(wgs);
   const state={latest:{},history:[],chartMode:'speed',lastReceived:null,lastUpdateAt:null,forwardDelayMs:null,
@@ -178,7 +182,7 @@
   }
   function renderDeviceSummary(stats) {
     // MQTT 接入名就是遥测主题中的设备 ID；离线时仍显示当前选中的船。
-    const selectedId=cloud.authenticated?$('cloudDevice').value||(cloud.wanted?cloud.selectedId:''):'';
+    const selectedId=cloud.authenticated?cloud.selectedId||$('cloudDevice').value:'';
     const name=selectedId||'未选择无人船';
     const sameDevice=!!selectedId&&state.deviceId==='cloud:'+selectedId;
     const waiting=!link.connected&&(cloud.wanted||cloud.busy);
@@ -209,6 +213,10 @@
   }
   function render() {
     if(document.hidden)return;
+    const fleetPage=window.BoatWorkspace?.current==='fleet',fleetState=fleet.state();
+    const badgeOnline=fleetPage?fleetState.streamConnected&&fleetState.brokerConnected:link.connected;
+    set('connectionBadge',fleetPage?(badgeOnline?'船队在线':cloud.authenticated?'船队连接中':'未登录'):(link.connected?'已连接':'未连接'));
+    $('connectionBadge').className='badge '+(badgeOnline?'online':'offline');
     const now=performance.now(),x=state.latest;
     const b=M.boatDisplay.prepareBoatDisplay(x.boat?.frame,x.boat?.at||0,now,link.connected);
     for(const [id,key] of Object.entries({boatStatus:'status',boatActual:'actual',boatTarget:'target',boatRequested:'requested',boatDirection:'direction',boatMode:'modeText',boatHeading:'actualHeading',boatTargetHeading:'targetHeading',boatHeadingError:'headingError',boatCommon:'common',boatTurn:'turn'}))set(id,b[key]);
@@ -304,12 +312,16 @@
   });
   on('mapCenter',()=>{if(!map?.ready)toast('地图尚未就绪，请查看地图底部提示');else if(lastLocation)map.setView(lastLocation,16);else toast('尚无有效定位');});
   $('mapFollow').onchange=()=>{if($('mapFollow').checked&&lastLocation&&map?.ready)map.setView(lastLocation,16);};
-  const openSettings=()=>{window.BoatAuth?.assertManage();$('settingsDialog').showModal();users.open();mqttDevices.open();mapSettings.open();};
+  const openSettings=()=>{window.BoatAuth?.assertManage();$('settingsDialog').showModal();};
+  const openPlatformSettings=()=>{window.BoatAuth?.assertManage();$('platformSettingsDialog').showModal();users.open();mqttDevices.open();mapSettings.open();};
   on('settingsToggle',openSettings);
   on('settingsEntry',openSettings);
   on('sidebarSettings',openSettings);
   on('settingsClose',()=>$('settingsDialog').close());
-  $('settingsDialog').addEventListener('close',()=>{users.close();mqttDevices.close();});
+  on('platformSettingsToggle',openPlatformSettings);
+  on('sidebarPlatformSettings',openPlatformSettings);
+  on('platformSettingsClose',()=>$('platformSettingsDialog').close());
+  $('platformSettingsDialog').addEventListener('close',()=>{users.close();mqttDevices.close();mapSettings.close();});
   window.addEventListener('pagehide',()=>{users.destroy();mqttDevices.destroy();},{once:true});
   for(const [id,kind] of [['readParameters','read'],['writeParameters','write'],['saveFlash','flash']])on(id,()=>params.command(kind));
   on('fillTuning',()=>params.tune());
@@ -328,36 +340,77 @@
   on('yawZero',()=>viewer.yawZero());
   on('reloadModel',()=>viewer.load());
   function renderCloud(s=cloud.state()) {
-    const select=$('cloudDevice'),selected=select.value||s.selectedId;
+    const select=$('cloudDevice'),selected=s.selectedId||select.value;
     const signature=JSON.stringify(s.devices.map(d=>[d.id,!!d.online]));
     if(select.dataset.devices!==signature){
       select.replaceChildren();
       if(!s.devices.length)select.add(new Option(s.authenticated?'等待单片机上线':'请先登录云端',''));
       for(const device of s.devices)select.add(new Option(device.id+' · '+(device.online?'在线':'离线'),device.id));
-      if(s.devices.some(d=>d.id===selected))select.value=selected;
+      if(selected&&!s.devices.some(d=>d.id===selected))select.add(new Option(selected+' · 等待上线',selected));
+      if(selected)select.value=selected;
       select.dataset.devices=signature;
     }
-    select.disabled=!s.enabled||!s.authenticated||s.streaming;
+    // 船队连接与单船详情独立，详情接收中也可直接切船。
+    select.disabled=!s.enabled||!s.authenticated;
     $('cloudRefresh').disabled=!s.enabled||!s.authenticated;
     const accountMode=!!window.BoatAuth&&window.BoatAuth.enabled!==false;
     $('cloudLoginOpen').hidden=accountMode||!s.requiresLogin||s.authenticated||!s.enabled;
     $('cloudLogout').hidden=accountMode||!s.requiresLogin||!s.authenticated;
-    set('cloudStatus',s.message);
+    const statusMessage=s.authenticated&&!s.selectedId?(s.devices.length?'已发现 '+s.devices.length+' 艘无人船，船队总览持续更新；选择船舶查看详情':s.message):s.message;
+    set('cloudStatus',statusMessage);
     renderSourceAccess();
-    set('connectionText',s.message);updateConnectionButtons();
+    set('connectionText',statusMessage);updateConnectionButtons();
     renderDeviceSummary(link.parser.getStats());
+    const target=s.authenticated?s.selectedId:'';
+    window.dispatchEvent(new CustomEvent('boat-selection-change',{detail:{selectedId:target}}));
+    if(target!==parameterDeviceId){
+      parameterDeviceId=target;params.reset(false);
+      // 参数确认和表单草稿只属于当前船，切换时必须重新读取。
+      $('settingsDialog').close();
+    }
+    set('parameterDeviceName',target||'尚未选择无人船');
+    set('parameterDeviceNotice',target?'当前操作对象：'+target+'。参数和 Flash 命令只发给这艘船；切换后需要重新读取。':'请在船队总览选择一艘船，或使用顶部设备列表连接后再读取参数。');
+    fleetView.update(fleet.state());
   }
   cloud.addEventListener('cloudstate',({detail})=>renderCloud(detail));
   cloud.addEventListener('authrequired',()=>set('cloudStatus',window.BoatAuth?.enabled===true?'请使用平台账户重新登录':'请输入访问密码登录云端'));
   function renderSourceAccess(){
     const guest=window.BoatAuth?.user?.role==='guest';
+    if(!cloud.selectedId){
+      set('sourceHint',guest?'船队总览同时监测所有船舶；选择一艘查看详情。访客可监测，调参需要管理员。':'船队总览同时接收所有无人船；选择船卡或顶部设备列表查看单船详情，平台设置无需连接船舶。');
+      set('sourceDescription','MQTT 云端 · 尚未选择详情船舶');
+      set('cloudReadOnlyNotice','请先选择并连接需要调参的无人船，再读取当前船的参数。平台设置与船端调参分别管理。');
+      return;
+    }
     set('sourceHint',guest?'访客账户仅可查看遥测、地图和轨迹；设备调参需要管理员账户。':cloud.readOnly?cloud.parameterReadOnlyReason:'云端调参已就绪：管理员可读取、写入参数，调试完成后手动保存到 Flash。');
     set('sourceDescription',cloud.readOnly?'MQTT 云端 · 只读监测':'MQTT 云端 · 可远程调参');
     set('cloudReadOnlyNotice',cloud.readOnly?cloud.parameterReadOnlyReason+'；已保留的本地草稿仍可保存预设或导出。':'当前通过云端操作设备参数，成功提示以 STM32 响应为准。超时或断连后，写入可能已经生效，请先读取确认再重试。Flash 保存仍需满足停机保护。');
   }
   link.addEventListener('permissionchange',({detail})=>{detail.capabilityOnly?params.updateButtons():params.reset(true);updateConnectionButtons();renderCloud();renderSourceAccess();render();});
-  $('cloudDevice').onchange=()=>{link.disconnect();track.clear();state.deviceId=null;state.lastUpdateAt=null;renderCloud();render();};
-  on('cloudRefresh',()=>cloud.refreshDevices());
+  async function selectBoat(id,showDetails=true) {
+    if(!/^[A-Za-z0-9_-]{1,64}$/.test(id||''))return;
+    if(cloud.selectedId===id&&(cloud.wanted||cloud.connected)){
+      if(showDetails)window.BoatWorkspace?.navigate('overview');return;
+    }
+    // 先撤销旧船正在等待的命令，再建立新船的独立解析器。
+    link.disconnect('正在切换无人船');params.reset(false);track.clear();state.deviceId=null;state.lastUpdateAt=null;
+    if(showDetails)window.BoatWorkspace?.navigate('overview');
+    try{await cloud.connect(id);}catch(error){toast(error.message);}
+    renderCloud();render();
+  }
+  $('cloudDevice').onchange=()=>selectBoat($('cloudDevice').value,false);
+  fleet.addEventListener('fleetstate',({detail})=>{
+    fleetView.update(detail);
+    fleetMapView.update(detail);
+    // 总览已通过同一认证通道发现新船，设备下拉框同步而无需等待10秒轮询。
+    if(detail.streamConnected&&cloud.authenticated){
+      cloud.devices=detail.devices.map(device=>({id:device.id,online:device.online,parametersReady:device.parametersReady}));
+      if(cloud.devices.some(device=>device.id===cloud.selectedId&&device.parametersReady))cloud.parameterCapableId=cloud.selectedId;
+      renderCloud();
+    }
+  });
+  on('cloudRefresh',async()=>{await cloud.refreshDevices();await fleet.refresh();});
+  on('fleetRefresh',()=>fleet.refresh());
   on('cloudLoginOpen',()=>{$('cloudLoginError').textContent='';$('cloudPassword').value='';$('cloudLoginDialog').showModal();$('cloudPassword').focus();});
   on('cloudLoginClose',()=>$('cloudLoginDialog').close());
   $('cloudLoginDialog').addEventListener('close',()=>{$('cloudPassword').value='';});
@@ -391,10 +444,10 @@
     if(document.hidden)cloud.suspend();else cloud.resume();
     if(!document.hidden)render();
   });
-  window.addEventListener('pagehide',()=>{cancelAnimationFrame(viewResizeFrame);clearInterval(timer);clearInterval(cloudTimer);viewer.stop();mapSettings.destroy();link.disconnect();});
+  window.addEventListener('pagehide',()=>{cancelAnimationFrame(viewResizeFrame);clearInterval(timer);clearInterval(cloudTimer);viewer.stop();mapSettings.destroy();fleetMapView.destroy();fleet.destroy();fleetView.destroy();link.disconnect();});
   window.addEventListener('pageshow',event=>{if(event.persisted)location.reload();});
   window.addEventListener('resize',()=>render());
-  window.addEventListener('boat-theme-change',()=>{readChartPalette();map?.setTheme(document.documentElement.dataset.theme);render();});
+  window.addEventListener('boat-theme-change',()=>{readChartPalette();map?.setTheme(document.documentElement.dataset.theme);fleetMapView.setTheme(document.documentElement.dataset.theme);render();});
   // 提供浏览器控制台诊断入口，界面不显示原始字节流。
-  window.boatMonitor={link,params,viewer,horizon,track,map,mapVectors,mapSettings,mqttDevices};
+  window.boatMonitor={link,params,viewer,horizon,track,map,mapVectors,mapSettings,mqttDevices,fleet,fleetView,fleetMapView,selectBoat};
 })();

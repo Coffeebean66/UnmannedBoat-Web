@@ -149,3 +149,25 @@ test('401清除登录，403撤销本页管理权限，均清空账号草稿和�
     if (status === 401) assert.equal(h.auth.expirations, 1); h.panel.destroy();
   }
 });
+
+test('新版管理组件允许新增船，旧版明确提示升级并保持原修改账号能力',async()=>{
+  const h=setup();await h.panel.open();assert.equal(h.panel.canCreate,false);assert.equal(h.panel.nodes.mqttDeviceAdd.disabled,true);assert.equal(h.panel.beginCreate(),false);assert.match(h.node('mqttDeviceStatus').textContent,/install-mqtt-device-admin/);
+  assert.equal(h.panel.edit('boat-01'),true);assert.equal(h.node('mqttDeviceId').readOnly,true);h.panel.destroy();
+});
+
+test('新增无人船提交独立ID与必填密码，明确确认重连并在完成后清除输入',async()=>{
+  const h=setup();h.next(async(url,options)=>options.method==='GET'?response(200,{enabled:true,devices:devices(),revision,canCreate:true}):response(200,{ok:true,requiresReconnect:true,devices:[...devices(),{deviceId:'boat-03',username:'vessel-three'}],revision:nextRevision,canCreate:true}));
+  await h.panel.open();assert.equal(h.panel.nodes.mqttDeviceAdd.disabled,false);assert.equal(h.panel.beginCreate(),true);assert.equal(h.node('mqttDeviceId').readOnly,false);assert.equal(h.node('mqttDevicePassword').required,true);
+  h.node('mqttDeviceId').value='boat-03';h.fill({username:'vessel-three'});assert.equal(await h.panel.save(),true);
+  assert.deepEqual(JSON.parse(h.calls[1].body),{username:'vessel-three',password:'secret_123',deviceId:'boat-03',revision});assert.equal(h.calls[1].method,'POST');assert.equal(h.calls[1].url,'/api/mqtt/devices');
+  assert.match(h.confirmations[0],/boat-03[\s\S]*所有设备[\s\S]*短暂重连/);assert.equal(h.confirmations[0].includes('secret_123'),false);
+  assert.equal(h.node('mqttDevicePassword').value,'');assert.equal(h.node('mqttDeviceId').value,'');assert.equal(h.node('mqttDeviceForm').hidden,true);assert.match(h.node('mqttDeviceStatus').textContent,/BOAT_MQTT_DEVICE_ID/);h.panel.destroy();
+});
+
+test('新增船拒绝缺密码、重复ID或账号，不发送写请求，退出清理新增草稿',async()=>{
+  const h=setup();h.next(async()=>response(200,{enabled:true,devices:devices(),revision,canCreate:true}));await h.panel.open();h.panel.beginCreate();
+  h.node('mqttDeviceId').value='boat-03';h.fill({username:'vessel-three',password:''});assert.equal(await h.panel.save(),false);
+  h.node('mqttDeviceId').value='boat-01';h.fill({username:'vessel-three'});assert.equal(await h.panel.save(),false);
+  h.node('mqttDeviceId').value='boat-03';h.fill({username:'vessel-two'});assert.equal(await h.panel.save(),false);assert.equal(h.calls.length,1);assert.equal(h.confirmations.length,0);
+  h.fill();h.auth.change('guest');assert.equal(h.node('mqttDevicePassword').value,'');assert.equal(h.node('mqttDeviceId').value,'');assert.equal(h.panel.creating,false);assert.equal(h.panel.nodes.mqttDeviceAdd.disabled,true);h.panel.destroy();
+});

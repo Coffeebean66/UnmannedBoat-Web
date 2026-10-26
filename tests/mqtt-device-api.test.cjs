@@ -75,7 +75,7 @@ test('MQTT management rejects cross-site access, missing write Origin, disabled 
     assert.equal((await f.call('/api/mqtt/devices', { cookie, ...options })).status, 403);
   }
   for (const origin of [null, 'https://evil.test']) assert.equal((await f.call('/api/mqtt/devices/boat-01', { cookie, origin, method: 'PATCH', body: input() })).status, 403);
-  assert.equal((await f.call('/api/mqtt/devices', { cookie, method: 'POST', body: input() })).status, 405);
+  assert.equal((await f.call('/api/mqtt/devices', { cookie, method: 'DELETE', body: input() })).status, 405);
   assert.equal((await f.call('/api/mqtt/devices/boat-01', { cookie })).status, 405);
   assert.equal((await f.call('/api/mqtt/devices/boat+01', { cookie, method: 'PATCH', body: input() })).status, 404);
   assert.equal(f.calls.length, 0);
@@ -159,7 +159,7 @@ test('socket client uses bounded fixed HTTP paths, masks helper errors, and neve
   await assert.rejects(missing('GET', '/devices'), error => error.unavailable === true && !error.message.includes(socketPath));
 });
 
-test('administrator HTTP API traverses the actual local socket worker and persists a rename without changing topic ID or other hashes', async t => {
+test('administrator HTTP API traverses the actual local socket worker, persists a rename and provisions an isolated new boat', async t => {
   const { createMqttDeviceWorker } = require('../maintenance/mqtt-device-worker.cjs');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'boat-mqtt-admin-chain-')), file = name => path.join(directory, name);
   const socketPath = process.platform === 'win32' ? '\\\\.\\pipe\\boat-mqtt-chain-' + crypto.randomUUID() : file('worker.sock');
@@ -172,7 +172,8 @@ test('administrator HTTP API traverses the actual local socket worker and persis
   fs.writeFileSync(file('access.txt'), 'Device password: obsolete-test-password\n', { mode: 0o600 });
   fs.writeFileSync(file('mosquitto.conf'), 'allow_anonymous false\npassword_file ' + file('passwd') + '\nacl_file ' + file('acl') + '\n');
   let restarts = 0;
-  const worker = createMqttDeviceWorker({ configDir: directory, brokerUnit: file('broker.service'), checkOwnership: false, service: async () => { restarts++; } });
+  const worker = createMqttDeviceWorker({ configDir: directory, brokerUnit: file('broker.service'), checkOwnership: false, service: async () => { restarts++; },
+    execute: async (executable,args) => { assert.equal(args[0],'-U'); const raw=fs.readFileSync(args[1],'utf8'),split=raw.indexOf(':'),username=raw.slice(0,split); fs.writeFileSync(args[1],username+':$7$101$isolated-test$'+crypto.createHash('sha512').update(raw.slice(split+1)).digest('base64')+'\n'); } });
   await new Promise(resolve => worker.listen(socketPath, resolve));
   const f = await fixture(t, { client: createMqttDeviceClient({ socketPath }) }), cookie = await f.login();
   t.after(async () => { worker.closeAllConnections(); await new Promise(resolve => worker.close(resolve)); fs.rmSync(directory, { recursive: true, force: true }); });
@@ -185,4 +186,41 @@ test('administrator HTTP API traverses the actual local socket worker and persis
   assert.equal((await f.call('/api/mqtt/devices/boat-01', { cookie, method: 'PATCH', body: { username: 'second-account', revision: before.data.revision } })).status, 409);
   const after = await f.call('/api/mqtt/devices', { cookie }); assert.equal(after.data.revision, changed.data.revision);
   assert.doesNotMatch(after.raw, /\$7\$|password|obsolete/); assert.equal(restarts, 1);
+  assert.equal(after.data.canCreate,true);
+  const created=await f.call('/api/mqtt/devices',{cookie,method:'POST',body:{deviceId:'boat-02',username:'vessel-two',password:'new-boat-test-only',revision:after.data.revision}});
+  assert.equal(created.status,200,created.raw);assert.deepEqual(created.data.devices,[{deviceId:'boat-01',username:'vessel-account'},{deviceId:'boat-02',username:'vessel-two'}]);assert.equal(restarts,2);
+  const persisted=fs.readFileSync(file('passwd'),'utf8');assert.ok(persisted.startsWith('vessel-account:'+deviceHash+'\nboat-web-bridge:'+bridgeHash+'\n'));assert.doesNotMatch(persisted,/new-boat-test-only/);
+  assert.match(fs.readFileSync(file('acl'),'utf8'),/topic write boats\/boat-02\/telemetry/);assert.doesNotMatch(created.raw,/password|new-boat-test-only|\$7\$/);
+});
+
+test('provisioning a new boat requires administrator, same origin and valid mandatory fields before reaching the helper',async t=>{
+  const f=await fixture(t),cookie=await f.login(),guest=await f.login('guest'),body={...input(),deviceId:'boat-02'};
+  for(const [current,status]of [[undefined,401],[guest,403]])assert.equal((await f.call('/api/mqtt/devices',{cookie:current,method:'POST',body})).status,status);
+  for(const origin of [null,'https://evil.test'])assert.equal((await f.call('/api/mqtt/devices',{cookie,origin,method:'POST',body})).status,403);
+  for(const extra of [{deviceId:'boats/+'},{deviceId:''},{deviceId:3},{password:''},{deviceId:'boat-02',unexpected:true}])assert.equal((await f.call('/api/mqtt/devices',{cookie,method:'POST',body:{...body,...extra}})).status,400);
+  const missing={...body};delete missing.password;assert.equal((await f.call('/api/mqtt/devices',{cookie,method:'POST',body:missing})).status,400);assert.equal(f.calls.length,0);
+});
+
+test('provisioning passes a fixed POST request only after confirming helper capability and returns no secrets',async t=>{
+  const calls=[],records=[{deviceId:'boat-01',username:'boat-01'}];
+  const f=await fixture(t,{client:async(method,route,body)=>{
+    calls.push({method,route,body:body&&{...body}});
+    if(method==='POST')records.push({deviceId:body.deviceId,username:body.username,password:'must-not-leak'});
+    return {devices:records,revision:method==='POST'?nextRevision:revision,canCreate:true,...(method==='POST'?{ok:true,requiresReconnect:true}:{})};
+  }}),cookie=await f.login(),body={...input(),deviceId:'boat-02'};
+  const result=await f.call('/api/mqtt/devices',{cookie,method:'POST',body});assert.equal(result.status,200,result.raw);assert.equal(result.data.devices.length,2);assert.equal(result.data.canCreate,true);
+  assert.deepEqual(calls,[{method:'GET',route:'/devices',body:undefined},{method:'POST',route:'/devices',body}]);assert.doesNotMatch(result.raw,/password|NewPassword|must-not-leak/);
+});
+
+test('old helper clearly requires one-time component upgrade before provisioning and cannot be silently bypassed',async t=>{
+  const f=await fixture(t),cookie=await f.login();
+  const result=await f.call('/api/mqtt/devices',{cookie,method:'POST',body:{...input(),deviceId:'boat-02'}});
+  assert.equal(result.status,503);assert.match(result.data.error,/组件版本较旧.*install-mqtt-device-admin/);assert.equal(f.calls.length,1);assert.equal(f.calls[0].method,'GET');
+});
+
+test('account revoked while checking helper capability cannot dispatch a new device creation',async t=>{
+  let release,started;const began=new Promise(resolve=>started=resolve),calls=[];
+  const f=await fixture(t,{client:async(method,route)=>{calls.push({method,route});started();await new Promise(resolve=>release=resolve);return {devices:[{deviceId:'boat-01',username:'boat-01'}],revision,canCreate:true};}}),cookie=await f.login();
+  const pending=f.call('/api/mqtt/devices',{cookie,method:'POST',body:{...input(),deviceId:'boat-02'}});await began;
+  await f.call('/api/auth/session',{cookie,method:'DELETE'});release();const result=await pending;assert.equal(result.status,401);assert.equal(calls.length,1);
 });

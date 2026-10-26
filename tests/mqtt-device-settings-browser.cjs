@@ -12,13 +12,13 @@ async function main() {
   const server = createFixtureServer({ accountOptions: { storeFile: path.join(run, 'accounts.json') }, mapOptions: { file: path.join(run, 'map-settings.json') },
     mqttAdminOptions: { client: async (method, route, input) => {
       if (mode === 'unavailable') throw Object.assign(Error('component missing'), { status: 503, unavailable: true });
-      if (method === 'GET') return { devices, revision };
+      if (method === 'GET') return { devices, revision, canCreate: true };
       writes++;
       if (mode === 'conflict') throw Object.assign(Error('conflict'), { status: 409 });
-      assert.equal(method, 'PUT'); assert.ok(route.startsWith('/devices/')); assert.equal(input.revision, revision);
+      assert.ok(['PUT','POST'].includes(method)); assert.ok(method === 'POST' ? route === '/devices' : route.startsWith('/devices/')); assert.equal(input.revision, revision);
       lastInput = { ...input }; revision = (revision[0] === 'a' ? 'b' : 'c').repeat(64);
-      devices = devices.map(device => device.deviceId === route.split('/').at(-1) ? { ...device, username: input.username } : device);
-      return { ok: true, requiresReconnect: true, devices, revision };
+      devices = method === 'POST' ? [...devices, {deviceId: input.deviceId, username: input.username}] : devices.map(device => device.deviceId === route.split('/').at(-1) ? { ...device, username: input.username } : device);
+      return { ok: true, requiresReconnect: true, devices, revision, canCreate: true };
     } }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -73,10 +73,10 @@ async function main() {
       await evaluate('BoatUI.setTheme(' + JSON.stringify(theme) + ');document.getElementById("mqttDeviceSettings").scrollIntoView({block:"start"})');
       await wait(200);
       assert.equal(await evaluate('document.documentElement.scrollWidth>innerWidth'), false, width + 'px page must fit');
-      assert.equal(await evaluate('document.getElementById("settingsDialog").scrollWidth>document.getElementById("settingsDialog").clientWidth+1'), false, width + 'px dialog must fit');
+      assert.equal(await evaluate('document.getElementById("platformSettingsDialog").scrollWidth>document.getElementById("platformSettingsDialog").clientWidth+1'), false, width + 'px dialog must fit');
       assert.equal(await evaluate('document.getElementById("mqttDeviceSettings").scrollWidth>document.getElementById("mqttDeviceSettings").clientWidth+1'), false, width + 'px device panel must fit');
       if (theme === 'light') {
-        await until('getComputedStyle(document.getElementById("mqttDeviceRead")).color==="rgb(22, 36, 54)"');
+        await until('getComputedStyle(document.getElementById("mqttDeviceRead")).color==="rgb(50, 50, 81)"');
         assert.equal(await evaluate('document.documentElement.dataset.theme'), 'light');
       }
       const result = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
@@ -89,7 +89,7 @@ async function main() {
     await send('Page.navigate', { url }); await until('!!window.boatMonitor&&BoatAuth.ready');
     await evaluate('ensureTestLogin()'); await evaluate('connectTestBoat()');
     const connectionCount = await evaluate('window.testConnections');
-    await evaluate('document.getElementById("settingsToggle").click()');
+    await evaluate('document.getElementById("platformSettingsToggle").click()');
     await until('document.getElementById("mqttDeviceList").children.length===2&&!boatMonitor.mqttDevices.busy');
     assert.equal(await evaluate('document.getElementById("mqttDeviceSettings").hidden'), false);
     assert.equal(await evaluate('boatMonitor.link.connected'), true); assert.equal(await evaluate('window.testConnections'), connectionCount);
@@ -107,31 +107,51 @@ async function main() {
     await edit('offline-vessel'); await fill('offline-account'); await save(); await saved();
     assert.equal(writes, 2); assert.equal(Object.hasOwn(lastInput, 'password'), false);
     assert.equal(await evaluate('boatMonitor.mqttDevices.devices[1].username'), 'offline-account');
+    await evaluate('document.getElementById("mqttDeviceAdd").click()');
+    await until('boatMonitor.mqttDevices.creating&&!document.getElementById("mqttDeviceId").readOnly');
+    await evaluate('document.getElementById("mqttDeviceId").value="boat-03"');
+    await fill('vessel-three', 'browser-new-boat-secret');
+    await layout(1440, 'dark', 'mqtt-device-create-desktop'); await layout(320, 'light', 'mqtt-device-create-mobile-320-light');
+    await save(); await saved();
+    assert.equal(writes, 3); assert.equal(lastInput.deviceId, 'boat-03'); assert.equal(lastInput.username, 'vessel-three');
+    assert.equal(devices.length, 3); assert.equal(await evaluate('document.getElementById("mqttDevicePassword").value'), '');
+    assert.ok(confirmations.at(-1).includes('boat-03') && !confirmations.at(-1).includes('browser-new-boat-secret'));
+    await evaluate('document.getElementById("mqttDeviceAdd").click();document.getElementById("mqttDeviceId").value="boat-03"');
+    await fill('duplicate-boat', 'browser-duplicate-secret'); await save();
+    await until('document.getElementById("mqttDeviceStatus").textContent.includes("已存在")'); assert.equal(writes, 3);
+    await evaluate('document.getElementById("mqttDeviceId").value="boat-04"');
+    await fill('vessel-four', 'browser-new-conflict-secret'); mode = 'conflict'; await save();
+    await until('!boatMonitor.mqttDevices.busy&&!boatMonitor.mqttDevices.loaded'); assert.equal(writes, 4);
+    assert.equal(devices.length, 3); assert.equal(await evaluate('document.getElementById("mqttDevicePassword").value'), '');
+    mode = 'ready'; await evaluate('document.getElementById("mqttDeviceRead").click()');
+    await until('boatMonitor.mqttDevices.loaded&&!boatMonitor.mqttDevices.busy');
     await edit('boat-01');
     await layout(1440, 'dark', 'mqtt-device-desktop'); await layout(1440, 'light', 'mqtt-device-desktop-light');
     await layout(375, 'dark', 'mqtt-device-mobile-375'); await layout(320, 'light', 'mqtt-device-mobile-320-light');
     await layout(320, 'dark', 'mqtt-device-mobile-320');
     await fill('conflicting-account', 'browser-conflict-secret'); mode = 'conflict'; await save();
     await until('document.getElementById("mqttDeviceStatus").dataset.tone==="error"&&!boatMonitor.mqttDevices.busy');
-    assert.equal(writes, 3); assert.equal(await evaluate('boatMonitor.mqttDevices.loaded'), false);
+    assert.equal(writes, 5); assert.equal(await evaluate('boatMonitor.mqttDevices.loaded'), false);
     assert.equal(await evaluate('document.getElementById("mqttDeviceSave").disabled'), true);
     mode = 'unavailable'; await evaluate('document.getElementById("mqttDeviceRead").click()');
     await until('document.getElementById("mqttDeviceStatus").textContent.includes("启用一次")&&!boatMonitor.mqttDevices.busy');
     assert.equal(await evaluate('document.getElementById("mqttDeviceList").hidden'), true);
     mode = 'ready'; await evaluate('document.getElementById("mqttDeviceRead").click()');
-    await until('boatMonitor.mqttDevices.loaded&&!boatMonitor.mqttDevices.busy'); await edit('boat-01'); await fill('draft-account', 'browser-draft-secret');
-    await evaluate('document.getElementById("settingsClose").click()');
+    await until('boatMonitor.mqttDevices.loaded&&!boatMonitor.mqttDevices.busy');
+    await evaluate('document.getElementById("mqttDeviceAdd").click();document.getElementById("mqttDeviceId").value="boat-04"'); await fill('draft-account', 'browser-draft-secret');
+    await evaluate('document.getElementById("platformSettingsClose").click()');
     await until('!boatMonitor.mqttDevices.isOpen');
     assert.equal(await evaluate('document.getElementById("mqttDevicePassword").value'), '');
+    assert.equal(await evaluate('document.getElementById("mqttDeviceId").value'), '');
     assert.equal(await evaluate('boatMonitor.mqttDevices.loaded'), false);
     await evaluate('document.getElementById("accountLogout").click()'); await until('!BoatAuth.user&&!BoatAuth.busy');
     await evaluate('document.getElementById("accountLoginOpen").click();document.getElementById("accountUsername").value="observer";document.getElementById("accountPassword").value="browser-guest-test-only";document.getElementById("accountLoginForm").requestSubmit()');
     await until('BoatAuth.user?.role==="guest"&&!BoatAuth.busy');
     assert.equal(await evaluate('document.getElementById("mqttDeviceSettings").hidden'), true);
     assert.equal(await evaluate('fetch("/api/mqtt/devices").then(response=>response.status)'), 403);
-    assert.equal(await evaluate('[...Object.values(localStorage),...Object.values(sessionStorage)].some(value=>/browser-device-secret|browser-draft-secret|browser-conflict-secret/.test(String(value)))'), false);
+    assert.equal(await evaluate('[...Object.values(localStorage),...Object.values(sessionStorage)].some(value=>/browser-device-secret|browser-draft-secret|browser-conflict-secret|browser-new-boat-secret|browser-new-conflict-secret|browser-duplicate-secret/.test(String(value)))'), false);
     assert.deepEqual(errors, []);
-    console.log('Chrome MQTT device settings passed: real local auth/API, device and offline-device edits, password confirmation, native confirmation cancel/accept, no-op-free single saves, version conflict, unavailable component, guest403, cleanup and 1440/375/320px dark/light layouts.');
+    console.log('Chrome MQTT device settings passed: split platform settings, real local auth/API, new-boat provisioning and duplicate/conflict checks, device and offline-device edits, password confirmation, native confirmation cancel/accept, unavailable component, guest403, draft cleanup and 1440/375/320px dark/light layouts.');
   } finally {
     socket?.close(); browser.kill(); server.closeAllConnections?.(); await new Promise(resolve => server.close(resolve));
     if (path.dirname(run) === output && path.basename(run).startsWith('mqtt-device-settings-state-')) fs.rmSync(run, { recursive: true, force: true });
