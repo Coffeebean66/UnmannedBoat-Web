@@ -154,14 +154,25 @@ function readBody(req, timeoutMs) {
 }
 
 function createMqttDeviceApi({ accounts, client = createMqttDeviceClient(), bodyTimeoutMs = 5000 } = {}) {
-  let closed = false, writing = false;
+  let closed = false, writing = false, reading = null;
+  // 设备/视频两个面板会同时读取。共享本次在途快照，避免 root 组件将第二次读取误判为并发配置操作。
+  // 完成后立即丢弃快照；重新读取始终访问组件，每个 HTTP 请求仍单独核验自己的管理员会话。
+  const readSnapshot = () => {
+    if (!reading) {
+      const pending = Promise.resolve().then(() => client('GET', '/devices')).then(snapshot);
+      reading = pending;
+      const clear = () => { if (reading === pending) reading = null; };
+      pending.then(clear, clear);
+    }
+    return reading;
+  };
   const active = session => !closed && accounts.isActive(session) && session.value.role === 'admin';
   const json = (res, status, value) => {
     if (res.destroyed || res.writableEnded) return;
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify(value));
   };
-  return { close() { closed = true; }, async handle(req, res, url) {
+  return { close() { closed = true; reading = null; }, async handle(req, res, url) {
     if (url.pathname !== '/api/mqtt/devices' && !url.pathname.startsWith('/api/mqtt/devices/')) return false;
     if (!accounts?.enabled || closed) { json(res, 503, { error: '请先启用平台账户登录，再由管理员管理 MQTT 设备账号' }); return true; }
     const session = accounts.sessionFor(req);
@@ -180,7 +191,7 @@ function createMqttDeviceApi({ accounts, client = createMqttDeviceClient(), body
     if (!browserRead && !accounts.sameOrigin(req)) { json(res, 403, { error: '请从本站发起设备账号操作' }); return true; }
     if (collection && req.method === 'GET') {
       try {
-        const data = snapshot(await client('GET', '/devices'));
+        const data = await readSnapshot();
         if (active(session)) json(res, 200, { enabled: true, ...data, canManageVideo: data.canManageVideo === true, videos: Array.isArray(data.videos) ? data.videos : [] });
         else json(res, 401, { error: '账户会话已失效，请重新登录' });
       } catch (error) {
