@@ -15,14 +15,14 @@ function unfoldAngle(value, previousValue, previousPlot) {
 }
 
 // 一条历史同时记录船速和航向，切换图表只改变展示，不丢弃另一种数据。
-function createBoatChartSample(frame, receivedAt, timestamp, connected, previous) {
+function createBoatChartSample(frame, receivedAt, timestamp, connected, previous, maxGapMs = 1000) {
   const b = frame && frame.boat;
   const view = prepareBoatDisplay(frame, receivedAt, timestamp, connected);
   const headingTarget = view.headingMode && validHeading(b.targetHeading) ? b.targetHeading : null;
   const headingActual = view.headingMode && view.headingFresh && validHeading(b.actualHeading) ?
     b.actualHeading : null;
-  // 间隔达到 1 秒或时间倒退时重建展开基准，避免跨越失联区间猜测转动方向。
-  const adjacent = previous && timestamp >= previous.timestamp && timestamp - previous.timestamp < 1000;
+  // 实时流间隔达到 1 秒时重建展开基准；历史回放按服务器采样周期设置连续阈值。
+  const adjacent = previous && timestamp >= previous.timestamp && timestamp - previous.timestamp < maxGapMs;
   const headingTargetPlot = unfoldAngle(headingTarget,
     adjacent ? previous.headingTarget : null, adjacent ? previous.headingTargetPlot : null);
   let headingActualPlot = unfoldAngle(headingActual,
@@ -33,7 +33,7 @@ function createBoatChartSample(frame, receivedAt, timestamp, connected, previous
     headingActualPlot = headingTargetPlot + shortestAngleError(headingActual, headingTarget);
   }
   return {
-    timestamp,
+    timestamp, gapMs: maxGapMs,
     target: view.current && b.speedLoop ? Math.abs(b.targetMps) : null,
     actual: view.fresh && b.speedLoop ? b.actualMps : null,
     headingTarget, headingActual, headingTargetPlot, headingActualPlot
@@ -57,7 +57,7 @@ function prepareBoatChart(history, mode) {
   const heading = mode === 'heading';
   const summary = prepareBoatChartSummary(history[history.length - 1], mode);
   const samples = history.map(sample => ({
-    timestamp: sample.timestamp,
+    timestamp: sample.timestamp, gapMs: sample.gapMs || 1000,
     target: sample[heading ? 'headingTargetPlot' : 'target'],
     actual: sample[heading ? 'headingActualPlot' : 'actual']
   }));

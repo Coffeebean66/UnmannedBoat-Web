@@ -19,8 +19,10 @@
   const wgs=(latitude,longitude)=>Number.isFinite(latitude)&&Number.isFinite(longitude)&&Math.abs(latitude)<=90&&Math.abs(longitude)<=180?{latitude,longitude}:null;
   const track=new M.boatTrack.BoatTrack(wgs);
   const state={latest:{},history:[],chartMode:'speed',lastReceived:null,lastUpdateAt:null,forwardDelayMs:null,
-    uplinkDelayMs:null,uplinkRttMs:null,uplinkUncertaintyMs:null,deviceId:null};
+    uplinkDelayMs:null,uplinkRttMs:null,uplinkUncertaintyMs:null,deviceId:null,
+    historical:null,historyEnd:null,historyMessage:'选择无人船后自动载入记录',trackDisplayEnabled:true,liveTrackPoints:[]};
   let map,marker,mapVectors,trackRevision=-1,lastLocation,hadFix=false,viewResizeFrame;
+  let autoSelectInFlight=null,autoSelectionSuppressed=false,historyRequest=0,historyController=null;
   let chartPalette;
   const set=(id,value)=>{const text=value==null?'--':String(value);if($(id).textContent!==text)$(id).textContent=text;};
   function readChartPalette() {
@@ -81,7 +83,7 @@
   function renderChartSummary(now) {
     const b=state.latest.boat,heading=state.chartMode==='heading';
     const live=M.boatChart.createBoatChartSample(b?.frame,b?.at||0,now,link.connected);
-    const summary=M.boatChart.prepareBoatChartSummary(live,state.chartMode);
+    const summary=M.boatChart.prepareBoatChartSummary(link.connected?live:state.history.at(-1),state.chartMode);
     const unit=heading?'°':' m/s';
     set('chartTarget',summary.target==='--'?'--':summary.target+unit);
     set('chartActual',summary.actual==='--'?'--':summary.actual+unit);
@@ -97,6 +99,7 @@
     if(canvas.width!==pw)canvas.width=pw;if(canvas.height!==ph)canvas.height=ph;
     ctx.setTransform(ratio,0,0,ratio,0,0);ctx.fillStyle=chartPalette.background;ctx.fillRect(0,0,width,height);
     const chart=M.boatChart.prepareBoatChart(state.history,state.chartMode),heading=state.chartMode==='heading';
+    const reference=link.connected?now:Number.isFinite(state.historyEnd)?state.historyEnd:now;
     const left=48,top=26,right=14,bottom=30,w=Math.max(1,width-left-right),h=height-top-bottom,span=chart.maxValue-chart.minValue||1;
     ctx.font='11px sans-serif';ctx.lineWidth=1;ctx.textAlign='right';
     for(let i=0;i<=4;i++) {
@@ -110,9 +113,9 @@
       ctx.strokeStyle=color;ctx.lineWidth=2;ctx.beginPath();let previous=null;
       for(const point of chart.samples) {
         if(!Number.isFinite(point[key])){previous=null;continue;}
-        const x=left+(point.timestamp-(now-12000))/12000*w,y=top+h-(point[key]-chart.minValue)/span*h;
+        const x=left+(point.timestamp-(reference-12000))/12000*w,y=top+h-(point[key]-chart.minValue)/span*h;
         if(x<left){previous=null;continue;}
-        if(!previous||point.timestamp-previous.timestamp>=1000)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+        if(!previous||point.timestamp<previous.timestamp||point.timestamp-previous.timestamp>=Math.min(previous.gapMs,point.gapMs))ctx.moveTo(x,y);else ctx.lineTo(x,y);
         previous=point;
       }ctx.stroke();
     }
@@ -179,7 +182,7 @@
       map.setTrackLines(track.polylines());
       trackRevision=track.revision;
     }
-    set('trackStatus',(track.active?(fresh?'正在追踪':'等待有效定位'):'已停止')+' · '+track.pointCount+'点'+(track.truncated?' · 已裁剪最早轨迹':''));
+    set('trackStatus',(track.active?(fresh?'更新本页轨迹':'显示云端历史'):'本页轨迹已暂停')+' · '+track.pointCount+'点'+(track.truncated?' · 已裁剪最早轨迹':''));
     $('trackStart').textContent=track.active?'停止追踪':'开始追踪';
   }
   function renderDeviceSummary(stats) {
@@ -245,7 +248,9 @@
     for(const [id,key] of Object.entries({parsedFrames:'framesReceived',crcErrors:'crcErrors',bufferedBytes:'bufferedBytes',bytesReceived:'bytesReceived'}))set(id,stats[key]);
     renderDeviceSummary(stats);
     set('linkAge',state.lastReceived==null?'--':Math.round(now-state.lastReceived)+' ms');
-    state.history=state.history.filter(s=>now-s.timestamp<=12000);
+    const historyReference=link.connected?now:Number.isFinite(state.historyEnd)?state.historyEnd:now;
+    state.history=state.history.filter(s=>historyReference-s.timestamp<=12000);
+    renderHistoryStatus();
     drawChart(now);
   }
   link.addEventListener('frame',({detail:frame})=>{
@@ -261,8 +266,12 @@
       state.latest.boat={frame,at};
       state.history.push(M.boatChart.createBoatChartSample(frame,at,now,link.connected,state.history.at(-1)));
       if(state.history.length>240)state.history.shift();
+      state.historyEnd=at;
     }
-    if(frame.velocity){state.latest.velocity={frame,at};position(frame,at,now);}
+    if(frame.velocity){
+      state.latest.velocity={frame,at};state.liveTrackPoints.push({velocity:frame.velocity,timestamp:at});
+      if(state.liveTrackPoints.length>1000)state.liveTrackPoints.shift();position(frame,at,now);
+    }
     if(frame.imu){
       state.latest.imu={frame,at};
       const imu=M.imuDisplay.prepareImuDisplay(frame,at,now,link.connected);
@@ -275,10 +284,59 @@
     $('disconnectButton').disabled=!link.connected&&!waiting&&!link.busy;
   }
   function clearLive() {
-    state.latest={};state.history=[];state.lastReceived=null;state.forwardDelayMs=null;
+    state.latest={};state.lastReceived=null;state.forwardDelayMs=null;
     state.uplinkDelayMs=null;state.uplinkRttMs=null;state.uplinkUncertaintyMs=null;
     viewer.reset();horizon.reset();track.stop();track.breakSegment();
     marker?.remove();marker=null;lastLocation=null;hadFix=false;updateMapAvailability(false);
+  }
+  function cancelHistory(){++historyRequest;historyController?.abort();historyController=null;}
+  function clearHistory(){cancelHistory();state.history=[];state.liveTrackPoints=[];state.historyEnd=null;state.historical=null;state.historyMessage='选择无人船后自动载入记录';}
+  function renderHistoryStatus(){
+    $('historyPanel').hidden=!cloud.authenticated||!cloud.selectedId;
+    const item=state.historical,recording=item?.recording;
+    set('historyRecordingState',recording?.storageError?'云端记录保存异常':recording?.persistent?(Number.isFinite(recording.lastSavedAt)?'服务器自动记录 · 已持久化':'服务器自动记录 · 等待首次落盘'):recording?'服务器自动记录 · 内存保存':'服务器持续采集');
+    set('historyStatus',state.historyMessage);
+    const date=Number.isFinite(item?.receivedAt)?new Date(item.receivedAt):null;
+    set('historyLastTime',date?date.toLocaleString('zh-CN',{hour12:false}):'尚无记录');
+    if(date)$('historyLastTime').dateTime=date.toISOString();else $('historyLastTime').removeAttribute('datetime');
+    set('historyLastSpeed',Number.isFinite(item?.last?.speedMps)?item.last.speedMps.toFixed(3)+' m/s':'--');
+    set('historyLastHeading',Number.isFinite(item?.last?.headingDegrees)?item.last.headingDegrees.toFixed(2)+'°':'--');
+    set('historyLastPosition',item?.last?.fix?item.last.fix.latitude.toFixed(7)+', '+item.last.fix.longitude.toFixed(7):'--');
+    const chartDate=state.history.length&&Number.isFinite(state.lastUpdateAt)?new Date(state.lastUpdateAt):date;
+    set('chartHistoryState',link.connected?'实时曲线':chartDate?'最后记录 · '+chartDate.toLocaleString('zh-CN',{hour12:false}):'等待记录');
+  }
+  // 历史数据由服务器持续采集；打开页面或自动选船后先补齐最近记录，再由 SSE 继续接收实时帧。
+  async function hydrateHistory(id,generation) {
+    cancelHistory();const token=historyRequest,accountGeneration=window.BoatAuth?.generation;
+    const controller=new AbortController();historyController=controller;
+    const timer=setTimeout(()=>controller.abort(),8000);
+    const current=()=>token===historyRequest&&generation===cloud.generation&&cloud.selectedId===id&&cloud.wanted&&cloud.authenticated&&!document.hidden&&accountGeneration===window.BoatAuth?.generation;
+    state.historyMessage='正在读取服务器记录…';
+    try {
+      const result=await cloud.api('history?device='+encodeURIComponent(id)+'&limit=1000',{signal:controller.signal});
+      if(!current())return;
+      const history=M.boatHistory.prepareHistory(result,id,Date.now()+(cloud.serverOffset||0),performance.now());
+      // 实时帧可能在历史请求期间到达；按时间合并，避免历史响应覆盖新数据。
+      state.history=[...history.chart,...state.history].sort((a,b)=>a.timestamp-b.timestamp).slice(-1240);
+      state.historyEnd=Math.max(state.historyEnd??-Infinity,history.end??-Infinity);
+      state.historical=history;state.historyMessage=result.samples.length?'已载入 '+result.samples.length+' 条云端记录':'暂无历史记录，船上线后自动采集';
+      const latest=history.latest;
+      if(latest&&link.connected&&latest.ageMs<1000){
+        const frame=latest.frame;
+        for(const [field,present]of [['status',frame.motors],['boat',frame.boat],['velocity',frame.velocity],['imu',frame.imu]])
+          if(present&&(!state.latest[field]||state.latest[field].at<latest.at))state.latest[field]={frame,at:latest.at};
+      }
+      if(state.trackDisplayEnabled){
+        const last=history.points.at(-1)?.timestamp??-Infinity;
+        track.restore([...history.points,...state.liveTrackPoints.filter(point=>point.timestamp>last)]);
+      }
+      const fix=history.last.fix;
+      if(fix&&!link.connected){lastLocation=[fix.latitude,fix.longitude];if(map?.ready&&$('mapFollow').checked)map.setView(lastLocation,16,{animate:false});}
+      trackRevision=-1;render();
+    }catch(error){
+      // 旧服务器没有历史接口时继续使用实时 SSE，不打断打开页面或自动选船。
+      if(current()){state.historyMessage=error.status===404?'服务器尚未提供历史记录':'历史记录读取失败，可点击刷新重试';render();}
+    }finally{clearTimeout(timer);if(historyController===controller)historyController=null;}
   }
   link.addEventListener('connection',({detail:c})=>{
     $('connectionBadge').textContent=c.connected?'已连接':'未连接';
@@ -288,6 +346,7 @@
       if(state.deviceId!==c.id){track.clear();state.lastUpdateAt=null;}
       state.deviceId=c.id;
       set('connectionText','云端实时遥测 · '+c.name+(window.BoatAuth?.user?.role==='guest'?' · 访客只读监测':link.readOnly?' · 当前设备只读':' · 管理员可远程调参'));
+      if(state.trackDisplayEnabled)track.start();
     } else {
       set('connectionText',c.message||'已断开');
     }
@@ -299,15 +358,15 @@
     try{await link.connect($('cloudDevice').value);}catch(e){toast(e.message);}
     finally{updateConnectionButtons();}
   };
-  on('disconnectButton',()=>link.disconnect());
+  on('disconnectButton',()=>{autoSelectionSuppressed=true;cancelHistory();link.disconnect();});
   on('chartModeButton',()=>{
     state.chartMode=state.chartMode==='speed'?'heading':'speed';
     set('chartTitle',state.chartMode==='speed'?'船速曲线':'航向角曲线');
     set('chartModeButton',state.chartMode==='speed'?'切换为航向角':'切换为速度');render();
   });
-  on('chartClear',()=>{state.history=[];render();});
-  on('trackStart',()=>{track.active?track.stop():track.start();const x=state.latest.velocity;position(x?.frame,x?.at||0,performance.now());render();});
-  on('trackClear',()=>{track.clear();render();});
+  on('chartClear',()=>{cancelHistory();state.history=[];state.historyEnd=null;render();});
+  on('trackStart',()=>{state.trackDisplayEnabled=!track.active;track.active?track.stop():track.start();const x=state.latest.velocity;position(x?.frame,x?.at||0,performance.now());render();});
+  on('trackClear',()=>{cancelHistory();state.liveTrackPoints=[];track.clear();render();});
   on('mapVectorsToggle',()=>mapVectors.toggle());
   on('mapProviderToggle',async()=>{
     const switched=await map.switchProvider(map.provider==='amap'||!map.ready?'osm':'amap');
@@ -387,9 +446,11 @@
       if(!s.devices.length)select.add(new Option(s.authenticated?'等待单片机上线':'请先登录云端',''));
       for(const device of s.devices)select.add(new Option(device.id+' · '+(device.online?'在线':'离线'),device.id));
       if(selected&&!s.devices.some(d=>d.id===selected))select.add(new Option(selected+' · 等待上线',selected));
-      if(selected)select.value=selected;
       select.dataset.devices=signature;
     }
+    // 切船通常不会改变船队目录，选中项也必须随当前详情对象更新。
+    if(selected&&!Array.from(select.options).some(option=>option.value===selected))select.add(new Option(selected+' · 等待上线',selected));
+    if(selected)select.value=selected;
     // 船队连接与单船详情独立，详情接收中也可直接切船。
     select.disabled=!s.enabled||!s.authenticated;
     $('cloudRefresh').disabled=!s.enabled||!s.authenticated;
@@ -416,7 +477,10 @@
     fleetView.update({...fleet.state(),...parameterAccess()});
     syncParameterAccess();
   }
-  cloud.addEventListener('cloudstate',({detail})=>renderCloud(detail));
+  cloud.addEventListener('cloudstate',({detail})=>{
+    if(!detail.authenticated){clearHistory();track.clear();autoSelectionSuppressed=false;}
+    renderCloud(detail);
+  });
   cloud.addEventListener('authrequired',()=>set('cloudStatus',window.BoatAuth?.enabled===true?'请使用平台账户重新登录':'请输入访问密码登录云端'));
   function renderSourceAccess(){
     const guest=window.BoatAuth?.user?.role==='guest';
@@ -431,20 +495,23 @@
     set('cloudReadOnlyNotice',cloud.readOnly?cloud.parameterReadOnlyReason+'；已保留的本地草稿仍可保存预设或导出。':'当前通过云端操作设备参数，成功提示以 STM32 响应为准。超时或断连后，写入可能已经生效，请先读取确认再重试。Flash 保存仍需满足停机保护。');
   }
   link.addEventListener('permissionchange',({detail})=>{detail.capabilityOnly?params.updateButtons():params.reset(true);updateConnectionButtons();renderCloud();renderSourceAccess();render();});
-  async function selectBoat(id,showDetails=true) {
+  async function selectBoat(id,showDetails=true,automatic=false) {
     if(!/^[A-Za-z0-9_-]{1,64}$/.test(id||''))return false;
+    if(!automatic)autoSelectionSuppressed=false;
     if(cloud.selectedId===id&&(cloud.wanted||cloud.connected)){
       if(showDetails)window.BoatWorkspace?.navigate('overview');return true;
     }
     // 先撤销旧船正在等待的命令，再建立新船的独立解析器。
-    link.disconnect('正在切换无人船');params.reset(false);track.clear();state.deviceId=null;state.lastUpdateAt=null;
+    link.disconnect('正在切换无人船');clearHistory();params.reset(false);track.clear();state.deviceId='cloud:'+id;state.lastUpdateAt=null;
     if(showDetails)window.BoatWorkspace?.navigate('overview');
     const connecting=cloud.connect(id),generation=cloud.generation;
     try{await connecting;}catch(error){toast(error.message);return false;}
     renderCloud();render();
-    return generation===cloud.generation&&cloud.selectedId===id&&cloud.wanted;
+    const selected=generation===cloud.generation&&cloud.selectedId===id&&cloud.wanted;
+    if(selected){if(state.trackDisplayEnabled)track.start();hydrateHistory(id,generation);}
+    return selected;
   }
-  $('cloudDevice').onchange=()=>selectBoat($('cloudDevice').value,false);
+  $('cloudDevice').onchange=()=>{autoSelectionSuppressed=false;return selectBoat($('cloudDevice').value,false);};
   fleet.addEventListener('fleetstate',({detail})=>{
     fleetView.update({...detail,...parameterAccess()});
     fleetMapView.update(detail);
@@ -453,9 +520,15 @@
       cloud.devices=detail.devices.map(device=>({id:device.id,online:device.online,parametersReady:device.parametersReady,video:device.video||null}));
       if(cloud.devices.some(device=>device.id===cloud.selectedId&&device.parametersReady))cloud.parameterCapableId=cloud.selectedId;
       renderCloud();
+      // 首次打开页面时自动进入第一艘在线船的详情，不需要用户再点击“连接无人船”。
+      const candidate=detail.devices.find(device=>device.online===true)||[...detail.devices].filter(device=>Number.isFinite(device.lastReceivedAt)).sort((a,b)=>b.lastReceivedAt-a.lastReceivedAt)[0];
+      if(!autoSelectionSuppressed&&!cloud.selectedId&&candidate&&!autoSelectInFlight){
+        const pending=selectBoat(candidate.id,false,true);autoSelectInFlight=pending;
+        pending.finally(()=>{if(autoSelectInFlight===pending)autoSelectInFlight=null;});
+      }
     }
   });
-  on('cloudRefresh',async()=>{await cloud.refreshDevices();await fleet.refresh();});
+  on('cloudRefresh',async()=>{await cloud.refreshDevices();await fleet.refresh();if(cloud.selectedId&&cloud.wanted)hydrateHistory(cloud.selectedId,cloud.generation);});
   on('fleetRefresh',()=>fleet.refresh());
   on('cloudLoginOpen',()=>{$('cloudLoginError').textContent='';$('cloudPassword').value='';$('cloudLoginDialog').showModal();$('cloudPassword').focus();});
   on('cloudLoginClose',()=>$('cloudLoginDialog').close());
@@ -489,13 +562,14 @@
   const cloudTimer=setInterval(()=>{if(cloud.enabled&&cloud.authenticated&&!document.hidden)cloud.refreshDevices().catch(()=>{});},10000);
   document.addEventListener('visibilitychange',()=>{
     videoView.setVisible(window.BoatWorkspace?.current==='video'&&!document.hidden);
-    if(document.hidden)cloud.suspend();else cloud.resume();
+    if(document.hidden){cancelHistory();cloud.suspend();}else{cloud.resume();if(cloud.selectedId&&cloud.wanted)hydrateHistory(cloud.selectedId,cloud.generation);}
     if(!document.hidden)render();
   });
-  window.addEventListener('pagehide',()=>{cancelAnimationFrame(viewResizeFrame);clearInterval(timer);clearInterval(cloudTimer);videoView.destroy();viewer.stop();mapSettings.destroy();fleetMapView.destroy();fleet.destroy();fleetView.destroy();link.disconnect();});
+  window.addEventListener('pagehide',()=>{cancelHistory();cancelAnimationFrame(viewResizeFrame);clearInterval(timer);clearInterval(cloudTimer);videoView.destroy();viewer.stop();mapSettings.destroy();fleetMapView.destroy();fleet.destroy();fleetView.destroy();link.disconnect();});
   window.addEventListener('pageshow',event=>{if(event.persisted)location.reload();});
   window.addEventListener('resize',()=>render());
   window.addEventListener('boat-theme-change',()=>{readChartPalette();map?.setTheme(document.documentElement.dataset.theme);fleetMapView.setTheme(document.documentElement.dataset.theme);render();});
   // 提供浏览器控制台诊断入口，界面不显示原始字节流。
-  window.boatMonitor={link,params,viewer,horizon,track,map,mapVectors,mapSettings,mqttDevices,fleet,fleetView,fleetMapView,videoView,selectBoat,openBoatSettings,openBoatVideo};
+  window.boatMonitor={link,params,viewer,horizon,track,map,mapVectors,mapSettings,mqttDevices,fleet,fleetView,fleetMapView,videoView,selectBoat,openBoatSettings,openBoatVideo,
+    historyState:()=>({deviceId:cloud.selectedId,recordedAt:state.historical?.receivedAt||null,points:track.pointCount,chartSamples:state.history.length,message:state.historyMessage})};
 })();

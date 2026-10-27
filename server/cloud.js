@@ -7,6 +7,7 @@ const protocol=require('../public/utils/uart4Protocol');
 const parameters=require('./parameter-protocol');
 const {unwrapTelemetry,isSyncResponse,UplinkClock}=require('./latency-protocol');
 const {decodeVideoDescriptor}=require('./video-protocol');
+const {TelemetryHistory,historyOptions}=require('./telemetry-history');
 const DEVICE_ID=/^[A-Za-z0-9_-]{1,64}$/;
 const LAYOUT=[
   [0,64,1,1,protocol.decodeFrame],
@@ -49,15 +50,21 @@ function fleetSummary(sample,now){
 }
 
 class CloudBridge extends EventEmitter {
-  constructor({env=process.env,connect,now=Date.now,monotonicNow=()=>performance.now(),maxDevices=64,staleMs=3000,tickMs=1000,parameterFreshMs=2500,parameterTimeoutMs=5000,flashTimeoutMs=20000}={}){
+  constructor({env=process.env,connect,now=Date.now,monotonicNow=()=>performance.now(),maxDevices=64,staleMs=3000,tickMs=1000,parameterFreshMs=2500,parameterTimeoutMs=5000,flashTimeoutMs=20000,historyOptions:historyConfig={}}={}){
     super();
     this.enabled=env.BOAT_CLOUD_ENABLED==='1';
     this.env=env;this.connect=connect;this.now=now;this.monotonicNow=monotonicNow;this.maxDevices=maxDevices;
     this.staleMs=staleMs;this.tickMs=tickMs;this.devices=new Map();
     this.parameterFreshMs=parameterFreshMs;this.parameterTimeoutMs=parameterTimeoutMs;this.flashTimeoutMs=flashTimeoutMs;this.pendingParameters=new Map();this.parameterSequence=crypto.randomBytes(4).readUInt32LE();
     this.brokerConnected=false;this.client=null;this.timer=null;this.stopped=false;this.generation=0;
+    this.history=new TelemetryHistory(historyOptions(env,{now,maxDevices,...historyConfig}));
     this.prefix=env.BOAT_MQTT_TOPIC_PREFIX||'boats';
     if(!/^[A-Za-z0-9_-]{1,64}$/.test(this.prefix))throw Error('Invalid BOAT_MQTT_TOPIC_PREFIX');
+    // 历史记录只恢复设备目录，在线/参数能力仍需新的实时 MQTT 遥测确认。
+    for(const id of this.history.deviceIds()){
+      const device=this.obtain(id),latest=this.history.latest(id);
+      device.lastReceivedAt=latest.receivedAt;device.status='offline';
+    }
   }
   start(){
     if(!this.enabled||this.client||this.stopped)return;
@@ -148,7 +155,11 @@ class CloudBridge extends EventEmitter {
       if(device.status==='offline')device.status='unknown';
       device.announcedOnline=true;
       this.emit('state',this.state(device.id));
-      this.emit('telemetry',{deviceId:device.id,receivedAt:device.lastReceivedAt,payload:telemetry.payload.toString('base64'),ageMs:0,...timing});
+      const [status,velocity,boat,imu]=frames;
+      const event={deviceId:device.id,receivedAt:device.lastReceivedAt,payload:telemetry.payload.toString('base64'),ageMs:0,...timing};
+      const summary={status,velocity:velocity.velocity,boat:boat.boat,imu:imu.imu};
+      this.history.record({...event,summary});
+      this.emit('telemetry',event);
       if(telemetry.session)this.probeUplinkClock(device);
       return true;
     }
@@ -227,10 +238,14 @@ class CloudBridge extends EventEmitter {
     }
   }
   stop(){
-    if(this.stopped)return;
+    if(this.stopped)return this.stopPromise;
     this.setBrokerConnected(false);this.stopped=true;
     clearInterval(this.timer);this.timer=null;
     this.client?.end(true);this.client=null;
+    this.stopPromise=this.history.close();return this.stopPromise;
   }
+  historyFor(id,options={}){return this.history.snapshot(id,options);}
+  historySnapshot(id,options={}){return this.history.snapshot(id,options);}
+  historyDeviceIds(){return this.history.deviceIds();}
 }
 module.exports={CloudBridge,validateTelemetry,DEVICE_ID};

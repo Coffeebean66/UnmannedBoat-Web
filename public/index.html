@@ -89,7 +89,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.26.0</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.27.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -113,6 +113,11 @@
         <p id="sourceHint" class="muted">管理员可对支持云端调参的无人船远程设置参数；访客可查看实时监测。</p>
       </section>
       <p id="connectionText" class="workspace-connection" role="status">正在检查 MQTT 服务器配置…</p>
+      <section id="historyPanel" class="cloud-history-panel" aria-label="服务器自动记录" hidden>
+        <div class="cloud-history-heading"><strong id="historyRecordingState" role="status">服务器持续采集</strong><span id="historyStatus" role="status">选择无人船后自动载入记录</span></div>
+        <p>服务器在无人船在线时自动记录，无需保持网页打开。轨迹开始、停止与清除只影响本页显示。</p>
+        <dl><div><dt>最后记录时间</dt><dd><time id="historyLastTime">尚无记录</time></dd></div><div><dt>记录船速</dt><dd id="historyLastSpeed">--</dd></div><div><dt>记录航向</dt><dd id="historyLastHeading">--</dd></div><div><dt>记录船位 · WGS84</dt><dd id="historyLastPosition">--</dd></div></dl>
+      </section>
       <section id="view-fleet" class="workspace-view fleet-workspace" data-workspace-view="fleet" aria-labelledby="viewTitle">
         <div class="fleet-toolbar"><span id="fleetStreamState" class="fleet-stream-state" role="status" data-tone="neutral">正在准备船队监测</span><span class="fleet-live-note">遥测实时更新 · 过期数据自动隐藏</span><button id="fleetRefresh" type="button" class="small-button"><span data-icon="refresh"></span>刷新船队</button></div>
         <div class="fleet-counters" aria-label="船队概况">
@@ -185,7 +190,7 @@
           </div>
           <div class="map-controls"><div class="button-row"><button id="mapProviderToggle" type="button" class="small-button" aria-controls="map" disabled>切换地图</button><button id="trackStart" class="small-button primary">开始追踪</button><button id="trackClear" class="small-button subtle">清除痕迹</button><button id="mapVectorsToggle" class="small-button" aria-pressed="true" aria-controls="mapVectorReadouts">隐藏速度箭头</button></div><label class="switch-label"><input type="checkbox" id="mapFollow" checked><span class="switch-track"></span>跟随船位</label></div>
           <div class="vector-info"><div id="mapVectorReadouts" class="map-vector-readouts"><span class="target"><i></i>目标 <b id="mapVectorTarget">--</b></span><span class="actual"><i></i>实际 <b id="mapVectorActual">--</b></span></div><p id="mapVectorStatus" class="map-vector-status">仅在速度 / 角度闭环显示</p></div>
-          <div class="map-track-info"><p id="trackStatus" class="muted">追踪未开启</p><div class="track-legend" id="trackLegend"></div></div>
+          <div class="map-track-info"><p id="trackStatus" class="muted">等待云端轨迹</p><div class="track-legend" id="trackLegend"></div></div>
           <div class="map-footer"><span id="mapStatus">正在加载地图配置</span><span title="RTK 原始经纬度，WGS84 坐标">RTK 原始坐标 <span id="mapCoordinate">--</span></span></div>
         </article>
         </div>
@@ -258,6 +263,7 @@
       <section id="view-analysis" class="workspace-view analysis-workspace" data-workspace-view="analysis" aria-labelledby="viewTitle" hidden>
         <article id="analysis" class="card chart-card">
           <div class="card-title"><div class="title-with-icon"><span data-icon="chart"></span><h2 id="chartTitle">船速曲线</h2></div><div class="button-row"><button id="chartModeButton" class="small-button">切换为航向角</button><button id="chartClear" class="small-button subtle">清空</button></div></div>
+          <p id="chartHistoryState" class="muted" role="status">等待记录</p>
           <div class="chart-legend"><span><i class="target-line"></i>目标值</span><span><i class="actual-line"></i>实际值</span><span class="chart-window">最近 12 秒</span></div>
           <canvas id="chart" width="900" height="310" aria-label="目标与实际曲线"></canvas>
           <div class="chart-readouts"><div><span>目标</span><b id="chartTarget">--</b></div><div><span>实际</span><b id="chartActual">--</b></div><div><span>误差</span><b id="chartError">--</b></div></div>

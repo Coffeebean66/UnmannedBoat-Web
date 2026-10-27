@@ -16,6 +16,8 @@
         const auth=window.BoatAuth;
         if(this.accountGeneration===auth.generation)return;
         this.accountGeneration=auth.generation;
+        // 选择与调参能力属于当前登录会话；先清理，再通知断开，以便新账户重新自动选船。
+        this.selectedId='';this.parameterCapableId='';
         this.disconnect('账户已变化，请重新连接云端');this.devices=[];
         if(auth.enabled===true){
           this.authenticated=auth.canMonitor;

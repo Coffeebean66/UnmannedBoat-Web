@@ -69,6 +69,28 @@ class BoatTrack {
     this.breakSegment();
   }
 
+  // 云端每秒采样的历史不能套用实时1秒断流判据；5秒空窗或无效定位才分段。
+  restore(samples) {
+    const active = this.active;
+    this.clear();this.active = active;
+    let previous = null;
+    for (const sample of samples || []) {
+      const raw = sample?.velocity, timestamp = sample?.timestamp;
+      const valid = raw?.received === true && raw.fresh === true && raw.fixValid === true && raw.hasNavigation === true &&
+        Number.isFinite(raw.ageMs) && raw.ageMs >= 0 && raw.ageMs < 1000 && Number.isFinite(raw.latitude) && Number.isFinite(raw.longitude) &&
+        Math.abs(raw.latitude) <= 90 && Math.abs(raw.longitude) <= 180;
+      const point = valid && this.project(raw.latitude, raw.longitude);
+      if (!point || !Number.isFinite(timestamp)) { previous = null; continue; }
+      if (!previous || timestamp <= previous.timestamp || timestamp - previous.timestamp > 5000) this.segments.push([]);
+      const speedMps = raw.velocityValid === true && Number.isFinite(raw.xMps) && Number.isFinite(raw.yMps) ? Math.hypot(raw.xMps, raw.yMps) : null;
+      this.segments[this.segments.length - 1].push({ ...point, speedMps });this.pointCount++;
+      previous = { timestamp, raw };
+    }
+    while (this.segments.length > TRACK_MAX_SEGMENTS) { this.pointCount -= this.segments.shift().length;this.truncated = true; }
+    while (this.pointCount > TRACK_MAX_POINTS) { this.segments[0].shift();this.pointCount--;if (!this.segments[0].length) this.segments.shift();this.truncated = true; }
+    this.breakSegment();this.revision++;
+  }
+
   // 暂停、定位无效或断流后另起一段，不能把缺失的航程绘成直线。
   breakSegment() {
     this.segmentOpen = false;

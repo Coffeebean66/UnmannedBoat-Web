@@ -290,4 +290,11 @@ footer{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;font-s
 footer b{font-weight:400;padding:0 5px}
 .toast{position:fixed;bottom:24px;left:50%;transform:translate(-50%,15px);background:var(--text);color:var(--panel);box-shadow:0 8px 30px #00000028;border-radius:10px;padding:13px 18px;font-size:12px;max-width:calc(100% - 32px);width:max-content;z-index:40;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s}
 .toast.show{opacity:1;transform:translate(-50%,0)}
+.cloud-history-panel{border:1px solid var(--line);border-radius:11px;padding:14px 17px;background:var(--panel);margin-bottom:20px}
+.cloud-history-heading{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px}
+.cloud-history-heading strong{color:var(--text);font-weight:550}.cloud-history-heading span{color:var(--muted);font-size:11px}
+.cloud-history-panel p{color:var(--muted);font-size:11px;line-height:1.65;margin:7px 0 11px}
+.cloud-history-panel dl{display:grid;grid-template-columns:1.8fr 1fr 1fr 1.8fr;gap:12px;margin:0}
+.cloud-history-panel dt{font-size:10px;color:var(--muted);margin-bottom:5px}.cloud-history-panel dd{margin:0;font-size:12px;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+@media(max-width:640px){.cloud-history-panel{padding:12px}.cloud-history-panel dl{grid-template-columns:1fr 1fr}.cloud-history-panel dd{font-size:11px}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{transition:none!important;animation:none!important}}

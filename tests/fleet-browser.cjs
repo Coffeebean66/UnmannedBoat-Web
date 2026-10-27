@@ -112,7 +112,9 @@ async function main(){
     await until('boatMonitor.fleetMapView.mapReady&&boatMonitor.fleetMapView.markers.size===3');
     assert.equal(await evaluate('document.querySelectorAll("#fleetMap .fleet-map-pin").length'),3);
     assert.equal(await evaluate('document.querySelectorAll("#fleetMapLegend .fleet-map-legend-item[data-located=true]").length'),3);
-    assert.equal(await evaluate('document.getElementById("fleetMoving").textContent'),'2');assert.equal(server.boatCloudApi.getClientCount(),1);
+    assert.equal(await evaluate('document.getElementById("fleetMoving").textContent'),'2');
+    // 登录后第一艘在线船会自动开始详情采集，无需用户点击连接按钮。
+    assert.equal(await evaluate('boatMonitor.link.selectedId'),alpha.id);assert.equal(server.boatCloudApi.getClientCount(),2);
     await evaluate('document.getElementById("fleetSearch").value="BETA";document.getElementById("fleetSearch").dispatchEvent(new Event("input"))');
     assert.equal(await evaluate('document.querySelectorAll(".fleet-card:not([hidden])").length'),1);assert.equal(await evaluate(card(beta.id)+'.hidden'),false);
     await evaluate('document.getElementById("fleetSearch").value="";document.getElementById("fleetSearch").dispatchEvent(new Event("input"))');

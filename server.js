@@ -47,7 +47,7 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
     if(pathname==='/healthz'){
       // 部署检查只读取服务就绪状态，不依赖管理员初始密码，避免改密后误判失败。
       const readiness={cloudEnabled:bridge.enabled===true,brokerConnected:bridge.list()?.brokerConnected===true,
-        accountsEnabled:accounts.enabled===true,accountManagement:1};
+        accountsEnabled:accounts.enabled===true,accountManagement:1,...(bridge.history?{telemetryRecording:bridge.history.status()}: {})};
       res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');
       return res.end(req.method==='HEAD'?undefined:JSON.stringify({ok:true,app:'unmanned-boat-web',...current,apiVersion:1,readiness}));
     }
@@ -67,7 +67,7 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
   };
   const server=key&&cert?https.createServer({key,cert},handler):http.createServer(handler);
   const originalClose=server.close.bind(server);
-  server.close=(callback)=>{const mediaClosed=videoMediaApi.close();mqttDeviceApi.close();mapApi.close();accounts.close();updateApi.close();api.close();bridge.stop();return originalClose((...args)=>{Promise.resolve(mediaClosed).then(()=>callback?.(...args),()=>callback?.(...args));});};
+  server.close=(callback)=>{const mediaClosed=videoMediaApi.close();mqttDeviceApi.close();mapApi.close();accounts.close();updateApi.close();api.close();const historyClosed=bridge.stop();return originalClose((...args)=>{Promise.allSettled([mediaClosed,historyClosed]).then(()=>callback?.(...args));});};
   server.boatCloud=bridge;server.boatCloudApi=api;server.boatUpdateApi=updateApi;server.boatRelease=current;server.boatAccounts=accounts;
   bridge.start();
   return server;

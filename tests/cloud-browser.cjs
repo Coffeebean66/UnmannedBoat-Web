@@ -81,7 +81,7 @@ async function main(){
     };
     const chooseCloud=async()=>{
       await until("boatMonitor.link.authenticated && [...document.getElementById('cloudDevice').options].some(option=>option.value==='boat-server-check')",'authenticated test device in cloud list');
-      await evaluate("document.getElementById('cloudDevice').value='boat-server-check';document.getElementById('cloudDevice').dispatchEvent(new Event('change'));document.getElementById('connectButton').click()");
+      await evaluate("document.getElementById('cloudDevice').value='boat-server-check';document.getElementById('cloudDevice').dispatchEvent(new Event('change'))");
       await until("boatMonitor.link.source==='cloud' && boatMonitor.link.connected && document.getElementById('boatActual').textContent==='1.552'",'live remote cloud telemetry');
     };
     const openSettings=async()=>{
@@ -110,7 +110,8 @@ async function main(){
     assert.equal(await evaluate("document.getElementById('motor1Voltage').textContent"),'24.50');
     await until("!!document.querySelector('.map-velocity-anchor')",'target and actual map velocity arrows');
     assert.equal(await evaluate("[...document.querySelectorAll('.map-velocity-vectors [data-vector]')].filter(vector=>!vector.hasAttribute('hidden')&&Number(vector.dataset.length)>0).length"),2,'Both map velocity arrows are present');
-    await evaluate("document.getElementById('trackStart').click()");await wait(1350);assert.ok(await evaluate('boatMonitor.track.pointCount>=2'),'Cloud track records live positions');
+    assert.equal(await evaluate('boatMonitor.track.active'),true,'Selecting an online boat automatically starts local track display');
+    await wait(1350);assert.ok(await evaluate('boatMonitor.track.pointCount>=2'),'Cloud track records live positions');
     await openSettings();
     assert.deepEqual(await evaluate("['readParameters','writeParameters','saveFlash'].map(id=>document.getElementById(id).disabled)"),[true,true,true]);
     assert.equal(await evaluate("[...document.querySelectorAll('#presets [data-action=use]')].every(button=>button.disabled)"),true);
@@ -131,7 +132,9 @@ async function main(){
     assert.equal(await evaluate('boatMonitor.viewer.fresh'),false);assert.equal(await evaluate("!!document.querySelector('.map-velocity-anchor')"),false);
     await chooseCloud();await wait(300);assert.equal(await evaluate("document.getElementById('roll').textContent"),'6.00');
     stopTelemetry();await wait(1350);
-    for(const id of ['boatActual','roll','motor1Rpm','chartActual','chartTarget'])assert.equal(await evaluate('document.getElementById('+JSON.stringify(id)+').textContent'),'--','One-second expiry clears '+id);
+    for(const id of ['boatActual','roll','motor1Rpm'])assert.equal(await evaluate('document.getElementById('+JSON.stringify(id)+').textContent'),'--','One-second expiry clears '+id);
+    assert.equal(await evaluate("document.getElementById('chartActual').textContent"),'1.552 m/s','Offline chart retains the last recorded actual speed');
+    assert.equal(await evaluate("document.getElementById('chartTarget').textContent"),'1.800 m/s','Offline chart retains the last recorded target speed');
     assert.equal(await evaluate('boatMonitor.link.connected'),false);assert.equal(await evaluate('boatMonitor.viewer.fresh'),false);
     assert.equal(await evaluate("!!document.querySelector('.map-velocity-anchor')"),false);await screenshot('remote-cloud-stale');
     startTelemetry();await until('boatMonitor.link.connected && boatMonitor.viewer.fresh','telemetry recovery after publish pause');

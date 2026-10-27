@@ -163,6 +163,15 @@ function createCloudApi({bridge,env=process.env,now=Date.now,maxSessions=128,max
     if(!session){json(res,401,{error:'Login required'});return true;}
     if(url.pathname==='/api/cloud/devices'&&req.method==='GET'){json(res,200,{...bridge.list(),serverTime:now()});return true;}
     if(url.pathname==='/api/cloud/fleet'&&req.method==='GET'){json(res,200,fleetSnapshot());return true;}
+    if(url.pathname==='/api/cloud/history'&&req.method==='GET'){
+      const device=url.searchParams.get('device');
+      if(!DEVICE_ID.test(device||'')){json(res,400,{error:'Invalid device ID'});return true;}
+      const numeric=(name,fallback)=>url.searchParams.has(name)&&url.searchParams.get(name)!==''?Number(url.searchParams.get(name)):fallback;
+      const since=numeric('since',0),until=numeric('until',Infinity),limit=numeric('limit',600);
+      if(!Number.isFinite(since)||since<0||until<since||!(until===Infinity||Number.isFinite(until))||!Number.isInteger(limit)||limit<1||limit>3600){json(res,400,{error:'Invalid history range or limit'});return true;}
+      const history=bridge.historySnapshot?.(device,{since,until,limit})||{deviceId:device,latest:null,samples:[],recording:{persistent:false,storageError:null}};
+      json(res,200,{...history,serverTime:now()});return true;
+    }
     if(['/api/cloud/events','/api/cloud/fleet/events'].includes(url.pathname)&&req.method==='GET'){
       const fleet=url.pathname==='/api/cloud/fleet/events',device=fleet?null:url.searchParams.get('device');
       if(!fleet&&!DEVICE_ID.test(device||'')){json(res,400,{error:'Invalid device ID'});return true;}

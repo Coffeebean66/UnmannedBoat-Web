@@ -5,7 +5,7 @@ const output=path.resolve(__dirname,'../.test-output');fs.mkdirSync(output,{recu
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function main(){
   // 默认烟测固定验证无 Key 回退，避免开发机环境变量意外触发真实 SDK 请求。
-  const server=createFixtureServer();await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const server=createFixtureServer();server.mqttFixture.running=false;await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const profile=fs.mkdtempSync(path.join(output,'chrome-')),errors=[];
   const browser=spawn(process.env.CHROME_PATH||'C:/Program Files/Google/Chrome/Application/chrome.exe',['--headless','--no-first-run','--no-default-browser-check','--use-angle=swiftshader','--enable-unsafe-swiftshader','--remote-debugging-port=0','--user-data-dir='+profile],{windowsHide:true,stdio:'ignore'});
   browser.on('error',error=>errors.push(error.message));let socket;
@@ -77,7 +77,7 @@ async function main(){
     await view('overview');
     await until("boatMonitor.map?.ready && boatMonitor.map.provider==='osm'");
     await until("(()=>{const image=document.querySelector('#deviceSummary img');return image.complete&&image.naturalWidth>0;})()");
-    assert.deepEqual(await deviceSummary(),{state:'offline',name:'boat-mqtt-test',source:'MQTT',connection:'未连接',frames:'0',updated:'--',datetime:null,latency:'--'},'The selected MQTT device has no synthetic telemetry before connection');
+    assert.deepEqual(await deviceSummary(),{state:'waiting',name:'boat-mqtt-test',source:'MQTT',connection:'等待遥测',frames:'0',updated:'--',datetime:null,latency:'--'},'Automatic subscription cannot invent telemetry before the simulated boat actually sends it');
     assert.equal(await evaluate('navigator.bluetooth'),undefined,'The platform works without the Web Bluetooth API');
     assert.equal(await evaluate("!!document.querySelector('#telemetrySource,#notifyCharacteristic,#writeCharacteristic')"),false,'Bluetooth source and UUID controls are absent');
     assert.equal(await evaluate("performance.getEntriesByType('resource').some(entry=>/\\/transport\\.js(?:$|\\?)/.test(entry.name))"),false,'No Bluetooth transport resource loads');
@@ -122,7 +122,7 @@ async function main(){
     assert.equal((await deviceSummary()).name,'boat-mqtt-test','The MQTT device ID is used as the boat name');
     assert.equal((await deviceSummary()).source,'MQTT');
     assert.equal((await deviceSummary()).state,'online');
-    await evaluate("window.testLatestFrames={};boatMonitor.link.addEventListener('frame',({detail})=>{if(detail.boat)testLatestFrames.boat=detail;if(detail.velocity)testLatestFrames.velocity=detail;});startTelemetry();document.getElementById('trackStart').click()");await wait(1200);
+    await evaluate("window.testLatestFrames={};boatMonitor.link.addEventListener('frame',({detail})=>{if(detail.boat)testLatestFrames.boat=detail;if(detail.velocity)testLatestFrames.velocity=detail;});startTelemetry();if(!boatMonitor.track.active)document.getElementById('trackStart').click()");await wait(1200);
     await until("Number(document.getElementById('frameCount').textContent.replaceAll(',',''))===Number(document.getElementById('parsedFrames').textContent)&&Number(document.getElementById('parsedFrames').textContent)>0");
     const liveDevice=await deviceSummary();
     assert.equal(liveDevice.connection,'已连接');assert.notEqual(liveDevice.updated,'--');assert.ok(Number.isFinite(Date.parse(liveDevice.datetime)),'A live device records a machine-readable receive time');
@@ -301,7 +301,11 @@ async function main(){
     await evaluate("document.getElementById('quality').value='low';document.getElementById('quality').dispatchEvent(new Event('change'))");await shot('desktop-attitude');
     await evaluate('stopTelemetry()');await wait(1400);
     await view('analysis');
-    for(const id of ['boatActual','roll','motor1Rpm','chartActual','chartTarget','chartError'])assert.equal(await evaluate('document.getElementById('+JSON.stringify(id)+').textContent'),'--');
+    for(const id of ['boatActual','roll','motor1Rpm'])assert.equal(await evaluate('document.getElementById('+JSON.stringify(id)+').textContent'),'--');
+    assert.equal(await evaluate("document.getElementById('chartActual').textContent"),'359.00°','Offline curves retain their final recorded values');
+    assert.equal(await evaluate("document.getElementById('chartTarget').textContent"),'1.00°');
+    assert.equal(await evaluate("document.getElementById('chartError').textContent"),'2.00°');
+    assert.match(await evaluate("document.getElementById('chartHistoryState').textContent"),/最后记录/,'Retained curves are explicitly historical');
     assert.equal(await evaluate("parseFloat(document.getElementById('motor1Dial').style.strokeDasharray)"),0);
     assert.equal(await evaluate("document.getElementById('mapEmpty').hidden"),true,'Expired position retains the recorded track for review');
     assert.equal(await evaluate("document.getElementById('mapFixStatus').hidden"),false,'Expired position shows a non-blocking fix hint');

@@ -9,7 +9,7 @@ function payload(){
   }
   return Buffer.concat(frames).toString('base64');
 }
-function setup({serverClock=true,serverOffset=0,videoConfig}={}){
+function setup({serverClock=true,serverOffset=0,videoConfig,auth}={}){
   let now=10000,wall=1770000000000,authorized=true,brokerConnected=true;
   const streams=[],timers=new Map();let timerId=0;
   class FakeEventSource extends EventTarget {
@@ -18,7 +18,7 @@ function setup({serverClock=true,serverOffset=0,videoConfig}={}){
     send(type,data){this.dispatchEvent(new MessageEvent(type,{data:JSON.stringify(data)}));}
   }
   const context={EventTarget,CustomEvent,Uint8Array,atob,BoatModules:{uart4Protocol:P},
-    window:{},document:{hidden:false},EventSource:FakeEventSource,performance:{now:()=>now},Date:{now:()=>wall},
+    window:auth?{BoatAuth:auth}:{},document:{hidden:false},EventSource:FakeEventSource,performance:{now:()=>now},Date:{now:()=>wall},
     setInterval:fn=>{const id=++timerId;timers.set(id,fn);return id;},clearInterval:id=>timers.delete(id),
     fetch:async(url,options)=>{
       let status=200,body=serverClock?{serverTime:wall+serverOffset}:{};
@@ -36,6 +36,40 @@ function setup({serverClock=true,serverOffset=0,videoConfig}={}){
     advance:ms=>{now+=ms;wall+=ms;},setAuthorized:value=>authorized=value,setBroker:value=>brokerConnected=value};
 }
 async function connected(h){await h.cloud.initialize();await h.cloud.connect('boat-123');return h.streams.at(-1);}
+
+test('手动断开保留选择，退出和身份切换在通知前清理选船及能力，使新会话可自动选船',async()=>{
+  const auth=new EventTarget();
+  Object.assign(auth,{enabled:true,generation:1,canMonitor:true,canManage:true,async whenReady(){},
+    assertMonitor(){if(!this.canMonitor)throw Error('请登录');}});
+  const change=(monitor,manage=monitor)=>{
+    auth.canMonitor=monitor;auth.canManage=manage;auth.generation++;
+    auth.dispatchEvent(new CustomEvent('change'));
+  };
+  const h=setup({auth}),stream=await connected(h),snapshots=[];
+  stream.send('telemetry',h.packet());h.cloud.parameterCapableId='boat-123';
+  h.cloud.disconnect();
+  assert.equal(h.cloud.selectedId,'boat-123','手动断开只停止订阅，不清除用户选择');
+  assert.equal(h.cloud.parameterCapableId,'boat-123');
+  await h.cloud.connect('boat-123');
+  const previous=h.streams.at(-1);
+  h.cloud.addEventListener('cloudstate',event=>snapshots.push({selectedId:event.detail.selectedId,capable:h.cloud.parameterCapableId}));
+  change(false);
+  assert.equal(h.cloud.authenticated,false);assert.equal(h.cloud.wanted,false);
+  assert.equal(previous.closed,true);
+  assert.ok(snapshots.length>=1);
+  assert.ok(snapshots.every(snapshot=>snapshot.selectedId===''&&snapshot.capable===''),'所有通知均已移除上一会话的选择和能力');
+  previous.send('telemetry',h.packet());assert.equal(h.cloud.connected,false);
+  change(true,false);await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(h.cloud.authenticated,true);assert.equal(h.cloud.selectedId,'');
+  assert.equal(h.cloud.wanted,false);assert.equal(h.cloud.parameterCapableId,'');
+  assert.ok(h.cloud.devices.some(device=>device.id==='boat-123'),'新会话设备目录可供自动选择');
+  await h.cloud.connect('boat-123');h.cloud.parameterCapableId='boat-123';
+  auth.dispatchEvent(new CustomEvent('change'));
+  assert.equal(h.cloud.selectedId,'boat-123','同一鉴权代的重复通知不取消新选择');
+  change(true,true);
+  assert.equal(h.cloud.selectedId,'','已登录身份切换同样取消上一账户选船');
+  assert.equal(h.cloud.parameterCapableId,'');
+});
 test('视频来源配置随云端状态公开，旧后台或无效配置按仅同源处理且不恢复遥测',async()=>{
   for(const [config,expected]of [[undefined,[]],[null,[]],[{allowedOrigins:'https://video.test'},[]],
     [{allowedOrigins:['https://video.test','http://127.0.0.1:9000',null,123]},['https://video.test','http://127.0.0.1:9000']]]){
