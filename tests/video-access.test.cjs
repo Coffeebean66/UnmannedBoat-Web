@@ -152,3 +152,73 @@ test('视频管理事务失败回滚全部四个文件且固定 PUT 路由不回
   assert.equal(response.status,200);const body=await response.text();assert.doesNotMatch(body,/route-video|\$7\$/);const json=JSON.parse(body);assert.deepEqual(json.videos,[{deviceId:'boat-01',username:'camera-route'}]);
   assert.equal((await fetch(base+'/devices/boat-01/video',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status,405);
 });
+
+test('SRT 视频凭据只读验证匹配设备的专用账号，不允许遥测或桥接账号并且不重启 Broker',async t=>{
+  const f=await fixture(t);await f.manager.configureVideo(videoInput);
+  const before=Object.fromEntries(await Promise.all(['passwd','acl','access.txt','runtime.env','mosquitto.conf'].map(async name=>[name,await read(f,name)]))),restarts=f.restarts.length,commands=f.calls.length;
+  assert.equal((await f.manager.list()).canAuthenticateVideo,true);
+  assert.deepEqual(await f.manager.authenticateVideo('boat-01',{username:videoInput.username,password:plain}),{authorized:true});
+  for(const [id,username,password]of [['boat-01',videoInput.username,'wrong-video-password'],['boat-02',videoInput.username,plain],['boat-01','boat-01',plain],['boat-01','boat-web-bridge',plain],['boat-01','weather-reader',plain]]){
+    assert.deepEqual(await f.manager.authenticateVideo(id,{username,password}),{authorized:false});
+  }
+  assert.equal(f.restarts.length,restarts);assert.equal(f.calls.length,commands);
+  for(const [name,text]of Object.entries(before))assert.equal(await read(f,name),text);
+  assert.equal(fs.existsSync(f.file('.mqtt-device-transaction.json')),false);
+  for(const input of [{username:videoInput.username,password:'short'},{username:videoInput.username,password:plain,revision:'a'.repeat(64)},{username:'bad user',password:plain},null])await assert.rejects(f.manager.authenticateVideo('boat-01',input),{status:400});
+});
+
+test('SRT 视频认证固定路由仅返回布尔结果，拒绝格式、超限、错误设备和不支持的方法',async t=>{
+  const f=await fixture(t);await f.manager.configureVideo(videoInput);
+  const worker=require('../maintenance/mqtt-device-worker.cjs').createMqttDeviceWorker({manager:f.manager});await new Promise(resolve=>worker.listen(0,'127.0.0.1',resolve));
+  t.after(async()=>{worker.closeAllConnections();await new Promise(resolve=>worker.close(resolve));});
+  const base='http://127.0.0.1:'+worker.address().port,body={username:videoInput.username,password:plain};
+  const call=(route,input)=>fetch(base+route,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),...input});
+  const success=await call('/video-auth/boat-01');assert.equal(success.status,200);assert.deepEqual(await success.json(),{authorized:true});
+  const wrong=await call('/video-auth/boat-02');assert.equal(wrong.status,200);assert.deepEqual(await wrong.json(),{authorized:false});
+  assert.equal((await fetch(base+'/video-auth/boat-01')).status,405);
+  assert.equal((await call('/video-auth/boat-01',{headers:{'Content-Type':'text/plain'}})).status,415);
+  assert.equal((await call('/video-auth/boat-01',{body:'x'.repeat(2049)})).status,413);
+  assert.equal((await call('/video-auth/boat-01',{body:'{'})).status,400);
+  assert.equal((await call('/video-auth/boat-01',{body:JSON.stringify({...body,password:'short'})})).status,400);
+});
+
+test('SRT 校验期间账号配置变化使旧快照失效，密码并行校验有明确并发上限',async t=>{
+  const f=await fixture(t);await f.manager.configureVideo(videoInput);
+  const original=crypto.pbkdf2,waiting=[];let started;
+  const began=new Promise(resolve=>started=resolve);
+  t.mock.method(crypto,'pbkdf2',function(...args){const callback=args.pop();return original.call(this,...args,(error,value)=>{waiting.push(()=>callback(error,value));if(waiting.length===4)started();});});
+  const pending=Array.from({length:4},()=>f.manager.authenticateVideo('boat-01',{username:videoInput.username,password:plain}));
+  await began;
+  await assert.rejects(f.manager.authenticateVideo('boat-01',{username:videoInput.username,password:plain}),{status:429});
+  await fsp.appendFile(f.file('passwd'),'unrelated-user:$7$101$salt$hash\n');
+  for(const release of waiting)release();
+  assert.deepEqual(await Promise.all(pending),Array.from({length:4},()=>({authorized:false})));
+  assert.equal(f.restarts.length,1);
+});
+
+test('administrator list and WHEP playback can concurrently read the actual helper manager without lock conflicts',async t=>{
+  const {createServer}=require('../server'),{EventEmitter}=require('node:events');
+  const f=await fixture(t),cloud=new EventEmitter();Object.assign(cloud,{enabled:true,start(){},stop(){},list:()=>({brokerConnected:true,devices:[]})});
+  let release,started,both,reads=0,gated=false;
+  const held=new Promise(resolve=>release=resolve),began=new Promise(resolve=>started=resolve),arrived=new Promise(resolve=>both=resolve),open=fsp.open;
+  t.mock.method(fsp,'open',async function(...args){
+    const handle=await open.call(this,...args);
+    if(args[0]===f.file('.boat-cloud-deployment')&&!gated){gated=true;started();await held;}
+    return handle;
+  });
+  const client=(method,route)=>{assert.equal(method,'GET');assert.equal(route,'/devices');const pending=f.manager.list();if(++reads===2)both();return pending;};
+  const origin='http://parallel-media.test',env={BOAT_ACCOUNTS_ENABLED:'1',BOAT_ACCOUNTS_ORIGIN:origin,BOAT_ADMIN_USERNAME:'admin',BOAT_ADMIN_PASSWORD:'parallel-admin-test',BOAT_GUEST_USERNAME:'guest',BOAT_GUEST_PASSWORD:'parallel-guest-test',
+    BOAT_VIDEO_MEDIA_ENABLED:'1',BOAT_VIDEO_MEDIA_AUTH_TOKEN:'a'.repeat(64),BOAT_VIDEO_MEDIA_READER_PASSWORD:'b'.repeat(64),BOAT_VIDEO_MEDIA_PUBLIC_HOST:'boat.example.test'};
+  const server=createServer({env,cloud,accountOptions:{storeFile:f.file('accounts.json')},mapOptions:{file:f.file('map.json')},mqttAdminOptions:{client},
+    videoMediaOptions:{client,transport:async input=>input.method==='POST'?{status:201,headers:{location:'/boat-01/whep/parallel','content-type':'application/sdp'},body:Buffer.from('v=0\r\nm=video 9 test\r\n')}:{status:204}}});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(async()=>{release();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));});
+  const base='http://127.0.0.1:'+server.address().port;
+  const login=await fetch(base+'/api/auth/login',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({username:'admin',password:'parallel-admin-test'})});
+  assert.equal(login.status,200);const cookie=login.headers.get('set-cookie').split(';')[0];
+  const admin=fetch(base+'/api/mqtt/devices',{headers:{Cookie:cookie,Origin:origin}});await began;
+  const video=fetch(base+'/api/video/media/boats/boat-01/whep',{method:'POST',headers:{Cookie:cookie,Origin:origin,'Content-Type':'application/sdp'},body:'v=0\r\nm=video 9 test\r\n'});
+  await arrived;release();const results=await Promise.all([admin,video]);
+  assert.deepEqual(results.map(item=>item.status),[200,201]);assert.equal(reads,2);assert.equal(f.restarts.length,0);
+  assert.equal((await results[0].json()).devices[0].deviceId,'boat-01');await results[1].text();
+});
