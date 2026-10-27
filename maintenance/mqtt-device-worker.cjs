@@ -23,6 +23,14 @@ function validateVideoInput(input){
     input.password.length<6||input.password.length>64||! /^[!-9;-~]+$/.test(input.password))throw fail('视频账号需提供有效设备 ID、用户名及 6～64 位不含冒号或空白的 ASCII 密码',400);
   return input;
 }
+function validateVideoUpdateInput(input){
+  if(!input||typeof input!=='object'||Array.isArray(input)||
+    Object.keys(input).some(key=>!['username','password','revision'].includes(key))||
+    typeof input.username!=='string'||!USER.test(input.username)||typeof input.revision!=='string'||!REVISION.test(input.revision)||
+    Object.hasOwn(input,'password')&&(typeof input.password!=='string'||input.password.length<6||input.password.length>64||! /^[!-9;-~]+$/.test(input.password)))
+    throw fail('视频账号配置版本、用户名或密码无效',400);
+  return input;
+}
 // Mosquitto 的盐化哈希可直接校验相同密码，重复执行配置不会无故重启 Broker。
 async function passwordMatches(password,encoded){
   const parts=String(encoded||'').split('$');let candidate,expected;
@@ -107,7 +115,11 @@ function parseConfigurations(passwd,acl,env){
   return {devices,videos,blocks,passwordUsers,prefix,bridgeBlockIndex};
 }
 function revisionFor(passwd,acl){return crypto.createHash('sha256').update(passwd).update('\0').update(acl).digest('hex');}
-function publicSnapshot(config){return {devices:config.devices.map(({deviceId,username})=>({deviceId,username})),revision:config.revision,canCreate:true};}
+function publicSnapshot(config){return {
+  devices:config.devices.map(({deviceId,username})=>({deviceId,username})),
+  videos:config.videos.map(({deviceId,username})=>({deviceId,username})),
+  revision:config.revision,canCreate:true,canManageVideo:true
+};}
 async function execute(file,args,{timeout=20000}={}){
   return new Promise((resolve,reject)=>{
     const child=spawn(file,args,{stdio:['ignore','ignore','ignore'],shell:false,env:{PATH:'/usr/sbin:/usr/bin:/sbin:/bin',LANG:'C.UTF-8'}});
@@ -227,7 +239,7 @@ function createMqttDeviceManager(options={}){
   }
   return {
     list:()=>serialized(async()=>publicSnapshot(await snapshot())),
-    // 仅供受信任的 root CLI 使用；不增加网页或 Unix socket 的改视频账号路由。
+    // 保留给受信任的 root CLI 的首次配置入口；网页修改使用下方固定设备路由。
     configureVideo:input=>{
       try{validateVideoInput(input);}catch(error){return Promise.reject(error);}
       return serialized(async()=>{
@@ -250,6 +262,49 @@ function createMqttDeviceManager(options={}){
         const access=before.records['access.txt'].text.trimEnd()+'\n\nMQTT video publisher configured.\nVideo device ID: '+input.deviceId+'\nVideo username: '+input.username+'\nVideo publish topic: '+topic+'\nVideo password: (not stored here; use the private provisioning configuration)\n';
         const result=await commit(before,{passwd:nextPasswd,acl:blocks.join(''),'access.txt':access,'mosquitto.conf':broker});
         return {...result,video:{deviceId:input.deviceId,username:input.username,topic}};
+      });
+    },
+    updateVideo:(deviceId,input)=>{
+      if(typeof deviceId!=='string'||!USER.test(deviceId))return Promise.reject(fail('设备 ID 无效',400));
+      try{validateVideoUpdateInput(input);}catch(error){return Promise.reject(error);}
+      return serialized(async()=>{
+        const before=await snapshot(),device=before.devices.find(item=>item.deviceId===deviceId),existing=before.videos.find(item=>item.deviceId===deviceId);
+        if(!device)throw fail('设备不存在或不属于受管理设备',404);
+        if(input.revision!==before.revision)throw fail('视频账号配置已变化，请重新读取后修改',409);
+        if(!existing&&!Object.hasOwn(input,'password'))throw fail('首次设置视频账号必须提供密码',400);
+        if(before.passwordUsers.has(input.username)&&(!existing||existing.username!==input.username))throw fail('视频用户名已被其他账号或设备占用，不能覆盖',409);
+        const topic=before.prefix+'/'+deviceId+'/video',bridgeRule='topic read '+before.prefix+'/+/video';
+        const videoBlocks=before.blocks.map((block,index)=>({block,index})).filter(({block})=>block.split(/\r?\n/).map(line=>line.trim().replace(/[ \t]+/g,' ')).includes('topic write '+topic));
+        if(videoBlocks.length>1||(!existing&&videoBlocks.length))throw fail('该船的视频账号权限不明确，不能覆盖现有配置',409);
+        if(existing&&videoBlocks.length!==1)throw fail('该船的视频账号权限不明确，不能覆盖现有配置',409);
+        const bridgeBlock=before.blocks[before.bridgeBlockIndex],bridgeRules=bridgeBlock.split(/\r?\n/).map(line=>line.trim().replace(/[ \t]+/g,' '));
+        const oldUsername=existing?.username,oldHash=existing&&before.passwordUsers.get(oldUsername),hasPassword=Object.hasOwn(input,'password');
+        const samePassword=!!existing&&hasPassword&&await passwordMatches(input.password,oldHash);
+        const passwordUnchanged=!hasPassword||samePassword;
+        const broker=videoBrokerConfiguration(before.records['mosquitto.conf'].text);
+        if(existing&&input.username===oldUsername&&passwordUnchanged&&bridgeRules.includes(bridgeRule)&&broker===before.records['mosquitto.conf'].text)
+          return {ok:true,...publicSnapshot(before),requiresReconnect:false,video:{deviceId,username:input.username,topic}};
+        const hash=hasPassword?(samePassword?oldHash:await passwordHash(input.username,input.password)):oldHash;
+        const check=await snapshot();
+        if(check.revision!==before.revision||check.records['runtime.env'].text!==before.records['runtime.env'].text)throw fail('MQTT 配置在保存前发生变化，请重新读取',409);
+        let nextPasswd=before.records.passwd.text;
+        if(existing){
+          let replaced=false;
+          nextPasswd=nextPasswd.split(/\r?\n/).map(line=>{
+            if(line.startsWith(oldUsername+':')){if(replaced)throw fail('MQTT 密码文件中视频账号重复，不能修改',409);replaced=true;return input.username+':'+hash;}
+            return line;
+          }).join('\n');
+          if(!replaced)throw fail('视频账号密码记录缺失，不能修改',409);
+        }else nextPasswd=nextPasswd.replace(/\n?$/,'\n')+input.username+':'+hash+'\n';
+        const blocks=before.blocks.slice();
+        if(existing){
+          const target=existing.blockIndex;
+          blocks[target]=blocks[target].replace(/^user[ \t]+[^\r\n]+/m,'user '+input.username);
+        }else blocks.push('\nuser '+input.username+'\ntopic write '+topic+'\n');
+        if(!bridgeRules.includes(bridgeRule))blocks[before.bridgeBlockIndex]=bridgeBlock.trimEnd()+'\n'+bridgeRule+'\n\n';
+        const access=before.records['access.txt'].text.trimEnd()+'\n\nMQTT video publisher configured from administrator settings.\nVideo device ID: '+deviceId+'\nVideo username: '+input.username+'\nVideo publish topic: '+topic+'\nVideo password: (not stored here; use the password set by the administrator)\n';
+        const result=await commit(before,{passwd:nextPasswd,acl:blocks.join(''),'access.txt':access,'mosquitto.conf':broker});
+        return {...result,video:{deviceId,username:input.username,topic}};
       });
     },
     create:input=>{
@@ -306,13 +361,14 @@ function createMqttDeviceWorker(options={}){
     try{
       if(req.url==='/devices'&&req.method==='GET')return json(200,await manager.list());
       const match=req.url?.match(/^\/devices\/([A-Za-z0-9_-]{1,64})$/);
-      if(match&&req.method==='PUT'||req.url==='/devices'&&req.method==='POST'){
+      const videoMatch=req.url?.match(/^\/devices\/([A-Za-z0-9_-]{1,64})\/video$/);
+      if((match||videoMatch)&&req.method==='PUT'||req.url==='/devices'&&req.method==='POST'){
         if(!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']||''))throw fail('MQTT 请求需要 JSON 格式',415);
         if(Number(req.headers['content-length'])>2048)throw fail('MQTT 请求过大',413);
         const input=await readBody(req);if(req.aborted||res.destroyed)throw fail('请求已中断，未提交修改',400);
-        return json(200,match?await manager.update(match[1],input):await manager.create(input));
+        return json(200,videoMatch?await manager.updateVideo(videoMatch[1],input):match?await manager.update(match[1],input):await manager.create(input));
       }
-      json(req.url==='/devices'||match?405:404,{error:'MQTT 管理接口或方法不支持'});
+      json(req.url==='/devices'||match||videoMatch?405:404,{error:'MQTT 管理接口或方法不支持'});
     }catch(error){req.resume();if(!res.destroyed)json(error.status||503,{error:error.status?error.message:'MQTT 管理组件不可用'});}
   });
   server.requestTimeout=10000;server.headersTimeout=6000;server.maxRequestsPerSocket=20;server.maxConnections=16;

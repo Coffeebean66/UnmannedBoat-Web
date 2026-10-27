@@ -4,7 +4,7 @@ const { test } = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http'), crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const { createServer } = require('../server');
-const { createMqttDeviceClient, validateInput, snapshot } = require('../server/mqtt-device-api');
+const { createMqttDeviceClient, validateInput, validateVideoInput, snapshot } = require('../server/mqtt-device-api');
 const ORIGIN = 'https://mqtt-admin.test', revision = 'a'.repeat(64), nextRevision = 'b'.repeat(64);
 const credentials = { admin: 'admin-only-test', guest: 'guest-only-test' };
 
@@ -58,7 +58,7 @@ test('MQTT account list and mutation require a currently logged-in platform admi
   assert.equal(f.calls.length, 0);
   const listed = await f.call('/api/mqtt/devices', { cookie: admin, origin: null });
   assert.equal(listed.status, 200); assert.equal(listed.headers['cache-control'], 'no-store');
-  assert.deepEqual(listed.data, { enabled: true, devices: [{ deviceId: 'boat-01', username: 'boat-01' }], revision });
+  assert.deepEqual(listed.data, { enabled: true, devices: [{ deviceId: 'boat-01', username: 'boat-01' }], revision, canManageVideo: false, videos: [] });
   assert.doesNotMatch(listed.raw, /password|secret|must-not-leak/);
   const changed = await f.call('/api/mqtt/devices/boat-01', { cookie: admin, method: 'PATCH', body: input() });
   assert.equal(changed.status, 200); assert.equal(changed.data.revision, nextRevision);
@@ -223,4 +223,51 @@ test('account revoked while checking helper capability cannot dispatch a new dev
   const f=await fixture(t,{client:async(method,route)=>{calls.push({method,route});started();await new Promise(resolve=>release=resolve);return {devices:[{deviceId:'boat-01',username:'boat-01'}],revision,canCreate:true};}}),cookie=await f.login();
   const pending=f.call('/api/mqtt/devices',{cookie,method:'POST',body:{...input(),deviceId:'boat-02'}});await began;
   await f.call('/api/auth/session',{cookie,method:'DELETE'});release();const result=await pending;assert.equal(result.status,401);assert.equal(calls.length,1);
+});
+
+test('video capability and public metadata are exposed per boat while secrets remain stripped', async t => {
+  const videos = [{ deviceId: 'boat-01', username: 'boat-video' }], calls = []; let currentRevision = revision;
+  const client = async (method, route, body) => {
+    calls.push({ method, route, body: body && { ...body } });
+    if (route === '/devices') return { devices: [{ deviceId: 'boat-01', username: 'boat-01' }], revision: currentRevision, canManageVideo: true, videos, password: 'private', secret: 'private' };
+    currentRevision = nextRevision;
+    return { ok: true, requiresReconnect: false, devices: [{ deviceId: 'boat-01', username: 'boat-01' }], revision: currentRevision,
+      canManageVideo: true, videos: [{ deviceId: 'boat-01', username: body.username }], password: 'private', hash: '$7$private' };
+  };
+  const f = await fixture(t, { client }), cookie = await f.login();
+  const listed = await f.call('/api/mqtt/devices', { cookie });
+  assert.equal(listed.status, 200); assert.equal(listed.data.canManageVideo, true);
+  assert.deepEqual(listed.data.videos, videos); assert.doesNotMatch(listed.raw, /password|secret|private|\$7\$/i);
+  const changed = await f.call('/api/mqtt/devices/boat-01/video', { cookie, method: 'PATCH', body: { username: 'boat-camera', password: 'six6!!', revision } });
+  assert.equal(changed.status, 200, changed.raw); assert.equal(changed.data.requiresReconnect, false);
+  assert.deepEqual(calls.slice(-2), [
+    { method: 'GET', route: '/devices', body: undefined },
+    { method: 'PUT', route: '/devices/boat-01/video', body: { username: 'boat-camera', password: 'six6!!', revision } }
+  ]);
+  assert.doesNotMatch(changed.raw, /six6|password|private|\$7\$/i);
+  const preserved = await f.call('/api/mqtt/devices/boat-01/video', { cookie, method: 'PATCH', body: { username: 'boat-camera', revision: nextRevision } });
+  assert.equal(preserved.status, 200); assert.equal(Object.hasOwn(calls.at(-1).body, 'password'), false);
+});
+
+test('video account mutation requires the new helper capability, admin session and same origin', async t => {
+  const f = await fixture(t), admin = await f.login(), guest = await f.login('guest'), body = { username: 'boat-video', password: 'six6!!', revision };
+  assert.equal((await f.call('/api/mqtt/devices/boat-01/video', { cookie: guest, method: 'PATCH', body })).status, 403);
+  assert.equal((await f.call('/api/mqtt/devices/boat-01/video', { cookie: admin, origin: 'https://evil.test', method: 'PATCH', body })).status, 403);
+  assert.equal((await f.call('/api/mqtt/devices/boat-01/video', { cookie: admin, method: 'PATCH', body })).status, 503);
+  assert.equal(f.calls.length, 1, 'Old helper is queried for capability but never receives PUT');
+  assert.equal((await f.call('/api/mqtt/devices/boat-01/video', { cookie: admin, method: 'PATCH', body: { ...body, password: 'short' } })).status, 400);
+  assert.equal((await f.call('/api/mqtt/devices/boat-01/video', { cookie: admin, method: 'PATCH', body: { ...body, password: 'has space' } })).status, 400);
+});
+
+test('video snapshots reject missing boats, duplicate assignments and usernames colliding with device accounts', () => {
+  const base = { devices: [{ deviceId: 'boat-01', username: 'boat-01' }], revision, canManageVideo: true };
+  assert.deepEqual(snapshot({ ...base, videos: [] }).videos, []);
+  for (const videos of [
+    [{ deviceId: 'boat-02', username: 'camera' }],
+    [{ deviceId: 'boat-01', username: 'camera' }, { deviceId: 'boat-01', username: 'other' }],
+    [{ deviceId: 'boat-01', username: 'boat-01' }],
+    [{ deviceId: 'boat-01', username: 'bad user', password: 'must-not-leak' }]
+  ]) assert.throws(() => snapshot({ ...base, videos }), /视频账号/);
+  assert.deepEqual(validateVideoInput({ deviceId: 'boat-01', username: 'camera', password: 'six6!!', revision }), { deviceId: 'boat-01', username: 'camera', password: 'six6!!', revision });
+  assert.throws(() => validateVideoInput({ deviceId: 'boat-01', username: 'camera', password: 'short', revision }));
 });

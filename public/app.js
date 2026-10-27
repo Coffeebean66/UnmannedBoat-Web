@@ -10,6 +10,7 @@
   const mapSettings=new BoatMapSettingsPanel();
   const users=new BoatUserManagementPanel({toast});
   const mqttDevices=new BoatMqttDeviceSettingsPanel();
+  const videoDevices=new BoatVideoDeviceSettingsPanel();
   const videoView=new BoatVideoView();
   const fleet=new BoatFleetLink(cloud);
   const fleetView=new BoatFleetView({onSelect:id=>selectBoat(id),onConfigure:id=>openBoatSettings(id).catch(error=>toast(error.message)),onVideo:id=>openBoatVideo(id).catch(error=>toast(error.message))});
@@ -349,7 +350,7 @@
     if(!await selecting||request!==videoOpenSequence||generation!==cloud.generation||cloud.selectedId!==id||!cloud.wanted||accountGeneration!==window.BoatAuth?.generation)return;
     window.BoatWorkspace?.navigate('video');
   }
-  const openPlatformSettings=()=>{window.BoatAuth?.assertManage();$('platformSettingsDialog').showModal();users.open();mqttDevices.open();mapSettings.open();};
+  const openPlatformSettings=()=>{window.BoatAuth?.assertManage();$('platformSettingsDialog').showModal();users.open();mqttDevices.open();videoDevices.open();mapSettings.open();};
   on('settingsToggle',openSettings);
   on('settingsEntry',openSettings);
   on('settingsClose',()=>$('settingsDialog').close());
@@ -357,8 +358,8 @@
   on('platformSettingsToggle',openPlatformSettings);
   on('sidebarPlatformSettings',openPlatformSettings);
   on('platformSettingsClose',()=>$('platformSettingsDialog').close());
-  $('platformSettingsDialog').addEventListener('close',()=>{users.close();mqttDevices.close();mapSettings.close();});
-  window.addEventListener('pagehide',()=>{users.destroy();mqttDevices.destroy();},{once:true});
+  $('platformSettingsDialog').addEventListener('close',()=>{users.close();mqttDevices.close();videoDevices.close();mapSettings.close();});
+  window.addEventListener('pagehide',()=>{users.destroy();mqttDevices.destroy();videoDevices.destroy();},{once:true});
   for(const [id,kind] of [['readParameters','read'],['writeParameters','write'],['saveFlash','flash']])on(id,async()=>{
     if(!$('settingsDialog').open||$('settingsDialog').dataset.deviceId!==cloud.selectedId)throw Error('调参对象已变化，请从对应无人船重新进入');
     try{await params.command(kind);}finally{syncParameterAccess();}

@@ -6,6 +6,7 @@ const SOCKET_PATH = '/run/unmanned-boat-mqtt-admin/control.sock';
 const NAME = /^[A-Za-z0-9_-]{1,64}$/;
 const REVISION = /^[a-f0-9]{64}$/;
 const PASSWORD = /^[\x21-\x39\x3b-\x7e]{8,64}$/;
+const VIDEO_PASSWORD = /^[\x21-\x39\x3b-\x7e]{6,64}$/;
 const unavailable = error => ['ENOENT', 'ECONNREFUSED', 'ENOTSOCK', 'EACCES'].includes(error.code);
 const fault = (status, message) => Object.assign(Error(message), { status });
 
@@ -38,8 +39,10 @@ function createMqttDeviceClient({ socketPath = SOCKET_PATH, timeoutMs = 30000 } 
       response.on('end', () => {
         if (response.statusCode !== 200) {
           // 子进程或组件错误详情可能包含配置内容，不直接转发给浏览器。
-          const messages = { 400: '设备账号格式不正确', 404: '设备不存在，请重新读取', 405: 'MQTT 管理组件版本较旧，请按 README 重新安装管理组件以支持新增无人船',
-            409: '配置已变化、账号重名或组件正在处理请求，请重新读取后再操作' };
+          const videoRoute = /\/video$/.test(route);
+          const messages = { 400: videoRoute ? '视频账号格式不正确' : '设备账号格式不正确', 404: '设备不存在，请重新读取',
+            405: videoRoute ? 'MQTT 管理组件版本较旧或未安装视频账号管理能力，请按 README 运行 maintenance/install-mqtt-device-admin.sh 后重试' : 'MQTT 管理组件版本较旧，请按 README 重新安装管理组件以支持此操作',
+            409: videoRoute ? '视频账号配置已变化、用户名重名或管理组件正在处理请求，请重新读取后再操作；如提示版本较旧，请按 README 运行 maintenance/install-mqtt-device-admin.sh 后重试' : '配置已变化、账号重名或组件正在处理请求，请重新读取后再操作' };
           return finish(fault(messages[response.statusCode] ? response.statusCode : 503,
             messages[response.statusCode] || '设备账号保存未确认，请重新读取；如持续失败请检查管理组件日志'));
         }
@@ -65,7 +68,30 @@ function snapshot(data) {
     ids.add(device.deviceId); names.add(device.username);
     return { deviceId: device.deviceId, username: device.username };
   });
-  return { devices, revision: data.revision, ...(data.canCreate === true ? { canCreate: true } : {}) };
+  const result = { devices, revision: data.revision, ...(data.canCreate === true ? { canCreate: true } : {}) };
+  // 新版管理组件公开视频账号时只保留设备 ID 和用户名；任何密码、哈希或其它字段都不会进入网页响应。
+  if (Object.hasOwn(data, 'canManageVideo')) {
+    if (typeof data.canManageVideo !== 'boolean') throw fault(503, '设备管理组件返回了无效视频管理能力');
+    result.canManageVideo = data.canManageVideo;
+  }
+  if (Object.hasOwn(data, 'videos')) {
+    if (!Array.isArray(data.videos) || data.videos.length > devices.length) throw fault(503, '设备管理组件返回了无效视频账号');
+    const videoIds = new Set(), videoNames = new Set();
+    result.videos = data.videos.map(video => {
+      if (!video || typeof video !== 'object' || Array.isArray(video) ||
+        typeof video.deviceId !== 'string' || !NAME.test(video.deviceId) ||
+        typeof video.username !== 'string' || !NAME.test(video.username) ||
+        !ids.has(video.deviceId) || videoIds.has(video.deviceId) || videoNames.has(video.username) || names.has(video.username)) {
+        throw fault(503, '设备管理组件返回了无效视频账号');
+      }
+      videoIds.add(video.deviceId); videoNames.add(video.username);
+      return { deviceId: video.deviceId, username: video.username };
+    });
+  } else if (data.canManageVideo === true) {
+    // 能力已声明时必须同时提供完整的公开列表，避免网页把未知状态误当成未配置。
+    throw fault(503, '设备管理组件返回的视频账号列表缺失，请重新安装管理组件');
+  }
+  return result;
 }
 
 function validateInput(value) {
@@ -85,6 +111,27 @@ function validateCreateInput(value) {
   const { deviceId, ...credentials } = value, input = validateInput(credentials);
   if (!Object.hasOwn(input, 'password')) throw fault(400, '新增无人船必须设置 MQTT 接入密码');
   return { deviceId, ...input };
+}
+
+function validateVideoInput(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+    Object.keys(value).some(key => !['deviceId', 'username', 'password', 'revision'].includes(key)) ||
+    typeof value.deviceId !== 'string' || !NAME.test(value.deviceId) ||
+    typeof value.username !== 'string' || !NAME.test(value.username) ||
+    typeof value.revision !== 'string' || !REVISION.test(value.revision) ||
+    Object.hasOwn(value, 'password') && (typeof value.password !== 'string' || !VIDEO_PASSWORD.test(value.password))) {
+    throw fault(400, '视频账号需为有效设备 ID、1～64 位用户名、6～64 位不含冒号或空白的 ASCII 密码；请重新读取后操作');
+  }
+  return { deviceId: value.deviceId, username: value.username, revision: value.revision,
+    ...(Object.hasOwn(value, 'password') ? { password: value.password } : {}) };
+}
+
+function validateVideoPatchInput(value, deviceId) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+    Object.keys(value).some(key => !['username', 'password', 'revision'].includes(key))) {
+    throw fault(400, '视频账号格式不正确，请重新读取后操作');
+  }
+  return validateVideoInput({ deviceId, ...value });
 }
 
 function readBody(req, timeoutMs) {
@@ -121,18 +168,20 @@ function createMqttDeviceApi({ accounts, client = createMqttDeviceClient(), body
     if (!session) { json(res, 401, { error: '请先登录管理员账户' }); return true; }
     if (session.value.role !== 'admin') { json(res, 403, { error: '仅管理员可以管理 MQTT 设备账号' }); return true; }
     const collection = url.pathname === '/api/mqtt/devices';
+    const videoMatch = url.pathname.match(/^\/api\/mqtt\/devices\/([A-Za-z0-9_-]{1,64})\/video$/);
     const match = url.pathname.match(/^\/api\/mqtt\/devices\/([A-Za-z0-9_-]{1,64})$/);
-    if (!collection && !match) { json(res, 404, { error: '设备不存在' }); return true; }
+    if (!collection && !match && !videoMatch) { json(res, 404, { error: '设备不存在' }); return true; }
     const creating = collection && req.method === 'POST';
-    if (!(collection && req.method === 'GET' || creating || match && req.method === 'PATCH')) {
-      res.setHeader('Allow', collection ? 'GET, POST' : 'PATCH'); json(res, 405, { error: '不支持此设备账号管理方法' }); return true;
+    const videoMutation = !!videoMatch && req.method === 'PATCH';
+    if (!(collection && req.method === 'GET' || creating || match && req.method === 'PATCH' || videoMutation)) {
+      res.setHeader('Allow', collection ? 'GET, POST' : videoMatch ? 'PATCH' : 'PATCH'); json(res, 405, { error: '不支持此设备账号管理方法' }); return true;
     }
     const browserRead = collection && req.method === 'GET' && !req.headers.origin && (!req.headers['sec-fetch-site'] || req.headers['sec-fetch-site'] === 'same-origin');
     if (!browserRead && !accounts.sameOrigin(req)) { json(res, 403, { error: '请从本站发起设备账号操作' }); return true; }
     if (collection && req.method === 'GET') {
       try {
         const data = snapshot(await client('GET', '/devices'));
-        if (active(session)) json(res, 200, { enabled: true, ...data });
+        if (active(session)) json(res, 200, { enabled: true, ...data, canManageVideo: data.canManageVideo === true, videos: Array.isArray(data.videos) ? data.videos : [] });
         else json(res, 401, { error: '账户会话已失效，请重新登录' });
       } catch (error) {
         if (!active(session)) json(res, 401, { error: '账户会话已失效，请重新登录' });
@@ -142,9 +191,13 @@ function createMqttDeviceApi({ accounts, client = createMqttDeviceClient(), body
       return true;
     }
     if (writing) { json(res, 409, { error: '正在保存 MQTT 设备账号，请等待完成后重新读取' }); return true; }
-    writing = true; let input;
+    writing = true; let input, video = false;
     try {
-      try { input = (creating ? validateCreateInput : validateInput)(await readBody(req, bodyTimeoutMs)); }
+      try {
+        const body = await readBody(req, bodyTimeoutMs);
+        if (videoMutation) { input = validateVideoPatchInput(body, videoMatch[1]); video = true; }
+        else input = (creating ? validateCreateInput : validateInput)(body);
+      }
       catch (error) { res.setHeader('Connection', 'close'); req.resume(); throw error; }
       // 请求体接收可能耗时，向特权组件派发前再次核验管理员会话。
       if (!active(session) || req.aborted || res.destroyed) throw fault(401, '账户会话已失效，请重新登录');
@@ -153,7 +206,17 @@ function createMqttDeviceApi({ accounts, client = createMqttDeviceClient(), body
         if (!current.canCreate) throw fault(503, 'MQTT 管理组件版本较旧，请按 README 重新运行 maintenance/install-mqtt-device-admin.sh 后添加无人船');
         if (!active(session) || req.aborted || res.destroyed) throw fault(401, '账户会话已失效，请重新登录');
       }
-      const result = await client(creating ? 'POST' : 'PUT', creating ? '/devices' : '/devices/' + match[1], input);
+      if (video) {
+        // 视频账号必须由新版管理组件处理；旧组件不能静默退化为网页本地配置。
+        const current = snapshot(await client('GET', '/devices'));
+        if (current.canManageVideo !== true) throw fault(503, 'MQTT 管理组件尚未启用视频账号管理，请按 README 运行 maintenance/install-mqtt-device-admin.sh 后重试');
+        if (!current.devices.some(device => device.deviceId === input.deviceId)) throw fault(404, '设备不存在，请重新读取');
+        if (input.revision !== current.revision) throw fault(409, '配置已变化，请重新读取后再操作');
+        if (!active(session) || req.aborted || res.destroyed) throw fault(401, '账户会话已失效，请重新登录');
+      }
+      const route = video ? '/devices/' + input.deviceId + '/video' : creating ? '/devices' : '/devices/' + match[1];
+      const requestBody = video ? (() => { const { deviceId, ...credentials } = input; return credentials; })() : input;
+      const result = await client(creating ? 'POST' : 'PUT', route, requestBody);
       delete input.password;
       const data = snapshot(result);
       if (result.ok !== true || typeof result.requiresReconnect !== 'boolean') throw fault(503, '设备管理组件响应异常，修改结果未确认，请重新读取');
@@ -168,4 +231,4 @@ function createMqttDeviceApi({ accounts, client = createMqttDeviceClient(), body
   } };
 }
 
-module.exports = { createMqttDeviceApi, createMqttDeviceClient, snapshot, validateInput, validateCreateInput, SOCKET_PATH };
+module.exports = { createMqttDeviceApi, createMqttDeviceClient, snapshot, validateInput, validateCreateInput, validateVideoInput, SOCKET_PATH };

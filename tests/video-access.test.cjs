@@ -112,3 +112,43 @@ test('新装部署允许视频描述报文并为桥接账号提供视频主题�
   const script=fs.readFileSync(path.join(__dirname,'../deploy-cloud.sh'),'utf8');
   assert.match(script,/topic read boats\/\+\/video/);assert.match(script,/max_packet_size 8192/);assert.match(script,/message_size_limit 4096/);
 });
+
+test('视频管理接口首次设置仅返回元数据，改名保留旧哈希并支持同配置空操作和改密',async t=>{
+  const f=await fixture(t),before=await f.manager.list();
+  assert.equal(before.canManageVideo,true);assert.deepEqual(before.videos,[]);
+  const first=await f.manager.updateVideo('boat-01',{username:'camera-one',password:plain,revision:before.revision});
+  assert.equal(first.requiresReconnect,true);assert.deepEqual(first.videos,[{deviceId:'boat-01',username:'camera-one'}]);
+  assert.doesNotMatch(JSON.stringify(first),/video-test|\$7\$|fixture-private/);
+  const firstHash=(await read(f,'passwd')).split('\n').find(line=>line.startsWith('camera-one:'));
+  const renamed=await f.manager.updateVideo('boat-01',{username:'camera-renamed',revision:first.revision});
+  assert.equal(renamed.requiresReconnect,true);assert.deepEqual(renamed.videos,[{deviceId:'boat-01',username:'camera-renamed'}]);
+  assert.ok((await read(f,'passwd')).includes(firstHash.slice(firstHash.indexOf(':'))));assert.doesNotMatch(await read(f,'acl'),/user camera-one\n/);assert.match(await read(f,'acl'),/user camera-renamed\ntopic write boats\/boat-01\/video/);
+  const noop=await f.manager.updateVideo('boat-01',{username:'camera-renamed',revision:renamed.revision});assert.equal(noop.requiresReconnect,false);assert.equal(f.restarts.length,2);
+  const rotated=await f.manager.updateVideo('boat-01',{username:'camera-renamed',password:'rotated-video-Secret!9',revision:renamed.revision});
+  assert.equal(rotated.requiresReconnect,true);assert.notEqual((await read(f,'passwd')).split('\n').find(line=>line.startsWith('camera-renamed:')),firstHash.replace('camera-one:','camera-renamed:'));assert.doesNotMatch(JSON.stringify(rotated),/rotated-video|\$7\$/);
+});
+
+test('视频管理拒绝过时版本、普通账号和其他视频账号冲突，失败不改文件',async t=>{
+  const f=await fixture(t),first=await f.manager.updateVideo('boat-01',{username:'camera-one',password:plain,revision:(await f.manager.list()).revision});
+  const beforePasswd=await read(f,'passwd'),beforeAcl=await read(f,'acl');
+  await assert.rejects(f.manager.updateVideo('boat-01',{username:'boat-web-bridge',revision:first.revision}),{status:409});
+  await assert.rejects(f.manager.updateVideo('boat-01',{username:'camera-renamed',revision:'a'.repeat(64)}),{status:409});
+  await f.manager.create({deviceId:'boat-02',username:'boat-two',password:'boat-two-Secret!2',revision:(await f.manager.list()).revision});
+  const second=await f.manager.configureVideo({deviceId:'boat-02',username:'camera-two',password:'second-video-Secret!2'});
+  const stablePasswd=await read(f,'passwd'),stableAcl=await read(f,'acl');
+  await assert.rejects(f.manager.updateVideo('boat-01',{username:'camera-two',revision:second.revision}),{status:409});
+  assert.equal(await read(f,'passwd'),stablePasswd);assert.equal(await read(f,'acl'),stableAcl);
+  assert.match(beforePasswd,/boat-01:/);assert.match(beforeAcl,/user boat-web-bridge/);
+});
+
+test('视频管理事务失败回滚全部四个文件且固定 PUT 路由不回显密码',async t=>{
+  let restarts=0;const f=await fixture(t,{service:async()=>{if(++restarts===1)throw Error('video broker restart failed');}});
+  const before=Object.fromEntries(await Promise.all(['passwd','acl','access.txt','mosquitto.conf'].map(async name=>[name,await read(f,name)])));
+  await assert.rejects(f.manager.updateVideo('boat-01',{username:'camera-one',password:plain,revision:(await f.manager.list()).revision}),{status:503});
+  for(const [name,text]of Object.entries(before))assert.equal(await read(f,name),text);assert.equal(restarts,2);
+  const g=await fixture(t),worker=require('../maintenance/mqtt-device-worker.cjs').createMqttDeviceWorker({manager:g.manager});await new Promise(resolve=>worker.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>worker.close(resolve)));
+  const base='http://127.0.0.1:'+worker.address().port,revision=(await g.manager.list()).revision;
+  const response=await fetch(base+'/devices/boat-01/video',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'camera-route',password:'route-video-Secret!2',revision})});
+  assert.equal(response.status,200);const body=await response.text();assert.doesNotMatch(body,/route-video|\$7\$/);const json=JSON.parse(body);assert.deepEqual(json.videos,[{deviceId:'boat-01',username:'camera-route'}]);
+  assert.equal((await fetch(base+'/devices/boat-01/video',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status,405);
+});

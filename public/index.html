@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="map-settings.css">
   <link rel="stylesheet" href="user-management.css">
   <link rel="stylesheet" href="mqtt-device-settings.css">
+  <link rel="stylesheet" href="video-device-settings.css">
   <link rel="stylesheet" href="workspace.css">
   <link rel="stylesheet" href="fleet.css">
   <link rel="stylesheet" href="settings-layout.css">
@@ -39,6 +40,7 @@
   <script defer src="map-settings.js"></script>
   <script defer src="user-management.js"></script>
   <script defer src="mqtt-device-settings.js"></script>
+  <script defer src="video-device-settings.js"></script>
   <script defer src="fleet-view.js"></script>
   <script defer src="video-view.js"></script>
   <script defer src="app.js"></script>
@@ -87,7 +89,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.24.0</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.25.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -362,6 +364,14 @@
           </form>
         </div>
         <p id="mqttDeviceStatus" class="mqtt-device-status" role="status" aria-live="polite" data-tone="neutral">读取服务器上的 MQTT 设备账号；密码不会返回到网页。</p>
+      </section>
+      <section id="videoDeviceSettings" class="video-device-settings mqtt-device-settings" aria-labelledby="videoDeviceTitle" hidden>
+        <div class="mqtt-device-heading"><div class="mqtt-device-title"><span class="card-icon blue" data-icon="video"></span><div><h3 id="videoDeviceTitle">视频 MQTT 接入账号</h3><p>VIDEO ACCESS · 仅管理员可操作</p></div><button id="videoDeviceRead" type="button" class="subtle">重新读取视频账号</button></div></div>
+        <p id="videoDeviceDescription" class="mqtt-device-description">为每艘无人船配置专用的视频发布用户名和密码。此账号只允许写入该船的 video 主题，不会改变遥测设备账号；密码不会回显。</p>
+        <p id="videoDeviceAccess" class="mqtt-device-access" hidden></p>
+        <div id="videoDeviceContent" hidden><div class="mqtt-device-summary"><strong id="videoDeviceCount">尚未读取</strong><span>保存会让 MQTT 服务短暂重连</span></div><ul id="videoDeviceList" class="mqtt-device-list" aria-label="视频 MQTT 账号列表" hidden></ul>
+          <form id="videoDeviceForm" class="mqtt-device-form" autocomplete="off" hidden><h4>配置视频 MQTT 账号</h4><div class="mqtt-device-fields"><label>设备 ID<input id="videoDeviceId" type="text" readonly></label><label>视频用户名<input id="videoDeviceUsername" type="text" maxlength="64" autocomplete="off" autocapitalize="none" spellcheck="false"></label><label>视频密码<input id="videoDevicePassword" type="password" maxlength="64" autocomplete="new-password"></label><label>确认密码<input id="videoDevicePasswordConfirm" type="password" maxlength="64" autocomplete="new-password"></label></div><p id="videoDevicePasswordHint" class="mqtt-device-password-hint">视频密码为 6–64 位可打印 ASCII 字符，不能包含空格、冒号或中文；密码不会回显。</p><p class="mqtt-device-reconnect-notice">保存会重启 MQTT 服务并短暂中断所有设备连接；视频发送端需使用保存后的新账号密码。</p><div class="mqtt-device-actions"><button id="videoDeviceSave" type="submit" class="primary" disabled>保存视频账号</button><button id="videoDeviceCancel" type="button" class="subtle">取消编辑</button></div></form>
+        </div><p id="videoDeviceStatus" class="mqtt-device-status" role="status" aria-live="polite">读取服务器上的视频 MQTT 账号；密码不会返回到网页。</p>
       </section>
       <section id="mapSettings" class="map-settings" aria-labelledby="mapSettingsTitle" hidden>
         <div class="map-settings-heading"><div class="map-settings-title"><span class="card-icon blue" data-icon="map"></span><div><h3 id="mapSettingsTitle">平台地图设置</h3><p>AMAP · 仅保存在服务器</p></div></div><a class="map-settings-guide" href="https://github.com/Coffeebean66/UnmannedBoat-Web/blob/main/AMAP_SETUP.md" target="_blank" rel="noopener noreferrer">申请与配置教程 ↗</a></div>
