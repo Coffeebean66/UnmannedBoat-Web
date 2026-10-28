@@ -1,0 +1,114 @@
+# 服务器录像与保存目录
+
+录像由服务器的 MediaMTX 直接保存为分段 MP4，不依赖浏览器录屏，也不需要 Docker。开始一艘船的录像后，关闭网页、退出登录或查看另一艘船，都不会停止已经启用的服务器录像。已接入的 SRT 或原始 UDP 视频可以沿用原有发送程序；UDP 支持 RTP / H.264 和 MPEG-TS，两者需要分别匹配配置。
+
+## 安装或升级录像组件
+
+先将 Web 项目更新到支持服务器录像的版本，再在服务器最新源码目录执行：
+
+```bash
+# 已安装的服务器也要重新运行；网页的一键更新不会替换 root 管理的媒体服务配置。
+sudo bash maintenance/install-video-media.sh boat.example.com 7890
+```
+
+将 `boat.example.com` 换成媒体可直连的公网域名或 IPv4；第二个参数是网页服务的本机端口，默认 `7890`。升级脚本保留已有内部鉴权密钥、录像文件、媒体输入路径和端口，并保留独立的 systemd drop-in；在现有配置上增加录像所需接口和存储权限。重启网页与视频服务时会短暂中断画面。首次接入及船端推流示例见 [VIDEO_UDP_SETUP.md](VIDEO_UDP_SETUP.md)。
+
+## 原始 UDP 输入与 SRT 并存
+
+服务器可以将一个原始 UDP 端口绑定到指定船的视频路径。实际服务器使用 RTP / H.264：把 UDP `8000` 收到的 RTP 归属于 `boat-01`，媒体来源为 `udp+rtp://0.0.0.0:8000`。新配置示例：
+
+```bash
+sudo env BOAT_VIDEO_UDP_DEVICE=boat-01 BOAT_VIDEO_UDP_PORT=8000 BOAT_VIDEO_UDP_FORMAT=rtp \
+  bash maintenance/install-video-media.sh boat.example.com 7890
+```
+
+`BOAT_VIDEO_UDP_DEVICE` 和 `BOAT_VIDEO_UDP_PORT` 须配套使用；显式配置输入时，`BOAT_VIDEO_UDP_FORMAT` 默认为 `rtp`。RTP 模式使用 H.264 / 90000 Hz 和 `packetization-mode=1`，动态 payload type 通过 `BOAT_VIDEO_UDP_PAYLOAD_TYPE` 设置，范围 `96..127`、默认 `96`。MediaMTX 的 `rtpSDP` 必须与发送端保持一致。现有服务器的 SDP 为 payload `96`、`H264/90000`、`packetization-mode=1;profile-level-id=42e01f`；升级保留实际来源及 SDP，不应仅把 URL 改成另一种协议。
+
+下面用 FFmpeg 将本地文件转为 H.264 RTP 发送到该监听；把文件和域名换成自己的值。已有发送程序正常工作时可继续沿用：
+
+```bash
+ffmpeg -re -i input.mp4 -an -c:v libx264 -profile:v baseline -pix_fmt yuv420p \
+  -preset veryfast -tune zerolatency -bf 0 -g 30 -keyint_min 30 -sc_threshold 0 \
+  -x264-params repeat-headers=1 -f rtp -payload_type 96 \
+  'rtp://boat.example.com:8000?pkt_size=1200'
+```
+
+发送端若使用 MPEG-TS，应把 `BOAT_VIDEO_UDP_FORMAT` 改为 `mpegts`，来源会使用 `udp+mpegts://0.0.0.0:8000`；发送命令相应改为 `-f mpegts 'udp://boat.example.com:8000?pkt_size=1316'`，不使用 RTP 的 `-payload_type`。RTP / H.264 与 MPEG-TS 都可通过 UDP 传输，但封装不同，不能互相解包。
+
+设备和端口留空时不新增原始 UDP 监听，已有服务器的输入配置会保留；留空不是停用指令，需要移除旧监听时应明确修改对应媒体路径配置。安装配置通过真实 MediaMTX 配置校验后应用，普通网页一键更新不会自行改变媒体监听端口。使用此例时，需为指定发送端放行服务器 UDP `8000`，网页 WebRTC 仍使用 UDP `8189`。
+
+同一个船只路径采用一种视频输入；配置为 UDP 来源的 `boat-01` 不再同时接受另一路同名 SRT 发布。STM32 的 MQTT 遥测仍按同一设备 ID 接入，两者互不替代。原始 UDP 接收依据监听端口归属船只，数据包没有 SRT 的用户名/密码鉴权，需在云安全组或服务器防火墙限制允许的发送端。平台登录、录像开关、回放和下载权限仍由网页服务检查。
+
+原始 UDP 不提供 SRT 的重传与拥塞处理。建议使用 H.264、无 B 帧和定期关键帧，封装选择与接收端一致的 RTP 或 MPEG-TS；发送端应持续输出必要的编码头信息，以便重新接入、网页播放和分段录像。
+
+安装后，媒体服务具有自己的持久化目录：
+
+| 项目 | 默认值 |
+| --- | --- |
+| 可配置目录的根路径 | `/var/lib/unmanned-boat-video` |
+| 录像保存目录 | `/var/lib/unmanned-boat-video/recordings` |
+| 文件组织 | `保存目录/船只设备ID/日期时间.mp4` |
+| 单段长度 | 约 60 秒，按视频关键帧分段 |
+| 写盘分片 | 约 1 秒 |
+| 自动保留 | 7 天，超过期限由媒体服务清理 |
+
+录像不会自动开启，必须在网页对目标船点击开始。安装脚本启用的 `BOAT_VIDEO_RECORDING_ENABLED=1` 表示录像能力可用。
+
+## 开始、停止和查看录像
+
+1. 管理员登录平台，选择目标船，打开“视频监控”。
+2. 点击“开始录像”。如果船端暂未推流，服务器进入等待视频的状态；收到该船视频后开始保存。
+3. 点击“停止录像”结束该船的录像，其他船不受影响。
+4. 刷新录像列表，选择片段回放或下载 MP4。访客可查看与下载，开始、停止和目录设置仅管理员可操作。
+
+开始录像与网页“播放/停止”是独立操作。暂停网页播放器不会停止服务器录像；切换船只时，显示和操作的对象随船只切换。录像启用状态和目录设置保存于源码目录以外，正常网页更新不会清除。服务器重启后会重新应用已保存的录像启用状态，等待船端恢复推流。
+
+断流期间没有视频可录，重新推流后会产生新片段。正在写入的末段可能尚不能完整回放，停止录像或等待下一个分段后刷新。异常断电可能损失最后一个写盘分片；录像状态不能替代磁盘空间、权限和媒体服务日志检查。
+
+当前录像接入对象是服务器 MediaMTX 收到的 SRT 或已配置的原始 UDP 视频，包括 RTP / H.264 和 MPEG-TS。旧版 MQTT 发布 HTTP/HLS/FLV 地址仍可播放，但不会由此自动下载和录制外部视频流；需要录像时请先将视频接入本平台媒体服务。
+
+## 管理员修改保存目录
+
+进入“平台设置”的服务器录像设置，读取当前目录，输入新的绝对路径并保存。例如：
+
+```text
+/var/lib/unmanned-boat-video/recordings-2026
+/var/lib/unmanned-boat-video/missions/lake-test
+```
+
+保存前先停止所有船的录像。新开始的录像写入新目录；旧文件保留在原目录，不会被移动或删除。网页录像列表显示当前目录中的片段，需要查看旧目录时先停止录像，再将保存目录切回原路径。平台不会自动搬迁文件或合并不同目录的录像列表。
+
+7 天自动清理针对媒体服务当前配置的录像路径；切换后不再被媒体服务索引的旧目录需要另外备份和清理，不应依赖此策略释放旧目录的空间。
+
+网页允许的目录必须位于 `/var/lib/unmanned-boat-video` 之内；不接受 `..`、反斜杠、控制字符或录像文件名模板。这个限制与媒体服务的 systemd 写权限一致，避免保存一个媒体进程实际不能写入的路径。目录中不应手动创建指向外部位置的符号链接。
+
+如需保存到其他磁盘，由服务器管理员先把磁盘挂载到媒体服务允许的目录内，并配置媒体进程的访问权限，再在网页填写相应路径。媒体服务使用 `DynamicUser` 和 systemd `StateDirectory`；宿主机可能在 `/var/lib/private/unmanned-boat-video` 管理实际目录，不要直接修改其属主或使用 `chmod 777`。网页只保存录像目录设置，不执行系统挂载或放宽系统权限。
+
+录像配置 JSON 的保存位置由 `BOAT_VIDEO_RECORDING_CONFIG_FILE`、网页服务的 `STATE_DIRECTORY` 或受管理更新服务的状态目录决定。部署时应使用源码目录外的持久化文件；配置不可写时网页会报告保存失败。开发时没有持久化目录的进程只能保留当前运行期间的设置。
+
+## 网络和权限
+
+新增两个仅限本机的接口：
+
+| 地址 | 用途 |
+| --- | --- |
+| `127.0.0.1:9997` | MediaMTX 控制与录像索引 |
+| `127.0.0.1:9996` | MediaMTX 录像回放与 MP4 导出 |
+
+这两个端口与原有 `127.0.0.1:8889` 一样不应开放到公网。网页继续通过原网站 HTTPS 地址访问；Node 代理检查平台登录身份，内部请求使用独立媒体凭据，浏览器不会获得内部密码或访客不可见的磁盘路径。媒体服务只拥有自身状态目录的写权限，网页服务无需直接读取录像目录。
+
+## 空间与排查
+
+录像只封装保存收到的视频，不在服务器重新编码。每路 1.5 Mbit/s 视频约占 675 MB/小时、16.2 GB/天；连续保留 7 天约 113 GB，尚未计音频及封装开销。多船同时录像按路数相加，部署前应确认实际磁盘容量。
+
+```bash
+sudo systemctl status unmanned-boat-video.service --no-pager
+sudo journalctl -u unmanned-boat-video.service -n 100 --no-pager
+sudo journalctl -u unmanned-boat-web.service -n 100 --no-pager
+sudo ss -ltnp | grep -E '127\.0\.0\.1:(8889|9996|9997)\b'
+df -h /var/lib/unmanned-boat-video
+```
+
+若显示组件未启用，确认已经更新 Web 并重新运行媒体安装脚本。录像一直等待时，检查该船设备 ID、视频账号和 SRT 推流。已有画面但没有新文件时，查看媒体日志中的磁盘空间和写入权限错误；遥测在线不表示视频流也已接入。
+
+运行 `maintenance/remove-video-media.sh` 或完整平台停用脚本会停止媒体服务，但保留录像、私密媒体配置及源码目录外的录像设置。需要清理视频时应另行备份和删除明确的录像文件，停用脚本不会递归清理这些目录。

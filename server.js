@@ -9,10 +9,11 @@ const {createMapConfigApi,MAP_CONTENT_SECURITY_POLICY}=require('./server/map-con
 const {getVideoContentSecurityPolicy}=require('./server/video-protocol');
 const {createMqttDeviceApi}=require('./server/mqtt-device-api');
 const {createVideoMediaApi}=require('./server/video-media-api');
+const {createVideoRecordingApi}=require('./server/video-recording-api');
 const {version:packageVersion}=require('./package.json');
 const ROOT=path.join(__dirname,'public');
 const MIME={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json; charset=utf-8','.glb':'model/gltf-binary','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon','.txt':'text/plain; charset=utf-8'};
-function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},apiOptions={},updateOptions={},accountOptions={},mapOptions={},mqttAdminOptions={},videoMediaOptions={}}={}) {
+function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},apiOptions={},updateOptions={},accountOptions={},mapOptions={},mqttAdminOptions={},videoMediaOptions={},videoRecordingOptions={}}={}) {
   const base=fs.realpathSync(root);
   const contentSecurityPolicy=getVideoContentSecurityPolicy(MAP_CONTENT_SECURITY_POLICY,env);
   const bridge=cloud||new CloudBridge({env,...cloudOptions});
@@ -24,6 +25,7 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
   const mapApi=createMapConfigApi({...mapOptions,env,accounts});
   const mqttDeviceApi=createMqttDeviceApi({...mqttAdminOptions,accounts});
   const videoMediaApi=createVideoMediaApi({...videoMediaOptions,env,accounts});
+  const videoRecordingApi=createVideoRecordingApi({...videoRecordingOptions,env,accounts});
   const handler=async(req,res)=>{
     res.setHeader('X-Content-Type-Options','nosniff');
     res.setHeader('Referrer-Policy','strict-origin-when-cross-origin');
@@ -39,6 +41,7 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
       if(await mapApi.handle(req,res,url))return;
       if(await accounts.handle(req,res,url))return;
       if(await videoMediaApi.handle(req,res,url))return;
+      if(await videoRecordingApi.handle(req,res,url))return;
       if(await mqttDeviceApi.handle(req,res,url))return;
       if(await updateApi.handle(req,res,url))return;
       if(await api.handle(req,res,url))return;
@@ -67,8 +70,9 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
   };
   const server=key&&cert?https.createServer({key,cert},handler):http.createServer(handler);
   const originalClose=server.close.bind(server);
-  server.close=(callback)=>{const mediaClosed=videoMediaApi.close();mqttDeviceApi.close();mapApi.close();accounts.close();updateApi.close();api.close();const historyClosed=bridge.stop();return originalClose((...args)=>{Promise.allSettled([mediaClosed,historyClosed]).then(()=>callback?.(...args));});};
+  server.close=(callback)=>{const recordingClosed=videoRecordingApi.close();const mediaClosed=videoMediaApi.close();mqttDeviceApi.close();mapApi.close();accounts.close();updateApi.close();api.close();const historyClosed=bridge.stop();return originalClose((...args)=>{Promise.allSettled([mediaClosed,recordingClosed,historyClosed]).then(()=>callback?.(...args));});};
   server.boatCloud=bridge;server.boatCloudApi=api;server.boatUpdateApi=updateApi;server.boatRelease=current;server.boatAccounts=accounts;
+  server.boatRecordingApi=videoRecordingApi;
   bridge.start();
   return server;
 }

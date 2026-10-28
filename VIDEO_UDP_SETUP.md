@@ -13,7 +13,9 @@
 STM32 遥测与调参：继续走 MQTT
 ```
 
-SRT 是带丢包重传和抖动缓冲的 UDP 视频协议。浏览器不能直接播放任意 UDP 数据，因此服务器接收 SRT 后用 WebRTC 转发；Node 服务只做鉴权和信令，不搬运视频帧。本次提供服务器接收、网页播放和发送格式示例，发送端程序需按此协议接入。
+SRT 是带丢包重传和抖动缓冲的 UDP 视频协议。浏览器不能直接播放任意 UDP 数据，因此服务器接收 SRT 后用 WebRTC 转发；Node 服务处理鉴权、信令与录像回放代理，实时视频由 MediaMTX 转发。服务器还支持按船保存分段 MP4，操作和保存目录设置见 [VIDEO_RECORDING_SETUP.md](VIDEO_RECORDING_SETUP.md)。发送端程序需按本页协议接入。
+
+平台也支持船端直接发送 **RTP/H.264 over UDP** 或 **MPEG-TS over UDP**：为一艘船配置独立 UDP 端口，由 MediaMTX 的固定设备路径接收，再通过相同 WebRTC 页面观看和录制。此模式与 SRT 的封装和鉴权不同，不能将 SRT 地址直接改成 `udp://` 后沿用账号参数；配置方法见下文“原始 UDP 图传”。
 
 ## 1. 准备服务器
 
@@ -32,7 +34,7 @@ sudo bash maintenance/install-video-media.sh boat.example.com 7890
 
 例如服务器的公网地址是 `47.251.109.111`，也可以将第一个参数直接填写为该 IP。若域名启用了只代理 HTTP 的 CDN，应使用服务器公网 IP，或另设不经 CDN 代理的视频域名。
 
-脚本固定安装官方 MediaMTX `v1.21.3` 并校验预置 SHA-256，创建 `unmanned-boat-video.service`，生成私密配置，然后重启网页和视频服务。下载或启动失败会恢复原有受管理文件和服务状态。重复安装保留内部鉴权密钥，可用于更换公网地址；账号密码仍在平台中按船维护。
+脚本固定安装官方 MediaMTX `v1.21.3` 并校验预置 SHA-256，创建 `unmanned-boat-video.service`，生成私密配置，然后重启网页和视频服务。下载或启动失败会恢复原有受管理文件和服务状态。升级会保留现有路径、UDP 接收源、其他媒体设置及自定义 service 参数，只补充录像接口、持久化目录和必需的网络地址族；命令中的域名和网页端口更新浏览器公开地址与鉴权回调。内部鉴权密钥保留，账号密码仍在平台中按船维护。复杂或重复键的 YAML 会拒绝自动升级，现有配置不会被重置。
 
 安装文件：
 
@@ -43,6 +45,7 @@ sudo bash maintenance/install-video-media.sh boat.example.com 7890
 | `/etc/unmanned-boat-video/runtime.env` | 网页内部鉴权配置，权限 `600` |
 | `/etc/systemd/system/unmanned-boat-video.service` | 独立媒体服务 |
 | `/etc/systemd/system/unmanned-boat-web.service.d/45-video-media.conf` | 网页加载媒体配置的 drop-in |
+| `/var/lib/unmanned-boat-video/recordings` | 按船保存的服务器录像，目录可由管理员在允许的状态目录内修改 |
 
 这些是源码目录外的运行配置，普通网页更新会保留。无需把私密配置、账号文件或密码提交到 GitHub。
 
@@ -56,7 +59,7 @@ sudo bash maintenance/install-video-media.sh boat.example.com 7890
 | UDP `8189` | 浏览器与服务器建立 WebRTC 媒体连接 |
 | 网站原有 TCP 端口（通常 `443`） | 网页访问与同源 WHEP 信令 |
 
-脚本不会自动修改防火墙。TCP `8889` 仅监听 `127.0.0.1`，不应向公网开放；浏览器不会直接访问它。没有开启 RTSP、RTMP、HLS、MoQ、录制或媒体管理 API，也不需要新增 MQTT 视频大包。
+脚本不会自动修改防火墙。TCP `8889`（WebRTC 信令）、`9997`（媒体控制）、`9996`（录像回放）仅监听 `127.0.0.1` 并使用内部凭据鉴权，不应向公网开放；浏览器通过原网站的登录接口间接访问。没有开启 RTSP、RTMP、HLS 或 MoQ，也不需要新增 MQTT 视频大包。录像能力安装后可用，需在网页对各船分别点击开始。
 
 浏览器和船端都需要允许 UDP 出站。当前部署不提供 TURN 或 TCP 媒体回退；限制 UDP 的网络无法通过此链路播放，需调整网络或继续使用[HTTP/HLS/FLV 方案](VIDEO_SETUP.md)。
 
@@ -113,6 +116,50 @@ ffmpeg -re -f lavfi -i 'testsrc=size=640x360:rate=25' \
 
 此版本使用 SRT `streamid` 认证，**默认未启用 SRT 上行加密**；它不能替代加密传输。浏览器侧 WebRTC 媒体使用 DTLS-SRTP 加密，网页登录和信令应使用 HTTPS。需要上行加密时，可另行增加服务端和发送端一致的 SRT passphrase，当前安装脚本没有配置共享 passphrase。
 
+### 原始 UDP 图传：固定设备路径
+
+若上位板已经发送 RTP/H.264 的 UDP 数据，可在安装时指定接收设备与端口，默认使用 RTP：
+
+```bash
+sudo env BOAT_VIDEO_UDP_DEVICE=boat-01 BOAT_VIDEO_UDP_PORT=8000 BOAT_VIDEO_UDP_FORMAT=rtp \
+  bash maintenance/install-video-media.sh boat.example.com 7890
+```
+
+设备和端口必须一起填写，设备 ID 需要先在平台注册，端口可选 `1024–65535` 中未被占用的端口，不能与网页端口、WebRTC、SRT 或内部控制/回放端口冲突。默认格式为 `rtp`，同时生成 H.264/90000、payload type `96`、`packetization-mode=1` 的 SDP；发送端 payload 不同，可设置 `BOAT_VIDEO_UDP_PAYLOAD_TYPE`（`96–127`）。安装后生成的设备路径相当于：
+
+```yaml
+paths:
+  boat-01:
+    source: udp+rtp://0.0.0.0:8000
+    rtpSDP: |
+      v=0
+      o=- 0 0 IN IP4 0.0.0.0
+      s=Boat H264 RTP
+      c=IN IP4 0.0.0.0
+      t=0 0
+      m=video 8000 RTP/AVP 96
+      a=rtpmap:96 H264/90000
+      a=fmtp:96 packetization-mode=1
+  '~^[A-Za-z0-9_-]{1,64}$': {}
+```
+
+船端推送示例：
+
+```bash
+ffmpeg -re -f lavfi -i 'testsrc2=size=640x360:rate=25' \
+  -an -c:v libx264 -preset ultrafast -tune zerolatency \
+  -profile:v baseline -pix_fmt yuv420p -g 25 -bf 0 -b:v 700k \
+  -flush_packets 1 -payload_type 96 -f rtp 'rtp://boat.example.com:8000?pkt_size=1200'
+```
+
+发送端需在视频中周期性带上 SPS/PPS 和关键帧；接收端的 SDP 必须与发送端编码、时钟和 payload type 一致。如需自定义 SDP，可在服务器私密媒体配置中调整 `rtpSDP`，升级会保留已有设置。没有为 RTP 固定 `profile-level-id`，应使用浏览器支持的 H.264 配置。
+
+如果发送端实际是 MPEG-TS over UDP，明确设置 `BOAT_VIDEO_UDP_FORMAT=mpegts`。这时接收源为 `udp+mpegts://0.0.0.0:8000`，不需要 SDP；FFmpeg 输出相应改为 `-f mpegts 'udp://boat.example.com:8000?pkt_size=1316'`。RTP 与 MPEG-TS 不能混用。
+
+在云安全组和服务器防火墙放行所选 UDP 端口，建议限制为船端网络来源。原始 UDP 接收不验证视频用户名和密码，也没有 SRT 的重传或上行加密；视频账号仍用于其他船的 SRT 接入和原有 MQTT 地址发布。设备 `boat-01` 的固定 UDP 源占用该设备路径，该船应使用对应 UDP 端口；其他设备仍可使用 SRT 8890。网页播放和录像继续要求平台登录。
+
+服务限制中包含 `AF_NETLINK`，用于 UDP 接收源查询网络接口；缺少它可能导致媒体进程无法初始化原始 UDP 源。当前安装脚本会补齐此项，已有自定义 drop-in 会保留。再次运行安装脚本时，不填写这两个变量会保留已有 UDP 源；填写则只更新指定设备的接收源。需要删除 UDP 路径或改回 SRT 时，应明确修改媒体配置，脚本不会自动删除现有设备路径。
+
 ## 5. 网页查看
 
 安装启用后，登录网页、选择目标船并打开“查看视频 / 船载视频”。网页自动通过同源接口建立 WebRTC 连接，显示 `WebRTC · 低延迟`。**无需再通过 MQTT 发布视频地址**，即使 STM32 暂时没有遥测，已注册船的视频也可独立接入。
@@ -128,6 +175,8 @@ sudo systemctl status unmanned-boat-video.service --no-pager
 sudo journalctl -u unmanned-boat-video.service -n 80 --no-pager
 sudo journalctl -u unmanned-boat-web.service -n 80 --no-pager
 sudo ss -lunp | grep -E ':(8890|8189)\b'
+# 原始 UDP 示例还需确认接收端口：
+sudo ss -lunp | grep ':8000\b'
 sudo ss -ltnp | grep ':8889\b'
 ```
 
@@ -135,11 +184,12 @@ sudo ss -ltnp | grep ':8889\b'
 | --- | --- |
 | 安装提示先更新 MQTT 管理组件 | 重新执行 `maintenance/install-mqtt-device-admin.sh`；普通网页更新不会替换 root 组件 |
 | SRT 推流被拒绝 | 设备 ID 是否存在、流路径是否为设备 ID、账号是否为该船视频账号、URL 编码及密码是否正确 |
+| 原始 UDP 已发送但没有视频 | 检查所选 UDP 端口、防火墙、固定设备路径、RTP/SDP 或 MPEG-TS 封装是否匹配，以及 service 是否允许 `AF_NETLINK` |
 | 推流成功但网页无画面 | UDP `8189`、安装时填写的公网地址是否能被浏览器直连、浏览器是否支持 H.264、视频是否包含 B 帧 |
 | 网页仍显示 HLS/FLV | 是否已安装并启用网关、网页服务是否成功加载媒体 drop-in、浏览器是否刷新 |
 | 卡顿或延迟升高 | 先降低分辨率和码率；检查船端上传带宽、丢包、编码缓存，避免在不稳定链路上使用过低 SRT 缓冲 |
 
-MediaMTX 转发媒体，不做解码、转码或录像。2 核 2 GB 服务器可先验证少量流，但容量主要受带宽、码率和同时观看人数影响。例如 1 路 1.5 Mbit/s 视频被 3 个浏览器观看，服务器视频出口约为 4.5 Mbit/s，另有协议开销；每艘船分别推流会叠加入口和出口需求。实际延迟由采集、编码、网络、SRT 和浏览器共同决定，应以真实设备测量为准。
+MediaMTX 转发和录制媒体，不做解码或转码。2 核 2 GB 服务器可先验证少量流，但容量主要受带宽、码率、磁盘和同时观看人数影响。例如 1 路 1.5 Mbit/s 视频被 3 个浏览器观看，服务器视频出口约为 4.5 Mbit/s，另有协议开销；连续录像约占 675 MB/小时。每艘船分别推流会叠加入口、出口和存储需求。实际延迟由采集、编码、网络、SRT 和浏览器共同决定，应以真实设备测量为准。
 
 ## 7. 停用与恢复
 
@@ -149,7 +199,7 @@ MediaMTX 转发媒体，不做解码、转码或录像。2 核 2 GB 服务器可
 sudo bash maintenance/remove-video-media.sh
 ```
 
-脚本验证受管理路径后停止并禁用独立媒体服务，移除自己的网页 drop-in，必要时重启网页；程序、service unit、私密配置和视频账号均保留，不递归删除系统目录。网页恢复原有 HTTP 视频接入。仅检查所有权、不作改动可运行：
+脚本验证受管理路径后停止并禁用独立媒体服务，移除自己的网页 drop-in，必要时重启网页；程序、service unit、私密配置、视频账号、录像文件和录像设置均保留，不递归删除系统目录。网页恢复原有 HTTP 视频接入。仅检查所有权、不作改动可运行：
 
 ```bash
 sudo bash maintenance/remove-video-media.sh --check-only

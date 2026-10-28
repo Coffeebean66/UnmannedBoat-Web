@@ -114,9 +114,19 @@ function createVideoMediaApi({ env = process.env, accounts, client = createMqttD
     let input;
     try { input = JSON.parse((await collectBody(req, 'application/json', 4096, bodyTimeoutMs)).toString('utf8')); }
     catch (_) { req.resume(); deny(); return; }
-    if (!input || typeof input !== 'object' || Array.isArray(input) || !NAME.test(input.path || '') || typeof input.path !== 'string' || authWork >= 8) { deny(); return; }
+    if (!input || typeof input !== 'object' || Array.isArray(input)) { deny(); return; }
+    // 控制和回放接口只监听服务器回环地址，仍需校验内部凭据；不接受船端的视频密码。
+    // MediaMTX 的 api 回调没有船只 path，须在普通流名称校验之前处理。
+    const internal = LOOPBACK.has(input.ip) && input.user === READER && sameSecret(input.password, config.readerPassword);
+    if (env.BOAT_VIDEO_RECORDING_ENABLED === '1' &&
+      (input.action === 'api' && (input.path === '' || input.path === undefined) && ['', 'api'].includes(input.protocol || '') ||
+       input.action === 'playback' && typeof input.path === 'string' && NAME.test(input.path) && ['', 'playback'].includes(input.protocol || ''))) {
+      if (!internal) { deny(); return; }
+      res.writeHead(204, { 'Cache-Control': 'no-store' }); res.end(); return;
+    }
+    if (!NAME.test(input.path || '') || typeof input.path !== 'string' || authWork >= 8) { deny(); return; }
     if (input.action === 'read' && input.protocol === 'webrtc') {
-      if (!LOOPBACK.has(input.ip) || input.user !== READER || !sameSecret(input.password, config.readerPassword)) { deny(); return; }
+      if (!internal) { deny(); return; }
       res.writeHead(204, { 'Cache-Control': 'no-store' }); res.end(); return;
     }
     if (input.action !== 'publish' || input.protocol !== 'srt' || typeof input.user !== 'string' || !NAME.test(input.user) ||

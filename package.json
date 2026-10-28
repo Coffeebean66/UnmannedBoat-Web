@@ -1,6 +1,6 @@
 {
   "name": "unmanned-boat-monitor-web",
-  "version": "1.27.0",
+  "version": "1.28.0",
   "private": true,
   "engines": {
     "node": ">=18"
@@ -18,6 +18,8 @@
     "test:browser": "node tests/browser-smoke.cjs",
     "test:amap:browser": "node tests/amap-browser.cjs",
     "test:webrtc:browser": "node tests/video-webrtc-browser.cjs",
-    "test:history:browser": "node tests/telemetry-history-browser.cjs"
+    "test:history:browser": "node tests/telemetry-history-browser.cjs",
+    "test:recording:browser": "node tests/video-recording-browser.cjs",
+    "test:recording:native": "node tests/video-recording-native.cjs"
   }
 }

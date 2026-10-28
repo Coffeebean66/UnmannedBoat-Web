@@ -21,6 +21,7 @@
   <link rel="stylesheet" href="settings-layout.css">
   <link rel="stylesheet" href="console.css">
   <link rel="stylesheet" href="video.css">
+  <link rel="stylesheet" href="video-recording.css">
   <script defer src="vendor/leaflet/leaflet.js"></script>
   <script defer src="vendor/hls/hls.min.js"></script>
   <script defer src="vendor/mpegts/mpegts.js"></script>
@@ -43,6 +44,7 @@
   <script defer src="video-device-settings.js"></script>
   <script defer src="fleet-view.js"></script>
   <script defer src="video-view.js"></script>
+  <script defer src="video-recording.js"></script>
   <script defer src="app.js"></script>
   <script defer src="update-panel.js"></script>
 </head>
@@ -306,7 +308,14 @@
           <div class="video-toolbar"><span id="videoStatus" class="video-status" role="status">等待视频地址</span><div class="video-buttons"><button id="videoPlay" type="button" class="primary" disabled>播放</button><button id="videoStop" type="button" class="ghost" disabled>停止</button><button id="videoRetry" type="button" class="ghost" disabled>重新连接</button><button id="videoFullscreen" type="button" class="ghost" disabled>全屏</button></div></div>
           <dl class="video-details"><div><dt>播放格式</dt><dd id="videoFormat">--</dd></div><div><dt>视频来源</dt><dd id="videoSource">--</dd></div><div><dt>地址更新时间</dt><dd id="videoUpdated">--</dd></div></dl>
         </article>
-        <aside class="workspace-note"><span data-icon="help"></span><p>画面由船载摄像头的视频服务提供。离开此页或停止播放可释放视频连接；视频状态与电控遥测在线状态分别显示。</p></aside>
+        <article class="card recording-card" aria-labelledby="recordingTitle">
+          <div class="recording-heading"><div><h2 id="recordingTitle">服务器录像</h2><p>按船只独立保存 · 开始录像后，关闭网页或切换船只仍会继续</p></div><span id="recordingDevice" class="video-device">未选择无人船</span></div>
+          <div class="recording-toolbar"><p id="recordingStatus" class="recording-status" role="status" aria-live="polite">请选择一艘无人船查看服务器录像。</p><div class="recording-buttons"><button id="recordingStart" type="button" class="primary" hidden disabled>开始录像</button><button id="recordingStop" type="button" class="ghost" hidden disabled>停止录像</button><button id="recordingRefresh" type="button" class="ghost" disabled>刷新录像</button></div></div>
+          <span id="recordingCount" class="recording-count">尚未读取</span><p id="recordingEmpty" class="recording-empty">选择无人船后读取已保存的录像。</p>
+          <ul id="recordingList" class="recording-list" aria-label="当前无人船已保存的录像"></ul>
+          <div id="recordingPlayerWrap" class="recording-player-wrap" hidden><div class="recording-player-heading"><strong id="recordingPlaybackTitle"></strong><button id="recordingPlaybackClose" type="button" class="ghost">关闭回放</button></div><video id="recordingPlayer" controls playsinline preload="none" aria-label="无人船录像回放"></video></div>
+        </article>
+        <aside class="workspace-note"><span data-icon="help"></span><p>实时播放和服务器录像分别控制；停止播放不会停止录像。录像使用 SRT / UDP 视频通道，约每 60 秒保存一段 MP4，默认保留 7 天；列表展示最近 200 段。状态依据录像开关与视频输入判断，如持续没有新片段，请检查服务器磁盘和媒体服务日志。管理员可开始/停止录像并在平台设置中修改保存目录。</p></aside>
       </section>
       <footer><span>UNMANNED VESSEL MONITOR <b>/</b> 无人船监测平台</span><span>MQTT 云端监测与调参</span></footer>
     </main>
@@ -378,6 +387,11 @@
         <div id="videoDeviceContent" hidden><div class="mqtt-device-summary"><strong id="videoDeviceCount">尚未读取</strong><span>保存会让 MQTT 服务短暂重连</span></div><ul id="videoDeviceList" class="mqtt-device-list" aria-label="视频 MQTT 账号列表" hidden></ul>
           <form id="videoDeviceForm" class="mqtt-device-form" autocomplete="off" hidden><h4>配置视频 MQTT 账号</h4><div class="mqtt-device-fields"><label>设备 ID<input id="videoDeviceId" type="text" readonly></label><label>视频用户名<input id="videoDeviceUsername" type="text" maxlength="64" autocomplete="off" autocapitalize="none" spellcheck="false"></label><label>视频密码<input id="videoDevicePassword" type="password" maxlength="64" autocomplete="new-password"></label><label>确认密码<input id="videoDevicePasswordConfirm" type="password" maxlength="64" autocomplete="new-password"></label></div><p id="videoDevicePasswordHint" class="mqtt-device-password-hint">视频密码为 6–64 位可打印 ASCII 字符，不能包含空格、冒号或中文；密码不会回显。</p><p class="mqtt-device-reconnect-notice">保存会重启 MQTT 服务并短暂中断所有设备连接；视频发送端需使用保存后的新账号密码。</p><div class="mqtt-device-actions"><button id="videoDeviceSave" type="submit" class="primary" disabled>保存视频账号</button><button id="videoDeviceCancel" type="button" class="subtle">取消编辑</button></div></form>
         </div><p id="videoDeviceStatus" class="mqtt-device-status" role="status" aria-live="polite">读取服务器上的视频 MQTT 账号；密码不会返回到网页。</p>
+      </section>
+      <section id="recordingSettings" class="recording-settings" aria-labelledby="recordingSettingsTitle" hidden>
+        <h3 id="recordingSettingsTitle">服务器录像保存</h3><p class="recording-settings-intro">为所有无人船设置录像保存目录，系统会按船只 ID 分目录保存。修改前请停止全部船只的录像。旧文件保留原目录，列表显示当前目录录像，不自动搬迁；切回原目录可查看旧录像。</p>
+        <form id="recordingSettingsForm" autocomplete="off"><label for="recordingDirectory">服务器保存目录<input id="recordingDirectory" type="text" maxlength="500" spellcheck="false" autocapitalize="none" placeholder="/var/lib/unmanned-boat-video/recordings" disabled></label><p id="recordingSettingsRoot" class="recording-settings-root">保存目录位于服务器，需先启用 SRT / UDP 录像组件。</p><div class="recording-settings-actions"><button id="recordingSettingsRead" type="button" class="subtle">重新读取</button><button id="recordingSettingsSave" type="submit" class="primary" disabled>保存录像目录</button></div></form>
+        <p id="recordingSettingsStatus" class="recording-settings-status" role="status" aria-live="polite">尚未读取录像保存设置。</p>
       </section>
       <section id="mapSettings" class="map-settings" aria-labelledby="mapSettingsTitle" hidden>
         <div class="map-settings-heading"><div class="map-settings-title"><span class="card-icon blue" data-icon="map"></span><div><h3 id="mapSettingsTitle">平台地图设置</h3><p>AMAP · 仅保存在服务器</p></div></div><a class="map-settings-guide" href="https://github.com/Coffeebean66/UnmannedBoat-Web/blob/main/AMAP_SETUP.md" target="_blank" rel="noopener noreferrer">申请与配置教程 ↗</a></div>

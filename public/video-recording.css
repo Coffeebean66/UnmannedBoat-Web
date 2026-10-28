@@ -1,0 +1,27 @@
+.recording-card { padding:20px;min-width:0; }
+.recording-heading,.recording-toolbar,.recording-player-heading { display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap; }
+.recording-heading h2 { margin:0;font-size:16px; }.recording-heading p { margin:6px 0 0;color:var(--muted);font-size:12px;line-height:1.7; }
+.recording-heading>div { min-width:0; }.recording-toolbar { margin-top:16px;padding-bottom:16px;border-bottom:1px solid var(--line); }
+.recording-status,.recording-settings-status { margin:0;color:var(--muted);font-size:12px;line-height:1.8;overflow-wrap:anywhere; }
+.recording-status { flex:1 1 280px; }.recording-status[data-tone=success],.recording-settings-status[data-tone=success] { color:var(--success); }
+.recording-status[data-tone=warning],.recording-settings-status[data-tone=warning] { color:var(--warn); }
+.recording-status[data-tone=error],.recording-settings-status[data-tone=error] { color:var(--danger); }
+.recording-buttons { display:flex;gap:8px;flex-wrap:wrap; }.recording-buttons button { min-height:34px; }
+.recording-count { display:block;margin:15px 0 8px;color:var(--faint);font-size:11px; }.recording-list { margin:0;padding:0;list-style:none;max-height:380px;overflow:auto; }
+.recording-row { display:flex;justify-content:space-between;align-items:center;gap:12px;padding:13px 0;border-bottom:1px solid var(--line); }
+.recording-row>div:first-child { min-width:0;display:grid;gap:5px; }.recording-row strong { color:var(--text);font-size:12px;font-weight:500;overflow-wrap:anywhere; }.recording-row span { color:var(--muted);font-size:11px; }
+.recording-row-actions { display:flex;align-items:center;gap:9px;flex-shrink:0; }.recording-download { color:var(--accent);font-size:12px;text-decoration:none;padding:8px 2px; }
+.recording-download:hover { text-decoration:underline; }.recording-empty { color:var(--muted);font-size:12px;line-height:1.8;padding:12px 0;margin:0; }
+.recording-player-wrap { margin-top:18px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--panel); }
+.recording-player-heading { margin-bottom:12px; }.recording-player-heading strong { font-size:12px;overflow-wrap:anywhere;min-width:0;flex:1; }
+#recordingPlayer { display:block;width:100%;max-height:55vh;aspect-ratio:16/9;object-fit:contain;background:#101014;border-radius:8px; }
+.recording-settings { margin:0 0 22px;padding:18px;border:1px solid var(--line-strong);border-radius:10px;background:linear-gradient(135deg,var(--accent-soft),var(--panel) 72%); }.recording-settings h3 { margin:0;font-size:15px; }
+.recording-settings-intro,.recording-settings-root { font-size:12px;color:var(--muted);line-height:1.8;overflow-wrap:anywhere; }.recording-settings-intro { margin:9px 0 14px; }
+.recording-settings label { display:grid;gap:8px;color:var(--text);font-size:12px; }.recording-settings input { width:100%;min-width:0;box-sizing:border-box;padding:10px 11px;border:1px solid var(--line-strong);border-radius:6px;background:var(--panel);color:var(--text);font:12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
+.recording-settings input::placeholder { color:var(--faint); }
+.recording-settings-actions { display:flex;flex-wrap:wrap;gap:9px;margin:12px 0; }
+@media(max-width:740px) {
+  .recording-card,.recording-settings { padding:14px; }.recording-buttons { width:100%; }.recording-buttons button { flex:1;font-size:11px;padding:6px 9px; }
+  .recording-player-wrap { padding:10px; }.recording-settings-actions button { flex:1;font-size:12px; }
+  .recording-row { gap:8px; }.recording-row-actions { gap:6px; }.recording-row-actions button { padding:6px 9px;font-size:11px; }
+}

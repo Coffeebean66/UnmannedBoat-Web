@@ -86,4 +86,5 @@ fi
 completed=1
 echo 'SRT/WebRTC video gateway disabled; the website keeps its MQTT telemetry and HTTP/HLS/FLV players.'
 echo 'Program, service unit and private configuration remain for recovery in /usr/local/lib/unmanned-boat-video and /etc/unmanned-boat-video.'
+echo 'Existing recordings under /var/lib/unmanned-boat-video and web recording settings are retained; this script does not delete video files.'
 echo 'Re-run maintenance/install-video-media.sh with the public host to restore this gateway. MQTT/video account settings were not changed.'

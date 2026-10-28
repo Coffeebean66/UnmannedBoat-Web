@@ -211,6 +211,23 @@ test('MediaMTX read callbacks only authorize the loopback internal reader and ne
   assert.equal(f.calls.length, 0);
 });
 
+test('recording control and playback callbacks require opt-in and loopback internal credentials', async t => {
+  const f = await fixture(t, { env: { BOAT_VIDEO_RECORDING_ENABLED: '1' }, videoRecordingOptions: {} });
+  const route = BASE + '/auth?token=' + env.BOAT_VIDEO_MEDIA_AUTH_TOKEN;
+  const body = { user: READER, password: env.BOAT_VIDEO_MEDIA_READER_PASSWORD, ip: '127.0.0.1', action: 'api', protocol: '', path: '' };
+  const auth = changes => f.call(route, { method: 'POST', origin: null, body: { ...body, ...changes } });
+  assert.equal((await auth({})).status, 204);
+  assert.equal((await auth({ action: 'playback', path: '__boatrec_' + 'c'.repeat(32) })).status, 204);
+  assert.equal((await auth({ action: 'playback', path: 'boat-01' })).status, 204);
+  for (const changes of [{ ip: '192.0.2.3' }, { password: 'wrong-internal' }, { user: 'camera-one', password: 'camera-only-test' },
+    { path: 'boat-01' }, { action: 'metrics' }, { action: 'playback', path: '../secret' }, { action: 'playback', path: 'boat-01', protocol: 'srt' }]) {
+    assert.equal((await auth(changes)).status, 403);
+  }
+  const disabled = await fixture(t);
+  assert.equal((await disabled.call(route, { method: 'POST', origin: null, body })).status, 403);
+  assert.equal(f.calls.length, 0);
+});
+
 test('MediaMTX publish callback throttling bounds root helper password work per sender and concurrent requests', async t => {
   const f = await fixture(t), route = BASE + '/auth?token=' + env.BOAT_VIDEO_MEDIA_AUTH_TOKEN;
   for (let index = 0; index < 30; index++) assert.equal((await f.call(route, { method: 'POST', origin: null, body: callback() })).status, 204);
