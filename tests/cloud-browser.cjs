@@ -81,8 +81,15 @@ async function main(){
     };
     const chooseCloud=async()=>{
       await until("boatMonitor.link.authenticated && [...document.getElementById('cloudDevice').options].some(option=>option.value==='boat-server-check')",'authenticated test device in cloud list');
-      await evaluate("document.getElementById('cloudDevice').value='boat-server-check';document.getElementById('cloudDevice').dispatchEvent(new Event('change'));document.getElementById('connectButton').click()");
+      await evaluate("document.getElementById('cloudDevice').value='boat-server-check';document.getElementById('cloudDevice').dispatchEvent(new Event('change'))");
       await until("boatMonitor.link.source==='cloud' && boatMonitor.link.connected && document.getElementById('boatActual').textContent==='1.552'",'live remote cloud telemetry');
+    };
+    const openSettings=async()=>{
+      await evaluate("BoatWorkspace.navigate('fleet')");
+      const button="document.querySelector('.fleet-card[data-device-id=\"boat-server-check\"] .fleet-parameter-button')";
+      await until(button+' && !'+button+'.hidden && !'+button+'.disabled','selected boat parameter entry');
+      await evaluate(button+'.click()');await until("document.getElementById('settingsDialog').open",'selected boat parameter dialog');
+      assert.equal(await evaluate("document.getElementById('parameterDeviceName').textContent"),deviceId);
     };
     await send('Runtime.enable');await send('Page.enable');await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
     await send('Page.navigate',{url:url.href});
@@ -103,19 +110,20 @@ async function main(){
     assert.equal(await evaluate("document.getElementById('motor1Voltage').textContent"),'24.50');
     await until("!!document.querySelector('.map-velocity-anchor')",'target and actual map velocity arrows');
     assert.equal(await evaluate("[...document.querySelectorAll('.map-velocity-vectors [data-vector]')].filter(vector=>!vector.hasAttribute('hidden')&&Number(vector.dataset.length)>0).length"),2,'Both map velocity arrows are present');
-    await evaluate("document.getElementById('trackStart').click()");await wait(1350);assert.ok(await evaluate('boatMonitor.track.pointCount>=2'),'Cloud track records live positions');
-    await evaluate("document.getElementById('settingsToggle').click()");
+    assert.equal(await evaluate('boatMonitor.track.active'),true,'Selecting an online boat automatically starts local track display');
+    await wait(1350);assert.ok(await evaluate('boatMonitor.track.pointCount>=2'),'Cloud track records live positions');
+    await openSettings();
     assert.deepEqual(await evaluate("['readParameters','writeParameters','saveFlash'].map(id=>document.getElementById(id).disabled)"),[true,true,true]);
     assert.equal(await evaluate("[...document.querySelectorAll('#presets [data-action=use]')].every(button=>button.disabled)"),true);
     assert.equal(await evaluate("document.getElementById('cloudReadOnlyNotice').hidden"),false);
-    await screenshot('remote-cloud-settings');await evaluate("document.getElementById('settingsClose').click()");
+    await screenshot('remote-cloud-settings');await evaluate("document.getElementById('settingsClose').click();BoatWorkspace.navigate('overview')");
     for(const width of [1440,430,375,320]){
       await send('Emulation.setDeviceMetricsOverride',{width,height:width===1440?1100:900,deviceScaleFactor:1,mobile:width<700});await evaluate('window.scrollTo(0,0)');await wait(300);
       assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,'Cloud page overflow at '+width);
       assert.equal(await evaluate("document.getElementById('boatActual').textContent"),'1.552');await screenshot('remote-cloud-live-'+width);
-      await evaluate("document.getElementById('settingsToggle').click()");
+      await openSettings();
       assert.equal(await evaluate("document.getElementById('settingsDialog').scrollWidth<=document.getElementById('settingsDialog').clientWidth"),true,'Cloud settings overflow at '+width);
-      await screenshot('remote-cloud-settings-'+width);await evaluate("document.getElementById('settingsClose').click()");
+      await screenshot('remote-cloud-settings-'+width);await evaluate("document.getElementById('settingsClose').click();BoatWorkspace.navigate('overview')");
     }
     await evaluate("document.getElementById('disconnectButton').click()");
     assert.equal(await evaluate('boatMonitor.link.wanted'),false,'Explicit MQTT disconnect closes cloud SSE');
@@ -124,7 +132,9 @@ async function main(){
     assert.equal(await evaluate('boatMonitor.viewer.fresh'),false);assert.equal(await evaluate("!!document.querySelector('.map-velocity-anchor')"),false);
     await chooseCloud();await wait(300);assert.equal(await evaluate("document.getElementById('roll').textContent"),'6.00');
     stopTelemetry();await wait(1350);
-    for(const id of ['boatActual','roll','motor1Rpm','chartActual','chartTarget'])assert.equal(await evaluate('document.getElementById('+JSON.stringify(id)+').textContent'),'--','One-second expiry clears '+id);
+    for(const id of ['boatActual','roll','motor1Rpm'])assert.equal(await evaluate('document.getElementById('+JSON.stringify(id)+').textContent'),'--','One-second expiry clears '+id);
+    assert.equal(await evaluate("document.getElementById('chartActual').textContent"),'1.552 m/s','Offline chart retains the last recorded actual speed');
+    assert.equal(await evaluate("document.getElementById('chartTarget').textContent"),'1.800 m/s','Offline chart retains the last recorded target speed');
     assert.equal(await evaluate('boatMonitor.link.connected'),false);assert.equal(await evaluate('boatMonitor.viewer.fresh'),false);
     assert.equal(await evaluate("!!document.querySelector('.map-velocity-anchor')"),false);await screenshot('remote-cloud-stale');
     startTelemetry();await until('boatMonitor.link.connected && boatMonitor.viewer.fresh','telemetry recovery after publish pause');

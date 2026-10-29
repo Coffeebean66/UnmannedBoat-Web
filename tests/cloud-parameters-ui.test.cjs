@@ -150,3 +150,17 @@ test('云端响应返回时下一次操作尚未就绪，不丢弃本次设备�
   await h.panel.command('read'); assert.equal(h.ids.parameterStatus.dataset.tone,'success');
   assert.equal(h.panel.confirmed.kpX2PerMps,42); assert.equal(h.ids.writeParameters.disabled,true);
 });
+
+test('切船后旧请求的迟到取消结果不会恢复草稿或覆盖新船参数', async () => {
+  const h=panel();let rejectRequest;
+  h.panel.link.request=()=>new Promise((resolve,reject)=>{rejectRequest=reject;});
+  const pending=h.panel.command('write');
+  h.panel.link.generation++;h.panel.reset(false);
+  const next={...values,kpX2PerMps:222};
+  h.panel.confirmed={...next};h.panel.fill(next);
+  rejectRequest(Object.assign(Error('已切换无人船，旧写入结果未知'),{uncertain:true}));
+  await assert.rejects(pending,/已切换无人船/);
+  assert.equal(h.panel.localDraft,null);
+  assert.equal(h.panel.confirmed.kpX2PerMps,222);
+  assert.equal(h.inputs.find(input=>input.dataset.key==='kpX2PerMps').value,'222');
+});

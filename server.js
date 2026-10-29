@@ -6,12 +6,17 @@ const {createCloudApi}=require('./server/cloud-api');
 const {createAccountApi}=require('./server/account-api');
 const {createUpdateApi,readCurrentRelease}=require('./server/update-api');
 const {createMapConfigApi,MAP_CONTENT_SECURITY_POLICY}=require('./server/map-config');
+const {getVideoContentSecurityPolicy}=require('./server/video-protocol');
 const {createMqttDeviceApi}=require('./server/mqtt-device-api');
+const {createVideoMediaApi}=require('./server/video-media-api');
+const {createVideoRecordingApi}=require('./server/video-recording-api');
+const {createFirmwareApi}=require('./server/firmware-api');
 const {version:packageVersion}=require('./package.json');
 const ROOT=path.join(__dirname,'public');
 const MIME={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json; charset=utf-8','.glb':'model/gltf-binary','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon','.txt':'text/plain; charset=utf-8'};
-function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},apiOptions={},updateOptions={},accountOptions={},mapOptions={},mqttAdminOptions={}}={}) {
+function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},apiOptions={},updateOptions={},accountOptions={},mapOptions={},mqttAdminOptions={},videoMediaOptions={},videoRecordingOptions={},firmwareOptions={}}={}) {
   const base=fs.realpathSync(root);
+  const contentSecurityPolicy=getVideoContentSecurityPolicy(MAP_CONTENT_SECURITY_POLICY,env);
   const bridge=cloud||new CloudBridge({env,...cloudOptions});
   const accounts=createAccountApi({...accountOptions,env});
   const api=createCloudApi({bridge,env,...apiOptions,accounts});
@@ -20,12 +25,15 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
   const updateApi=createUpdateApi({...updateOptions,env,current,accounts});
   const mapApi=createMapConfigApi({...mapOptions,env,accounts});
   const mqttDeviceApi=createMqttDeviceApi({...mqttAdminOptions,accounts});
+  const videoMediaApi=createVideoMediaApi({...videoMediaOptions,env,accounts});
+  const videoRecordingApi=createVideoRecordingApi({...videoRecordingOptions,env,accounts});
+  const firmwareApi=createFirmwareApi({...firmwareOptions,env,accounts,bridge});
   const handler=async(req,res)=>{
     res.setHeader('X-Content-Type-Options','nosniff');
     res.setHeader('Referrer-Policy','strict-origin-when-cross-origin');
     res.setHeader('X-Frame-Options','DENY');
-    // 业务脚本和模型本地加载；高德官方地图 SDK 及地图资源使用明确的域名白名单。
-    res.setHeader('Content-Security-Policy',MAP_CONTENT_SECURITY_POLICY);
+    // 地图与视频使用明确来源；视频授权只扩展连接和媒体，不扩大脚本来源。
+    res.setHeader('Content-Security-Policy',contentSecurityPolicy);
     const fail=(status,text)=>{res.writeHead(status,{'Content-Type':'text/plain; charset=utf-8'});res.end(text);};
     let pathname;
     try{pathname=decodeURIComponent((req.url||'/').split('?')[0]);}catch(_){return fail(400,'Invalid path');}
@@ -34,6 +42,9 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
       const url=new URL(req.url||'/','http://localhost');
       if(await mapApi.handle(req,res,url))return;
       if(await accounts.handle(req,res,url))return;
+      if(await videoMediaApi.handle(req,res,url))return;
+      if(await videoRecordingApi.handle(req,res,url))return;
+      if(await firmwareApi.handle(req,res,url))return;
       if(await mqttDeviceApi.handle(req,res,url))return;
       if(await updateApi.handle(req,res,url))return;
       if(await api.handle(req,res,url))return;
@@ -42,7 +53,7 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
     if(pathname==='/healthz'){
       // 部署检查只读取服务就绪状态，不依赖管理员初始密码，避免改密后误判失败。
       const readiness={cloudEnabled:bridge.enabled===true,brokerConnected:bridge.list()?.brokerConnected===true,
-        accountsEnabled:accounts.enabled===true,accountManagement:1};
+        accountsEnabled:accounts.enabled===true,accountManagement:1,...(bridge.history?{telemetryRecording:bridge.history.status()}: {})};
       res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');
       return res.end(req.method==='HEAD'?undefined:JSON.stringify({ok:true,app:'unmanned-boat-web',...current,apiVersion:1,readiness}));
     }
@@ -62,8 +73,10 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
   };
   const server=key&&cert?https.createServer({key,cert},handler):http.createServer(handler);
   const originalClose=server.close.bind(server);
-  server.close=(callback)=>{mqttDeviceApi.close();mapApi.close();accounts.close();updateApi.close();api.close();bridge.stop();return originalClose(callback);};
+  server.close=(callback)=>{firmwareApi.close();const recordingClosed=videoRecordingApi.close();const mediaClosed=videoMediaApi.close();mqttDeviceApi.close();mapApi.close();accounts.close();updateApi.close();api.close();const historyClosed=bridge.stop();return originalClose((...args)=>{Promise.allSettled([mediaClosed,recordingClosed,historyClosed]).then(()=>callback?.(...args));});};
   server.boatCloud=bridge;server.boatCloudApi=api;server.boatUpdateApi=updateApi;server.boatRelease=current;server.boatAccounts=accounts;
+  server.boatRecordingApi=videoRecordingApi;
+  server.boatFirmwareApi=firmwareApi;
   bridge.start();
   return server;
 }

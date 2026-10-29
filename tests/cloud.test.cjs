@@ -19,7 +19,7 @@ function payload(sequence=1){
   return result;
 }
 class FakeMQTT extends EventEmitter{
-  subscribe(topics,options,callback){this.topics=topics;this.subscribeOptions=options;callback(null);}
+  subscribe(topics,options,callback){(this.subscriptions??=[]).push({topics,options});callback(null);}
   end(force){this.ended=force;}
 }
 function fixture(options={}){
@@ -74,8 +74,12 @@ test('strict 176-byte UART4 layout validates all frame CRCs and types',()=>{
 
 test('bridge ignores retained/malformed telemetry, preserves source ages and bounds device memory',()=>{
   const f=fixture({maxDevices:2});f.bridge.start();f.client.emit('connect');
-  assert.deepEqual(f.client.topics,['boats/+/telemetry','boats/+/status','boats/+/parameter-capability','boats/+/parameter-response']);
-  assert.deepEqual(f.client.subscribeOptions,{qos:0,rap:true});assert.equal(f.connection.opts.protocolVersion,5);
+  assert.deepEqual(f.client.subscriptions.map(item=>item.topics),[
+    ['boats/+/telemetry','boats/+/status','boats/+/parameter-capability','boats/+/parameter-response'],
+    ['boats/+/video']
+  ]);
+  for(const subscription of f.client.subscriptions)assert.deepEqual(subscription.options,{qos:0,rap:true});
+  assert.equal(f.connection.opts.protocolVersion,5);
   assert.equal(f.connection.opts.queueQoSZero,false);
   const events=[];f.bridge.on('telemetry',value=>events.push(value));
   assert.equal(f.bridge.acceptMessage('boats/boat-01/telemetry',payload(),{retain:true}),false);
@@ -114,6 +118,38 @@ test('rejected subscriptions and callbacks from an old connection never mark bro
   assert.equal(f.bridge.brokerConnected,false);
   f.client.emit('connect');callbacks[2](null,[{qos:0}]);assert.equal(f.bridge.brokerConnected,true);
   f.bridge.stop();
+});
+
+test('optional video subscription rejection preserves telemetry and stale video callbacks cannot change readiness',()=>{
+  const f=fixture(),subscriptions=[];
+  f.client.subscribe=(topics,options,callback)=>subscriptions.push({topics,callback});
+  f.bridge.start();f.client.emit('connect');
+  assert.equal(subscriptions.length,1);assert.equal(f.bridge.brokerConnected,false);
+  subscriptions[0].callback(null,[{qos:0},{qos:0},{qos:0},{qos:0}]);
+  assert.equal(f.bridge.brokerConnected,true);assert.deepEqual(subscriptions[1].topics,['boats/+/video']);
+  for(const rejection of [128,0x87]){
+    subscriptions[1].callback(null,[{qos:rejection}]);assert.equal(f.bridge.brokerConnected,true);
+  }
+  subscriptions[1].callback(Error('video subscription denied'));assert.equal(f.bridge.brokerConnected,true);
+  assert.equal(f.bridge.acceptMessage('boats/boat-01/telemetry',payload()),true);
+  assert.equal(f.bridge.get('boat-01').online,true);
+  f.client.emit('close');f.client.emit('connect');
+  subscriptions[1].callback(null,[{qos:0}]);assert.equal(f.bridge.brokerConnected,false);
+  subscriptions[1].callback(null,[{qos:128}]);assert.equal(f.bridge.brokerConnected,false);
+  subscriptions[2].callback(null,[{qos:0}]);assert.equal(f.bridge.brokerConnected,true);
+  subscriptions[1].callback(Error('old video callback'));assert.equal(f.bridge.brokerConnected,true);
+  f.bridge.stop();subscriptions[3].callback(null,[{qos:0}]);assert.equal(f.bridge.brokerConnected,false);
+});
+
+test('optional video subscription throwing synchronously does not disconnect the required topics',()=>{
+  const f=fixture();
+  f.client.subscribe=(topics,options,callback)=>{
+    if(topics[0]==='boats/+/video')throw Error('video subscription unavailable');
+    callback(null,[{qos:0}]);
+  };
+  f.bridge.start();assert.doesNotThrow(()=>f.client.emit('connect'));assert.equal(f.bridge.brokerConnected,true);
+  assert.equal(f.bridge.acceptMessage('boats/boat-01/telemetry',payload()),true);
+  assert.equal(f.bridge.get('boat-01').online,true);f.bridge.stop();
 });
 
 test('same-origin password login, HttpOnly secure cookie, logout and rate limit',async t=>{

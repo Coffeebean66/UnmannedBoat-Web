@@ -109,7 +109,7 @@
     $('accountNotice').hidden = !accountMode || (state.ready && !!state.user);
     $('accountNoticeText').textContent = state.message;
     $('accountRetry').hidden = state.ready;
-    for (const id of ['settingsToggle', 'sidebarSettings', 'settingsEntry', 'platformSettingsToggle', 'sidebarPlatformSettings', 'updateToggle']) if ($(id)) $(id).hidden = !state.canManage;
+    for (const id of ['settingsToggle', 'settingsEntry', 'firmwareToggle', 'platformSettingsToggle', 'sidebarPlatformSettings', 'updateToggle']) if ($(id)) $(id).hidden = !state.canManage;
     document.querySelector('.settings-callout').hidden = !state.canManage;
     if (!state.canManage) {
       $('settingsDialog').close(); $('platformSettingsDialog')?.close(); $('updateDialog').close();

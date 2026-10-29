@@ -50,8 +50,8 @@ const fixtureScript='('+function(){
     await until(()=>window.BoatAuth?.ready&&window.boatMonitor?.link.configurationKnown);
     if(BoatAuth.enabled===true&&!BoatAuth.user){document.getElementById('accountUsername').value='operator';document.getElementById('accountPassword').value='browser-admin-test-only';document.getElementById('accountLoginForm').requestSubmit();await until(()=>BoatAuth.canManage&&!BoatAuth.busy);}
     else if(BoatAuth.enabled===false&&!boatMonitor.link.authenticated)await boatMonitor.link.login('mqtt-browser-legacy-test-only');
-    await until(()=>!!document.getElementById('cloudDevice').value&&!document.getElementById('connectButton').disabled);
+    await until(()=>!!document.getElementById('cloudDevice').value&&(boatMonitor.link.wanted||!document.getElementById('connectButton').disabled));
   };
-  window.connectTestBoat=async()=>{await ensureTestLogin();await startTelemetry();document.getElementById('connectButton').click();await until(()=>boatMonitor.link.connected);};
+  window.connectTestBoat=async()=>{await ensureTestLogin();await startTelemetry();if(!boatMonitor.link.wanted)document.getElementById('connectButton').click();await until(()=>boatMonitor.link.connected);};
 }.toString()+')();';
 module.exports={createFixtureServer,fixtureScript};

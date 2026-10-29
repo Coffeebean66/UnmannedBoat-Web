@@ -1,7 +1,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname,'../public/workspace-navigation.js'),'utf8');
-const names = ['overview','navigation','attitude','analysis','propulsion','diagnostics'];
+const names = ['overview','navigation','attitude','analysis','propulsion','diagnostics','video'];
 
 function setup(hash = '', includeFleet = false) {
   const activeNames = includeFleet ? ['fleet',...names] : names;

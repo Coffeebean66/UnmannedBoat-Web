@@ -80,13 +80,20 @@ topic write boats/boat-01/status
 topic read boats/boat-01/parameter-command
 topic write boats/boat-01/parameter-response
 topic write boats/boat-01/parameter-capability
+topic read boats/boat-01/firmware-command
+topic write boats/boat-01/firmware-response
+topic write boats/boat-01/firmware-capability
 
 user boat-web-bridge
 topic read boats/+/telemetry
 topic read boats/+/status
+topic read boats/+/video
 topic write boats/+/parameter-command
 topic read boats/+/parameter-response
 topic read boats/+/parameter-capability
+topic write boats/+/firmware-command
+topic read boats/+/firmware-response
+topic read boats/+/firmware-capability
 EOF
   cat > "$stage/mosquitto.conf" <<'EOF'
 # Owned by unmanned-boat-cloud-v1
@@ -97,8 +104,8 @@ allow_anonymous false
 password_file /etc/unmanned-boat-web/passwd
 acl_file /etc/unmanned-boat-web/acl
 max_connections 32
-max_packet_size 1024
-message_size_limit 512
+max_packet_size 8192
+message_size_limit 4096
 max_inflight_messages 10
 max_queued_messages 20
 max_queued_bytes 65536
@@ -127,7 +134,7 @@ NODE
 fi
 # Existing deployments keep all passwords. Extend only the two existing account
 # types: a device may read its own commands and publish its own replies; the web
-# bridge may send parameter commands. Never grant driving or arbitrary topics.
+# Bridge may send parameter/OTA commands. Never grant driving or arbitrary topics.
 acl_changed="$(node "$source_dir/maintenance/configure-parameter-acl.cjs" "$config/acl" "$config/runtime.env")"
 if [[ ! -e "$broker_unit" ]]; then
   cat > "$broker_unit" <<'EOF'

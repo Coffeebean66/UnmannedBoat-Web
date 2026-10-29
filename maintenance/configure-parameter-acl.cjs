@@ -1,4 +1,4 @@
-/* 为已有受管理 MQTT 账号增加参数主题；保留密码和无关 ACL，并留下恢复副本。 */
+/* 为已有受管理 MQTT 账号增加参数/OTA主题；保留密码和无关 ACL，并留下恢复副本。 */
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 function configureParameterAcl(file,envFile){
@@ -10,11 +10,13 @@ function configureParameterAcl(file,envFile){
   const next=blocks.map(block=>{
     const user=block.match(/^user[ \t]+([A-Za-z0-9_-]{1,64})[ \t\r]*$/m)?.[1];if(!user)return block;
     const add=[],lines=new Set(block.split(/\r?\n/).map(line=>line.trim()));
-    if(user===bridge){bridges++;add.push('topic write '+prefix+'/+/parameter-command','topic read '+prefix+'/+/parameter-response','topic read '+prefix+'/+/parameter-capability');}
+    if(user===bridge){bridges++;add.push('topic write '+prefix+'/+/parameter-command','topic read '+prefix+'/+/parameter-response','topic read '+prefix+'/+/parameter-capability',
+      'topic write '+prefix+'/+/firmware-command','topic read '+prefix+'/+/firmware-response','topic read '+prefix+'/+/firmware-capability');}
     else {
       const id=block.match(new RegExp('^topic write '+prefix+'/([A-Za-z0-9_-]{1,64})/telemetry[ \\t\\r]*$','m'))?.[1];
       if(id&&lines.has('topic write '+prefix+'/'+id+'/status')){
-        devices++;add.push('topic read '+prefix+'/'+id+'/parameter-command','topic write '+prefix+'/'+id+'/parameter-response','topic write '+prefix+'/'+id+'/parameter-capability');
+        devices++;add.push('topic read '+prefix+'/'+id+'/parameter-command','topic write '+prefix+'/'+id+'/parameter-response','topic write '+prefix+'/'+id+'/parameter-capability',
+          'topic read '+prefix+'/'+id+'/firmware-command','topic write '+prefix+'/'+id+'/firmware-response','topic write '+prefix+'/'+id+'/firmware-capability');
       }
     }
     const missing=add.filter(line=>!lines.has(line));

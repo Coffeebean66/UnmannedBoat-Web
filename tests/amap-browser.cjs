@@ -147,7 +147,8 @@ async function browserSession(server,mode,run){
     await send('Fetch.enable',{patterns:[{urlPattern:'https://webapi.amap.com/*'},{urlPattern:'*/api/map/config'},{urlPattern:'*/api/map/settings'}]});
     await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
     await send('Page.addScriptToEvaluateOnNewDocument',{source:mock});
-    await send('Page.navigate',{url:'http://127.0.0.1:'+server.address().port});
+    // 单船地图测试显式打开概览；自动选船不再替用户从船队页切换页面。
+    await send('Page.navigate',{url:'http://127.0.0.1:'+server.address().port+'/#overview'});
     await until('!!window.boatMonitor && !!window.boatMonitor.viewer.renderer');
     await run({send,evaluate,until,shot,viewportShot,errors,sdkRequests,configRequests,settingsRequests,failures});
     assert.deepEqual(errors,[],'Page has no unhandled JavaScript errors in '+mode);
@@ -163,7 +164,7 @@ async function withServer(env,mode,run,options={}){
 
 async function startTelemetry({evaluate,until}){
   await evaluate('connectTestBoat()');await until('boatMonitor.link.connected');
-  await evaluate("document.getElementById('trackStart').click()");
+  await until('boatMonitor.track.active');
   await until("document.getElementById('roll').textContent==='6.00' && document.getElementById('boatActual').textContent==='1.552'");
 }
 

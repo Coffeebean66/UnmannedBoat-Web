@@ -10,6 +10,9 @@ test('parameter ACL grants per-device replies and commands while preserving secr
   const f=fixture(t),before=fs.readFileSync(f.envFile,'utf8');assert.equal(configureParameterAcl(f.file,f.envFile),true);
   const text=fs.readFileSync(f.file,'utf8'),device=text.split('user boat-01\n')[1].split('user unrelated')[0],bridge=text.split('user boat-web-bridge\n')[1];
   assert.match(device,/topic read boats\/boat-01\/parameter-command/);assert.match(device,/topic write boats\/boat-01\/parameter-response/);assert.match(device,/topic write boats\/boat-01\/parameter-capability/);
+  assert.match(device,/topic read boats\/boat-01\/firmware-command/);assert.match(device,/topic write boats\/boat-01\/firmware-response/);assert.match(device,/topic write boats\/boat-01\/firmware-capability/);
+  assert.match(bridge,/topic write boats\/\+\/firmware-command/);assert.match(bridge,/topic read boats\/\+\/firmware-response/);assert.match(bridge,/topic read boats\/\+\/firmware-capability/);
+  assert.doesNotMatch(device,/topic write .*firmware-command/);assert.doesNotMatch(bridge,/topic write .*firmware-response/);
   assert.doesNotMatch(device,/topic write .*parameter-command|boats\/\+/);assert.match(bridge,/topic write boats\/\+\/parameter-command/);assert.match(bridge,/topic read boats\/\+\/parameter-response/);assert.match(bridge,/topic read boats\/\+\/parameter-capability/);
   assert.ok(text.includes('user unrelated\ntopic read weather/#\n\n'));assert.equal(fs.readFileSync(f.envFile,'utf8'),before);
   const backups=fs.readdirSync(f.dir).filter(name=>name.startsWith('acl.before-parameters-'));assert.equal(backups.length,1);assert.equal(fs.readFileSync(path.join(f.dir,backups[0]),'utf8'),original);

@@ -4,7 +4,7 @@ const { test } = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http'), crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const { createServer } = require('../server');
-const { createMqttDeviceClient, validateInput, snapshot } = require('../server/mqtt-device-api');
+const { createMqttDeviceApi, createMqttDeviceClient, validateInput, validateVideoInput, snapshot } = require('../server/mqtt-device-api');
 const ORIGIN = 'https://mqtt-admin.test', revision = 'a'.repeat(64), nextRevision = 'b'.repeat(64);
 const credentials = { admin: 'admin-only-test', guest: 'guest-only-test' };
 
@@ -48,6 +48,18 @@ async function fixture(t, options = {}) {
   return { server, call, login, calls, advance: ms => time += ms };
 }
 const input = (values = {}) => ({ username: 'new-boat', password: 'NewPassword!123', revision, ...values });
+// 等待两个 HTTP 入口都已收到请求，再放行模拟组件；不依赖延时碰巧制造并发。
+function collectionReadsArrive(server, count = 2) {
+  return new Promise(resolve => {
+    let received = 0;
+    const observe = req => {
+      if (req.url === '/api/mqtt/devices' && req.method === 'GET' && ++received === count) {
+        server.removeListener('request', observe); resolve();
+      }
+    };
+    server.on('request', observe);
+  });
+}
 
 test('MQTT account list and mutation require a currently logged-in platform administrator', async t => {
   const f = await fixture(t), admin = await f.login(), guest = await f.login('guest');
@@ -58,7 +70,7 @@ test('MQTT account list and mutation require a currently logged-in platform admi
   assert.equal(f.calls.length, 0);
   const listed = await f.call('/api/mqtt/devices', { cookie: admin, origin: null });
   assert.equal(listed.status, 200); assert.equal(listed.headers['cache-control'], 'no-store');
-  assert.deepEqual(listed.data, { enabled: true, devices: [{ deviceId: 'boat-01', username: 'boat-01' }], revision });
+  assert.deepEqual(listed.data, { enabled: true, devices: [{ deviceId: 'boat-01', username: 'boat-01' }], revision, canManageVideo: false, videos: [] });
   assert.doesNotMatch(listed.raw, /password|secret|must-not-leak/);
   const changed = await f.call('/api/mqtt/devices/boat-01', { cookie: admin, method: 'PATCH', body: input() });
   assert.equal(changed.status, 200); assert.equal(changed.data.revision, nextRevision);
@@ -100,6 +112,81 @@ test('missing helper disables the read panel and mutations return an actionable 
   const result = await f.call('/api/mqtt/devices', { cookie }); assert.equal(result.status, 200); assert.equal(result.data.enabled, false);
   assert.match(result.data.reason, /README/);
   assert.equal((await f.call('/api/mqtt/devices/boat-01', { cookie, method: 'PATCH', body: input() })).status, 503);
+});
+
+for (const videoCapable of [false, true]) test('parallel account panels share one in-flight read with ' + (videoCapable ? 'video-capable' : 'legacy') + ' helper', { timeout: 10000 }, async t => {
+  let release, calls = 0;
+  const gate = new Promise(resolve => release = resolve);
+  const f = await fixture(t, { client: async (method, route) => {
+    assert.equal(method, 'GET'); assert.equal(route, '/devices');
+    if (++calls > 1) throw Object.assign(Error('helper rejects simultaneous operations'), { status: 409 });
+    await gate;
+    return { devices: [{ deviceId: 'boat-01', username: 'boat-01', password: 'private-secret' }], revision,
+      ...(videoCapable ? { canManageVideo: true, videos: [{ deviceId: 'boat-01', username: 'boat-camera' }] } : {}) };
+  } }), cookie = await f.login();
+  t.after(() => release());
+  const arrived = collectionReadsArrive(f.server);
+  const pending = [f.call('/api/mqtt/devices', { cookie }), f.call('/api/mqtt/devices', { cookie, origin: null })];
+  await arrived; assert.equal(calls, 1); release();
+  const results = await Promise.all(pending);
+  for (const result of results) {
+    assert.equal(result.status, 200, result.raw);
+    assert.equal(result.data.canManageVideo, videoCapable);
+    assert.deepEqual(result.data.videos, videoCapable ? [{ deviceId: 'boat-01', username: 'boat-camera' }] : []);
+    assert.doesNotMatch(result.raw, /password|private-secret/);
+  }
+  assert.deepEqual(results[0].data, results[1].data); assert.equal(calls, 1);
+});
+
+test('failed shared reads preserve the helper error status and the next explicit read retries without cached metadata', { timeout: 10000 }, async t => {
+  let release, calls = 0;
+  const gate = new Promise(resolve => release = resolve);
+  const f = await fixture(t, { client: async () => {
+    if (++calls === 1) { await gate; throw Object.assign(Error('PRIVATE backend configuration detail'), { status: 503 }); }
+    return { devices: [{ deviceId: 'boat-01', username: 'fresh-account' }], revision: nextRevision };
+  } }), cookie = await f.login();
+  t.after(() => release());
+  const arrived = collectionReadsArrive(f.server);
+  const pending = [f.call('/api/mqtt/devices', { cookie }), f.call('/api/mqtt/devices', { cookie })];
+  await arrived; release();
+  for (const result of await Promise.all(pending)) { assert.equal(result.status, 503); assert.doesNotMatch(result.raw, /PRIVATE|fresh-account/); }
+  assert.equal(calls, 1);
+  const recovered = await f.call('/api/mqtt/devices', { cookie });
+  assert.equal(recovered.status, 200); assert.equal(recovered.data.devices[0].username, 'fresh-account');
+  assert.equal(recovered.data.revision, nextRevision); assert.equal(calls, 2);
+  assert.equal((await f.call('/api/mqtt/devices', { cookie })).status, 200); assert.equal(calls, 3, 'Successful snapshots are not cached either');
+});
+
+test('a shared read still authenticates each waiting session and does not disclose metadata after one administrator logs out', { timeout: 10000 }, async t => {
+  let release, calls = 0;
+  const gate = new Promise(resolve => release = resolve);
+  const f = await fixture(t, { client: async () => {
+    calls++; await gate;
+    return { devices: [{ deviceId: 'boat-01', username: 'confidential-account' }], revision };
+  } }), first = await f.login(), second = await f.login(), guest = await f.login('guest');
+  t.after(() => release());
+  const arrived = collectionReadsArrive(f.server);
+  const pending = [f.call('/api/mqtt/devices', { cookie: first }), f.call('/api/mqtt/devices', { cookie: second })];
+  await arrived;
+  assert.equal((await f.call('/api/mqtt/devices', { cookie: second, origin: 'https://evil.test' })).status, 403);
+  assert.equal((await f.call('/api/mqtt/devices', { cookie: guest })).status, 403);
+  assert.equal((await f.call('/api/mqtt/devices')).status, 401);
+  await f.call('/api/auth/session', { cookie: first, method: 'DELETE' }); release();
+  const [revoked, active] = await Promise.all(pending);
+  assert.equal(revoked.status, 401); assert.doesNotMatch(revoked.raw, /confidential-account|boat-01|revision/);
+  assert.equal(active.status, 200); assert.equal(active.data.devices[0].username, 'confidential-account'); assert.equal(calls, 1);
+});
+
+test('closing the MQTT API while a shared read waits prevents every late metadata response', { timeout: 10000 }, async t => {
+  let release, calls = 0;
+  const gate = new Promise(resolve => release = resolve), session = { value: { role: 'admin' } };
+  const api = createMqttDeviceApi({ accounts: { enabled: true, sessionFor: () => session, isActive: () => true, sameOrigin: () => true },
+    client: async () => { calls++; await gate; return { devices: [{ deviceId: 'boat-01', username: 'private-account' }], revision }; } });
+  const responses = [0, 1].map(() => ({ destroyed: false, writableEnded: false, writeHead(status) { this.status = status; }, end(raw) { this.raw = raw; this.writableEnded = true; } }));
+  const req = { method: 'GET', headers: {} }, url = new URL('/api/mqtt/devices', ORIGIN);
+  const pending = responses.map(res => api.handle(req, res, url));
+  await Promise.resolve(); assert.equal(calls, 1); api.close(); release(); await Promise.all(pending);
+  for (const res of responses) { assert.equal(res.status, 401); assert.doesNotMatch(res.raw, /private-account|boat-01|revision/); }
 });
 
 test('serialized mutations do not retry and late replies after logout cannot disclose account metadata', async t => {
@@ -223,4 +310,51 @@ test('account revoked while checking helper capability cannot dispatch a new dev
   const f=await fixture(t,{client:async(method,route)=>{calls.push({method,route});started();await new Promise(resolve=>release=resolve);return {devices:[{deviceId:'boat-01',username:'boat-01'}],revision,canCreate:true};}}),cookie=await f.login();
   const pending=f.call('/api/mqtt/devices',{cookie,method:'POST',body:{...input(),deviceId:'boat-02'}});await began;
   await f.call('/api/auth/session',{cookie,method:'DELETE'});release();const result=await pending;assert.equal(result.status,401);assert.equal(calls.length,1);
+});
+
+test('video capability and public metadata are exposed per boat while secrets remain stripped', async t => {
+  const videos = [{ deviceId: 'boat-01', username: 'boat-video' }], calls = []; let currentRevision = revision;
+  const client = async (method, route, body) => {
+    calls.push({ method, route, body: body && { ...body } });
+    if (route === '/devices') return { devices: [{ deviceId: 'boat-01', username: 'boat-01' }], revision: currentRevision, canManageVideo: true, videos, password: 'private', secret: 'private' };
+    currentRevision = nextRevision;
+    return { ok: true, requiresReconnect: false, devices: [{ deviceId: 'boat-01', username: 'boat-01' }], revision: currentRevision,
+      canManageVideo: true, videos: [{ deviceId: 'boat-01', username: body.username }], password: 'private', hash: '$7$private' };
+  };
+  const f = await fixture(t, { client }), cookie = await f.login();
+  const listed = await f.call('/api/mqtt/devices', { cookie });
+  assert.equal(listed.status, 200); assert.equal(listed.data.canManageVideo, true);
+  assert.deepEqual(listed.data.videos, videos); assert.doesNotMatch(listed.raw, /password|secret|private|\$7\$/i);
+  const changed = await f.call('/api/mqtt/devices/boat-01/video', { cookie, method: 'PATCH', body: { username: 'boat-camera', password: 'six6!!', revision } });
+  assert.equal(changed.status, 200, changed.raw); assert.equal(changed.data.requiresReconnect, false);
+  assert.deepEqual(calls.slice(-2), [
+    { method: 'GET', route: '/devices', body: undefined },
+    { method: 'PUT', route: '/devices/boat-01/video', body: { username: 'boat-camera', password: 'six6!!', revision } }
+  ]);
+  assert.doesNotMatch(changed.raw, /six6|password|private|\$7\$/i);
+  const preserved = await f.call('/api/mqtt/devices/boat-01/video', { cookie, method: 'PATCH', body: { username: 'boat-camera', revision: nextRevision } });
+  assert.equal(preserved.status, 200); assert.equal(Object.hasOwn(calls.at(-1).body, 'password'), false);
+});
+
+test('video account mutation requires the new helper capability, admin session and same origin', async t => {
+  const f = await fixture(t), admin = await f.login(), guest = await f.login('guest'), body = { username: 'boat-video', password: 'six6!!', revision };
+  assert.equal((await f.call('/api/mqtt/devices/boat-01/video', { cookie: guest, method: 'PATCH', body })).status, 403);
+  assert.equal((await f.call('/api/mqtt/devices/boat-01/video', { cookie: admin, origin: 'https://evil.test', method: 'PATCH', body })).status, 403);
+  assert.equal((await f.call('/api/mqtt/devices/boat-01/video', { cookie: admin, method: 'PATCH', body })).status, 503);
+  assert.equal(f.calls.length, 1, 'Old helper is queried for capability but never receives PUT');
+  assert.equal((await f.call('/api/mqtt/devices/boat-01/video', { cookie: admin, method: 'PATCH', body: { ...body, password: 'short' } })).status, 400);
+  assert.equal((await f.call('/api/mqtt/devices/boat-01/video', { cookie: admin, method: 'PATCH', body: { ...body, password: 'has space' } })).status, 400);
+});
+
+test('video snapshots reject missing boats, duplicate assignments and usernames colliding with device accounts', () => {
+  const base = { devices: [{ deviceId: 'boat-01', username: 'boat-01' }], revision, canManageVideo: true };
+  assert.deepEqual(snapshot({ ...base, videos: [] }).videos, []);
+  for (const videos of [
+    [{ deviceId: 'boat-02', username: 'camera' }],
+    [{ deviceId: 'boat-01', username: 'camera' }, { deviceId: 'boat-01', username: 'other' }],
+    [{ deviceId: 'boat-01', username: 'boat-01' }],
+    [{ deviceId: 'boat-01', username: 'bad user', password: 'must-not-leak' }]
+  ]) assert.throws(() => snapshot({ ...base, videos }), /视频账号/);
+  assert.deepEqual(validateVideoInput({ deviceId: 'boat-01', username: 'camera', password: 'six6!!', revision }), { deviceId: 'boat-01', username: 'camera', password: 'six6!!', revision });
+  assert.throws(() => validateVideoInput({ deviceId: 'boat-01', username: 'camera', password: 'short', revision }));
 });

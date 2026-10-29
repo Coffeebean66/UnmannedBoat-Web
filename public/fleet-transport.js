@@ -35,7 +35,9 @@
       if(!device||!DEVICE_ID.test(device.id||''))return null;
       const result={id:device.id,online:this.brokerConnected&&device.online===true,
         lastReceivedAt:Number.isFinite(device.lastReceivedAt)?device.lastReceivedAt:null,
-        parametersReady:device.parametersReady===true,summary:null};
+        parametersReady:device.parametersReady===true,summary:null,
+        // 视频地址独立于遥测时效；视频更新不能续期船速、定位或设备在线状态。
+        video:device.video&&typeof device.video==='object'&&!Array.isArray(device.video)?{...device.video}:null};
       const source=device.summary;
       if(!result.online||!source||!Number.isFinite(source.receivedAt)||serverTime-source.receivedAt>=1000)return result;
       const summary={receivedAt:source.receivedAt,validUntil:{}};

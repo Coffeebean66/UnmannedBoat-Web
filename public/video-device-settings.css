@@ -1,0 +1,4 @@
+.video-device-settings { margin:0 0 22px;padding:18px;border:1px solid var(--line-strong);border-radius:10px;background:linear-gradient(135deg,var(--accent-soft),var(--panel) 72%); }
+.video-device-settings .mqtt-device-description { margin-bottom:12px; }
+.video-device-settings .mqtt-device-row { background:var(--panel); }
+@media(max-width:600px){.video-device-settings{padding:14px;}}

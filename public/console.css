@@ -75,6 +75,9 @@ button:hover:not(:disabled) { border-color:var(--accent); }
 .nav-dropdown-links { gap:3px;margin:7px 0 0 21px;padding:0 0 0 9px;border-left:1px solid var(--line);background:transparent; }
 .nav-dropdown-links a { min-height:39px;padding:9px 10px;font-size:12px;gap:9px; }
 .nav-dropdown-links a svg { width:16px;height:16px; }
+.nav-parameter-button { display:flex;align-items:center;gap:9px;width:100%;min-height:39px;padding:9px 10px;border:0;border-radius:8px;background:transparent;color:var(--muted);font-size:12px;text-align:left; }
+.nav-parameter-button svg { width:16px;height:16px; }
+.nav-parameter-button:hover:not(:disabled) { background:var(--accent-soft);color:var(--accent); }
 .vessel-summary { margin:24px 0 0;padding:13px;border:1px solid var(--line);border-radius:12px;background:var(--soft);color:var(--text); }
 .vessel-summary::before { display:none; }
 .vessel-summary-heading { font-size:11px;color:var(--muted); }

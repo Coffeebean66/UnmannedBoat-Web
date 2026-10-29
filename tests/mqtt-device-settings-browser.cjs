@@ -8,17 +8,32 @@ async function main() {
   fs.mkdirSync(output, { recursive: true });
   const run = fs.mkdtempSync(path.join(output, 'mqtt-device-settings-state-'));
   let revision = 'a'.repeat(64), devices = [{ deviceId: 'boat-01', username: 'boat-01' }, { deviceId: 'offline-vessel', username: 'vessel-two' }];
-  let mode = 'ready', writes = 0, lastInput;
+  let videos = [{ deviceId: 'boat-01', username: 'boat-01-video' }];
+  let mode = 'ready', writes = 0, lastInput, reading = false, helperReads = 0, overlappingReads = 0;
+  const snapshot = () => ({ devices, videos, revision, canCreate: true, canManageVideo: true });
   const server = createFixtureServer({ accountOptions: { storeFile: path.join(run, 'accounts.json') }, mapOptions: { file: path.join(run, 'map-settings.json') },
     mqttAdminOptions: { client: async (method, route, input) => {
       if (mode === 'unavailable') throw Object.assign(Error('component missing'), { status: 503, unavailable: true });
-      if (method === 'GET') return { devices, revision, canCreate: true };
+      if (method === 'GET') {
+        helperReads++;
+        if (reading) { overlappingReads++; throw Object.assign(Error('component busy'), { status: 409 }); }
+        reading = true;
+        try {
+          // 真正的特权组件将读取和写入一起互斥；两个设置面板必须共享同一在途读取。
+          await wait(80);
+          if (mode === 'read-failure') throw Object.assign(Error('component read failed'), { status: 503 });
+          return snapshot();
+        } finally { reading = false; }
+      }
       writes++;
       if (mode === 'conflict') throw Object.assign(Error('conflict'), { status: 409 });
       assert.ok(['PUT','POST'].includes(method)); assert.ok(method === 'POST' ? route === '/devices' : route.startsWith('/devices/')); assert.equal(input.revision, revision);
       lastInput = { ...input }; revision = (revision[0] === 'a' ? 'b' : 'c').repeat(64);
-      devices = method === 'POST' ? [...devices, {deviceId: input.deviceId, username: input.username}] : devices.map(device => device.deviceId === route.split('/').at(-1) ? { ...device, username: input.username } : device);
-      return { ok: true, requiresReconnect: true, devices, revision, canCreate: true };
+      if (route.endsWith('/video')) {
+        const deviceId = route.split('/').at(-2);
+        videos = [...videos.filter(video => video.deviceId !== deviceId), { deviceId, username: input.username }];
+      } else devices = method === 'POST' ? [...devices, {deviceId: input.deviceId, username: input.username}] : devices.map(device => device.deviceId === route.split('/').at(-1) ? { ...device, username: input.username } : device);
+      return { ok: true, requiresReconnect: true, ...snapshot() };
     } }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -59,7 +74,7 @@ async function main() {
     };
     const until = async expression => {
       for (let i = 0; i < 180; i++) { if (await evaluate(expression)) return; await wait(70); }
-      throw Error('Condition timed out: ' + expression + '\n' + await evaluate('JSON.stringify({auth:BoatAuth.state(),status:document.getElementById("mqttDeviceStatus").textContent})') + '\n' + errors.join('\n'));
+      throw Error('Condition timed out: ' + expression + '\n' + await evaluate('JSON.stringify({auth:BoatAuth.state(),status:document.getElementById("mqttDeviceStatus").textContent,videoStatus:document.getElementById("videoDeviceStatus").textContent})') + '\n' + errors.join('\n'));
     };
     const edit = async deviceId => {
       await evaluate('[...document.getElementById("mqttDeviceList").children].find(row=>row.querySelector("strong").textContent===' + JSON.stringify(deviceId) + ').querySelector("button").click()');
@@ -89,10 +104,33 @@ async function main() {
     await send('Page.navigate', { url }); await until('!!window.boatMonitor&&BoatAuth.ready');
     await evaluate('ensureTestLogin()'); await evaluate('connectTestBoat()');
     const connectionCount = await evaluate('window.testConnections');
+    const readsBeforeOpen = helperReads;
     await evaluate('document.getElementById("platformSettingsToggle").click()');
-    await until('document.getElementById("mqttDeviceList").children.length===2&&!boatMonitor.mqttDevices.busy');
+    await until('document.getElementById("mqttDeviceList").children.length===2&&!boatMonitor.mqttDevices.busy&&document.getElementById("videoDeviceList").children.length===2&&!document.getElementById("videoDeviceList").hidden&&!document.getElementById("videoDeviceRead").disabled');
+    assert.equal(helperReads - readsBeforeOpen, 1, 'both account panels share one privileged read');
+    assert.equal(overlappingReads, 0, 'opening settings never enters the worker concurrently');
     assert.equal(await evaluate('document.getElementById("mqttDeviceSettings").hidden'), false);
+    assert.equal(await evaluate('document.getElementById("videoDeviceSettings").hidden'), false);
+    assert.ok(await evaluate('document.getElementById("videoDeviceList").textContent.includes("boat-01-video")'));
     assert.equal(await evaluate('boatMonitor.link.connected'), true); assert.equal(await evaluate('window.testConnections'), connectionCount);
+    await evaluate('[...document.getElementById("videoDeviceList").children].find(row=>row.querySelector("strong").textContent==="boat-01").querySelector("button").click();document.getElementById("videoDeviceUsername").value="video-draft-account";document.getElementById("videoDevicePassword").value="browser-video-draft-secret"');
+    await evaluate('BoatAuth.initialize()');
+    assert.equal(await evaluate('document.getElementById("videoDeviceForm").hidden'), false, 'unchanged administrator refresh preserves the video editor');
+    assert.equal(await evaluate('document.getElementById("videoDeviceUsername").value'), 'video-draft-account');
+    assert.equal(await evaluate('document.getElementById("videoDevicePassword").value'), 'browser-video-draft-secret');
+    assert.equal(await evaluate('document.getElementById("videoDeviceRead").disabled'), false);
+    await evaluate('document.getElementById("videoDeviceCancel").click()');
+    assert.equal(await evaluate('document.getElementById("videoDevicePassword").value'), '');
+    mode = 'read-failure';
+    const readsBeforeFailure = helperReads;
+    await evaluate('document.getElementById("mqttDeviceRead").click();document.getElementById("videoDeviceRead").click()');
+    await until('document.getElementById("mqttDeviceStatus").dataset.tone==="error"&&document.getElementById("videoDeviceStatus").dataset.tone==="error"&&!boatMonitor.mqttDevices.busy&&!document.getElementById("videoDeviceRead").disabled');
+    assert.equal(helperReads - readsBeforeFailure, 1, 'a failed shared read is dispatched only once');
+    mode = 'ready';
+    await evaluate('document.getElementById("mqttDeviceRead").click();document.getElementById("videoDeviceRead").click()');
+    await until('boatMonitor.mqttDevices.loaded&&!boatMonitor.mqttDevices.busy&&!document.getElementById("videoDeviceList").hidden&&!document.getElementById("videoDeviceRead").disabled&&document.getElementById("videoDeviceStatus").dataset.tone!=="error"');
+    assert.equal(helperReads - readsBeforeFailure, 2, 'retry reaches the component instead of retaining a rejected promise');
+    assert.equal(overlappingReads, 0);
     await edit('boat-01'); assert.equal(await evaluate('document.getElementById("mqttDeviceId").readOnly'), true);
     await fill('vessel-one', 'browser-device-secret', 'not-matching-secret'); await save();
     await until('document.getElementById("mqttDeviceStatus").textContent.includes("不一致")');
@@ -138,6 +176,17 @@ async function main() {
     assert.equal(await evaluate('document.getElementById("mqttDeviceList").hidden'), true);
     mode = 'ready'; await evaluate('document.getElementById("mqttDeviceRead").click()');
     await until('boatMonitor.mqttDevices.loaded&&!boatMonitor.mqttDevices.busy');
+    await evaluate('document.getElementById("videoDeviceRead").click()');
+    await until('!document.getElementById("videoDeviceList").hidden&&!document.getElementById("videoDeviceRead").disabled&&document.getElementById("videoDeviceList").children.length===3');
+    await evaluate('[...document.getElementById("videoDeviceList").children].find(row=>row.querySelector("strong").textContent==="boat-01").querySelector("button").click();document.getElementById("videoDeviceUsername").value="boat-01-video-updated";document.getElementById("videoDevicePassword").value="browser-video-secret";document.getElementById("videoDevicePasswordConfirm").value="browser-video-secret";document.getElementById("videoDeviceForm").requestSubmit()');
+    await until('document.getElementById("videoDeviceStatus").dataset.tone==="success"&&!document.getElementById("videoDeviceRead").disabled');
+    assert.equal(writes, 6);
+    assert.equal(lastInput.username, 'boat-01-video-updated');
+    assert.equal(lastInput.password, 'browser-video-secret');
+    assert.equal(await evaluate('document.getElementById("videoDevicePassword").value'), '');
+    assert.ok(await evaluate('document.getElementById("videoDeviceList").textContent.includes("boat-01-video-updated")'));
+    assert.equal(devices[0].username, 'vessel-one', 'video save preserves the boat telemetry account');
+    assert.equal(overlappingReads, 0);
     await evaluate('document.getElementById("mqttDeviceAdd").click();document.getElementById("mqttDeviceId").value="boat-04"'); await fill('draft-account', 'browser-draft-secret');
     await evaluate('document.getElementById("platformSettingsClose").click()');
     await until('!boatMonitor.mqttDevices.isOpen');
@@ -148,10 +197,11 @@ async function main() {
     await evaluate('document.getElementById("accountLoginOpen").click();document.getElementById("accountUsername").value="observer";document.getElementById("accountPassword").value="browser-guest-test-only";document.getElementById("accountLoginForm").requestSubmit()');
     await until('BoatAuth.user?.role==="guest"&&!BoatAuth.busy');
     assert.equal(await evaluate('document.getElementById("mqttDeviceSettings").hidden'), true);
+    assert.equal(await evaluate('document.getElementById("videoDeviceSettings").hidden'), true);
     assert.equal(await evaluate('fetch("/api/mqtt/devices").then(response=>response.status)'), 403);
-    assert.equal(await evaluate('[...Object.values(localStorage),...Object.values(sessionStorage)].some(value=>/browser-device-secret|browser-draft-secret|browser-conflict-secret|browser-new-boat-secret|browser-new-conflict-secret|browser-duplicate-secret/.test(String(value)))'), false);
+    assert.equal(await evaluate('[...Object.values(localStorage),...Object.values(sessionStorage)].some(value=>/browser-device-secret|browser-draft-secret|browser-conflict-secret|browser-new-boat-secret|browser-new-conflict-secret|browser-duplicate-secret|browser-video-secret|browser-video-draft-secret/.test(String(value)))'), false);
     assert.deepEqual(errors, []);
-    console.log('Chrome MQTT device settings passed: split platform settings, real local auth/API, new-boat provisioning and duplicate/conflict checks, device and offline-device edits, password confirmation, native confirmation cancel/accept, unavailable component, guest403, draft cleanup and 1440/375/320px dark/light layouts.');
+    console.log('Chrome MQTT device settings passed: concurrent device/video panels share the exclusive helper, real auth refresh preserves video drafts, failed reads recover, video credentials save independently, new-boat provisioning and duplicate/conflict checks, device/offline-device edits, confirmation cancel/accept, unavailable component, guest403, draft cleanup and 1440/375/320px dark/light layouts.');
   } finally {
     socket?.close(); browser.kill(); server.closeAllConnections?.(); await new Promise(resolve => server.close(resolve));
     if (path.dirname(run) === output && path.basename(run).startsWith('mqtt-device-settings-state-')) fs.rmSync(run, { recursive: true, force: true });

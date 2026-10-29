@@ -3,11 +3,13 @@
 const crypto=require('node:crypto');
 const {isIP}=require('node:net');
 const {DEVICE_ID}=require('./cloud');
+const {readVideoConfig}=require('./video-protocol');
 const COOKIE='boat_cloud_session';
 const hash=value=>crypto.createHash('sha256').update(value).digest();
 function createCloudApi({bridge,env=process.env,now=Date.now,maxSessions=128,maxClients=64,maxClientsPerSession=4,sessionMs=12*60*60*1000,heartbeatMs=15000,accounts}={}){
   const accountMode=!!accounts?.enabled;
   const enabled=!!bridge?.enabled;
+  const videoConfig=readVideoConfig(env);
   if(enabled&&!accountMode&&(!env.BOAT_CLOUD_PASSWORD||env.BOAT_CLOUD_PASSWORD.length<16||env.BOAT_CLOUD_PASSWORD.length>256))throw Error('BOAT_CLOUD_PASSWORD must contain 16 to 256 characters');
   let configuredOrigin='';
   if(env.BOAT_CLOUD_ORIGIN){
@@ -56,7 +58,7 @@ function createCloudApi({bridge,env=process.env,now=Date.now,maxSessions=128,max
     if(client.backpressured||client.res.writableLength>32768)return closeClient(client,true);
     if(!client.res.write(encoded)){
       // 64艘船首次快照可超过Node单次写入高水位；只容许这一份有上限的快照等待drain，不继续排队。
-      if(client.fleet&&event==='fleet'&&Buffer.byteLength(encoded)<=131072){
+      if(client.fleet&&event==='fleet'&&Buffer.byteLength(encoded)<=524288){
         client.backpressured=true;client.onDrain=()=>{client.backpressured=false;clearTimeout(client.drainTimer);client.onDrain=null;};
         client.res.once('drain',client.onDrain);client.drainTimer=setTimeout(()=>closeClient(client,true),2000);client.drainTimer.unref?.();
       }else closeClient(client,true);
@@ -109,7 +111,7 @@ function createCloudApi({bridge,env=process.env,now=Date.now,maxSessions=128,max
     if(!url.pathname.startsWith('/api/cloud/'))return false;
     res.setHeader('Cache-Control','no-store');
     if(url.pathname==='/api/cloud/config'&&req.method==='GET'){
-      json(res,200,{enabled,requiresLogin:enabled&&!sessionFor(req),serverTime:now()});return true;
+      json(res,200,{enabled,requiresLogin:enabled&&!sessionFor(req),serverTime:now(),video:videoConfig});return true;
     }
     if(!enabled||closed){json(res,503,{error:'Cloud telemetry is not enabled'});return true;}
     if(url.pathname==='/api/cloud/parameters'&&req.method==='POST'){
@@ -161,6 +163,15 @@ function createCloudApi({bridge,env=process.env,now=Date.now,maxSessions=128,max
     if(!session){json(res,401,{error:'Login required'});return true;}
     if(url.pathname==='/api/cloud/devices'&&req.method==='GET'){json(res,200,{...bridge.list(),serverTime:now()});return true;}
     if(url.pathname==='/api/cloud/fleet'&&req.method==='GET'){json(res,200,fleetSnapshot());return true;}
+    if(url.pathname==='/api/cloud/history'&&req.method==='GET'){
+      const device=url.searchParams.get('device');
+      if(!DEVICE_ID.test(device||'')){json(res,400,{error:'Invalid device ID'});return true;}
+      const numeric=(name,fallback)=>url.searchParams.has(name)&&url.searchParams.get(name)!==''?Number(url.searchParams.get(name)):fallback;
+      const since=numeric('since',0),until=numeric('until',Infinity),limit=numeric('limit',600);
+      if(!Number.isFinite(since)||since<0||until<since||!(until===Infinity||Number.isFinite(until))||!Number.isInteger(limit)||limit<1||limit>3600){json(res,400,{error:'Invalid history range or limit'});return true;}
+      const history=bridge.historySnapshot?.(device,{since,until,limit})||{deviceId:device,latest:null,samples:[],recording:{persistent:false,storageError:null}};
+      json(res,200,{...history,serverTime:now()});return true;
+    }
     if(['/api/cloud/events','/api/cloud/fleet/events'].includes(url.pathname)&&req.method==='GET'){
       const fleet=url.pathname==='/api/cloud/fleet/events',device=fleet?null:url.searchParams.get('device');
       if(!fleet&&!DEVICE_ID.test(device||'')){json(res,400,{error:'Invalid device ID'});return true;}

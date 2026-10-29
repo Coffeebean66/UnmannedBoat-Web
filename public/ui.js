@@ -1,6 +1,7 @@
 /* 本地 SVG 图标、主题和大屏交互，无外部字体或组件依赖。 */
 (() => {
   const paths = {
+    video:'M15 8l6-3v14l-6-3M3 5h12v14H3z',
     boat:'M4 13 12 9l8 4-2 6H6l-2-6ZM8 10V5h8v5M12 5V2M2 21q2-2 5 0t5 0 5 0 5 0',
     dashboard:'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z',
     motor:'M9 9a4 4 0 1 0 6 6 4 4 0 0 0-6-6ZM12 8V3q7-2 5 4l-2 3M16 12h5q2 7-4 5l-3-2M12 16v5q-7 2-5-4l2-3M8 12H3Q1 5 7 7l3 2',
@@ -53,7 +54,6 @@
   headerSize?.observe(header);
   window.addEventListener('pagehide',()=>headerSize?.disconnect(),{once:true});
   document.getElementById('themeToggle').onclick=()=>setTheme(document.documentElement.dataset.theme==='dark'?'light':'dark');
-  document.getElementById('sidebarSettings').onclick=()=>document.getElementById('settingsDialog').showModal();
   const clock=document.getElementById('dashboardTime');
   function updateClock(){if(!document.hidden){const now=new Date();clock.dateTime=now.toISOString();clock.textContent=now.toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});}}
   updateClock();const clockTimer=setInterval(updateClock,1000);

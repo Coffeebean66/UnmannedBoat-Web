@@ -33,6 +33,18 @@ test('device listing exposes only stable topic ID, username and opaque revision'
   assert.deepEqual(data.devices,[{deviceId:'boat-01',username:'boat-01'}]);assert.match(data.revision,/^[a-f0-9]{64}$/);
   assert.doesNotMatch(JSON.stringify(data),/fake-|\$7\$|password|bridge/);assert.deepEqual(f.calls,[]);assert.deepEqual(f.services,[]);
 });
+
+test('concurrent helper list callers share only in-flight work and retry fresh configuration after success or failure',async t=>{
+  const f=await fixture(t),[first,second]=await Promise.all([f.manager.list(),f.manager.list()]);
+  assert.deepEqual(first,second);assert.equal(f.services.length,0);assert.equal(f.calls.length,0);
+  await fsp.appendFile(f.file('acl'),'\n# changed after first list\n');
+  assert.notEqual((await f.manager.list()).revision,first.revision);
+  await fsp.writeFile(f.file('.boat-cloud-deployment'),'invalid-deployment');
+  const failed=await Promise.allSettled([f.manager.list(),f.manager.list()]);
+  assert.deepEqual(failed.map(item=>[item.status,item.reason?.status]),[['rejected',503],['rejected',503]]);
+  await fsp.writeFile(f.file('.boat-cloud-deployment'),'unmanned-boat-cloud-v1\n');
+  assert.deepEqual((await f.manager.list()).devices,first.devices);
+});
 test('renaming a device preserves its hash, topic permissions and all unrelated credentials',async t=>{
   const f=await fixture(t),value=await f.manager.update('boat-01',await input(f,{username:'new-mqtt-user'}));
   assert.equal(value.ok,true);assert.equal(value.requiresReconnect,true);assert.deepEqual(value.devices,[{deviceId:'boat-01',username:'new-mqtt-user'}]);
@@ -122,14 +134,14 @@ test('HTTP worker accepts bounded fixed routes and emits only safe errors',async
   assert.equal((await put({revision:data.revision,username:'new-name',password:'a'.repeat(3000)})).status,413);
 });
 
-test('new boat gets an independent account and exactly five own-topic permissions while existing credentials persist',async t=>{
+test('new boat gets an independent account and exactly eight own-topic permissions while existing credentials persist',async t=>{
   const f=await fixture(t),before=await f.manager.list();assert.equal(before.canCreate,true);
   const password='new-boat-test-Secret!23',created=await f.manager.create({deviceId:'boat-02',username:'vessel-two',password,revision:before.revision});
   assert.deepEqual(created.devices,[{deviceId:'boat-01',username:'boat-01'},{deviceId:'boat-02',username:'vessel-two'}]);
   assert.equal(created.requiresReconnect,true);assert.notEqual(created.revision,before.revision);
   const passwd=await fsp.readFile(f.file('passwd'),'utf8');assert.ok(passwd.startsWith(f.initial.passwd));assert.match(passwd,/vessel-two:\$7\$/);assert.ok(!passwd.includes(password));
   const nextAcl=await fsp.readFile(f.file('acl'),'utf8');assert.ok(nextAcl.startsWith(f.initial.acl));
-  assert.equal(nextAcl.slice(f.initial.acl.length).trim(),'user vessel-two\ntopic write boats/boat-02/telemetry\ntopic write boats/boat-02/status\ntopic read boats/boat-02/parameter-command\ntopic write boats/boat-02/parameter-response\ntopic write boats/boat-02/parameter-capability');
+  assert.equal(nextAcl.slice(f.initial.acl.length).trim(),'user vessel-two\ntopic write boats/boat-02/telemetry\ntopic write boats/boat-02/status\ntopic read boats/boat-02/parameter-command\ntopic write boats/boat-02/parameter-response\ntopic write boats/boat-02/parameter-capability\ntopic read boats/boat-02/firmware-command\ntopic write boats/boat-02/firmware-response\ntopic write boats/boat-02/firmware-capability');
   assert.equal(await fsp.readFile(f.file('runtime.env'),'utf8'),f.initial['runtime.env']);
   assert.doesNotMatch(JSON.stringify(created),/password|\$7\$/);assert.ok(!(await fsp.readFile(f.file('access.txt'),'utf8')).includes(password));assert.equal(f.services.length,1);
   assert.deepEqual((await createMqttDeviceManager(f.managerOptions).list()).devices,created.devices);

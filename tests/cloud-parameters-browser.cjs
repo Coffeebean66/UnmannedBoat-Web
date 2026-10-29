@@ -40,8 +40,11 @@ async function main(){
     await send('Runtime.enable');await send('Page.enable');await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
     await send('Page.navigate',{url:'http://127.0.0.1:'+server.address().port});await until('!!window.boatMonitor&&window.BoatAuth.ready&&document.getElementById("accountLoginDialog").open');
     await login('operator','browser-admin-test-only');
-    await until('document.getElementById("cloudDevice").value==="boat-cloud-test"&&!document.getElementById("connectButton").disabled');await evaluate('document.getElementById("connectButton").click()');await until('boatMonitor.link.connected&&!boatMonitor.link.readOnly');
-    await evaluate('document.getElementById("settingsToggle").click();document.getElementById("readParameters").click()');await until('document.getElementById("parameterStatus").textContent.includes("读取成功")&&!boatMonitor.params.busy');
+    const configure='document.querySelector(".fleet-card[data-device-id=boat-cloud-test] .fleet-parameter-button")';
+    await until(configure+'&&!'+configure+'.hidden&&!'+configure+'.disabled');await evaluate(configure+'.click()');
+    await until('document.getElementById("settingsDialog").open&&boatMonitor.link.connected&&!boatMonitor.link.readOnly');
+    assert.equal(await evaluate('document.getElementById("parameterDeviceName").textContent'),'boat-cloud-test');assert.equal(fixture.calls.length,0,'Opening one boat does not automatically read its parameters');
+    await until('!document.getElementById("readParameters").disabled');await evaluate('document.getElementById("readParameters").click()');await until('document.getElementById("parameterStatus").textContent.includes("读取成功")&&!boatMonitor.params.busy');
     assert.equal(await evaluate('boatMonitor.params.confirmed.kpX2PerMps'),42);assert.equal(fixture.calls.length,1);await shot('cloud-parameters-desktop-read');
     await until('!document.getElementById("writeParameters").disabled');await evaluate('document.querySelector("[data-key=kpX2PerMps]").value="91";document.getElementById("writeParameters").click()');
     await until('document.getElementById("parameterStatus").textContent.includes("写入成功")&&!boatMonitor.params.busy');assert.equal(fixture.values.kpX2PerMps,91);

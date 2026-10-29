@@ -133,14 +133,14 @@ function unfoldAngle(value, previousValue, previousPlot) {
 }
 
 // 一条历史同时记录船速和航向，切换图表只改变展示，不丢弃另一种数据。
-function createBoatChartSample(frame, receivedAt, timestamp, connected, previous) {
+function createBoatChartSample(frame, receivedAt, timestamp, connected, previous, maxGapMs = 1000) {
   const b = frame && frame.boat;
   const view = prepareBoatDisplay(frame, receivedAt, timestamp, connected);
   const headingTarget = view.headingMode && validHeading(b.targetHeading) ? b.targetHeading : null;
   const headingActual = view.headingMode && view.headingFresh && validHeading(b.actualHeading) ?
     b.actualHeading : null;
-  // 间隔达到 1 秒或时间倒退时重建展开基准，避免跨越失联区间猜测转动方向。
-  const adjacent = previous && timestamp >= previous.timestamp && timestamp - previous.timestamp < 1000;
+  // 实时流间隔达到 1 秒时重建展开基准；历史回放按服务器采样周期设置连续阈值。
+  const adjacent = previous && timestamp >= previous.timestamp && timestamp - previous.timestamp < maxGapMs;
   const headingTargetPlot = unfoldAngle(headingTarget,
     adjacent ? previous.headingTarget : null, adjacent ? previous.headingTargetPlot : null);
   let headingActualPlot = unfoldAngle(headingActual,
@@ -151,7 +151,7 @@ function createBoatChartSample(frame, receivedAt, timestamp, connected, previous
     headingActualPlot = headingTargetPlot + shortestAngleError(headingActual, headingTarget);
   }
   return {
-    timestamp,
+    timestamp, gapMs: maxGapMs,
     target: view.current && b.speedLoop ? Math.abs(b.targetMps) : null,
     actual: view.fresh && b.speedLoop ? b.actualMps : null,
     headingTarget, headingActual, headingTargetPlot, headingActualPlot
@@ -175,7 +175,7 @@ function prepareBoatChart(history, mode) {
   const heading = mode === 'heading';
   const summary = prepareBoatChartSummary(history[history.length - 1], mode);
   const samples = history.map(sample => ({
-    timestamp: sample.timestamp,
+    timestamp: sample.timestamp, gapMs: sample.gapMs || 1000,
     target: sample[heading ? 'headingTargetPlot' : 'target'],
     actual: sample[heading ? 'headingActualPlot' : 'actual']
   }));
@@ -241,6 +241,61 @@ function prepareBoatDisplay(frame, receivedAt, now, connected) {
   };
 }
 module.exports = { prepareBoatDisplay };
+
+},
+"utils/boatHistory.js": function(require, module, exports) {
+/* 服务器历史用于回看，绝不产生在线状态或参数能力；时间换算与实时数据保持同一单调时钟。 */
+'use strict';
+const { createBoatChartSample } = require('./boatChart');
+const MAX_HISTORY_POINTS = 3600;
+
+function historyFrame(summary) {
+  if (!summary || typeof summary !== 'object' || Array.isArray(summary)) return null;
+  const frame = {};
+  if (summary.velocity && typeof summary.velocity === 'object') frame.velocity = summary.velocity;
+  if (summary.boat && typeof summary.boat === 'object') frame.boat = summary.boat;
+  if (summary.imu && typeof summary.imu === 'object') frame.imu = summary.imu;
+  if (summary.status && typeof summary.status === 'object') Object.assign(frame, summary.status);
+  return Object.keys(frame).length ? frame : null;
+}
+
+function prepareHistory(result, deviceId, nowWall, nowMono) {
+  if (!result || result.deviceId !== deviceId || !Array.isArray(result.samples) || result.samples.length > MAX_HISTORY_POINTS ||
+      !Number.isFinite(nowWall) || !Number.isFinite(nowMono)) throw Error('历史记录格式不正确');
+  const records = result.samples.filter(item => item && (!item.deviceId || item.deviceId === deviceId) && Number.isFinite(item.receivedAt) && item.receivedAt > 0 && item.receivedAt <= nowWall + 1000)
+    .map(item => ({ ...item, frame: historyFrame(item.summary), at: nowMono - Math.max(0, nowWall - item.receivedAt) }))
+    .filter(item => item.frame).sort((a, b) => a.receivedAt - b.receivedAt);
+  const chart = [], points = [];
+  // 历史默认每秒采样，不能套用实时流的 1 秒断线阈值，否则曲线只剩孤立点。
+  const gapMs = Math.max(5000, Number.isFinite(result.recording?.sampleMs) ? result.recording.sampleMs * 2.5 : 5000);
+  for (const item of records) {
+    const boat = item.frame.boat;
+    const chartable = boat && ['targetMps', 'actualMps', 'requestedMps', 'commonPercent', 'turnPercent'].every(key => Number.isFinite(boat[key])) &&
+      (boat.controlMode !== 2 || ['targetHeading', 'actualHeading', 'headingError'].every(key => Number.isFinite(boat[key])));
+    if (chartable) chart.push(createBoatChartSample(item.frame, item.at, item.at, true, chart.at(-1), gapMs));
+    if (item.frame.velocity) points.push({ velocity: item.frame.velocity, timestamp: item.at });
+  }
+  const source = result.latest;
+  let latest = null;
+  if (source && (!source.deviceId || source.deviceId === deviceId) && Number.isFinite(source.receivedAt) && source.receivedAt > 0 && source.receivedAt <= nowWall + 1000) {
+    const frame = historyFrame(source.summary), age = Math.max(0, nowWall - source.receivedAt);
+    if (frame) latest = { frame, receivedAt: source.receivedAt, at: nowMono - age, ageMs: age };
+  }
+  const receivedAt = latest?.receivedAt || records.at(-1)?.receivedAt || null;
+  const last = latest?.frame || records.at(-1)?.frame;
+  const velocity = last?.velocity, boat = last?.boat;
+  const sourceFresh = velocity?.received === true && velocity.fresh === true && Number.isFinite(velocity.ageMs) && velocity.ageMs >= 0 && velocity.ageMs < 1000;
+  const boatFresh = boat?.received === true && Number.isFinite(boat.ageMs) && boat.ageMs >= 0 && boat.ageMs < 1000;
+  const fix = sourceFresh && velocity?.hasNavigation === true && velocity.fixValid === true && Number.isFinite(velocity.latitude) &&
+    Number.isFinite(velocity.longitude) && Math.abs(velocity.latitude) <= 90 && Math.abs(velocity.longitude) <= 180 ?
+    { latitude: velocity.latitude, longitude: velocity.longitude } : null;
+  return { chart, points, latest, receivedAt, end: records.at(-1)?.at ?? null, recording: result.recording || null,
+    last: { speedMps: boatFresh && boat.feedbackValid === true && Number.isFinite(boat.actualMps) ? boat.actualMps : sourceFresh && velocity.velocityValid === true && Number.isFinite(velocity.xMps) && Number.isFinite(velocity.yMps) ? Math.hypot(velocity.xMps, velocity.yMps) : null,
+      headingDegrees: boatFresh && boat.headingValid === true && Number.isFinite(boat.actualHeading) && boat.actualHeading >= 0 && boat.actualHeading < 360 ? boat.actualHeading : sourceFresh && velocity.headingValid === true && Number.isFinite(velocity.headingDegrees) && velocity.headingDegrees >= 0 && velocity.headingDegrees < 360 ? velocity.headingDegrees : null,
+      fix } };
+}
+
+module.exports = { historyFrame, prepareHistory, MAX_HISTORY_POINTS };
 
 },
 "utils/boatRenderer.js": function(require, module, exports) {
@@ -544,6 +599,28 @@ class BoatTrack {
   stop() {
     this.active = false;
     this.breakSegment();
+  }
+
+  // 云端每秒采样的历史不能套用实时1秒断流判据；5秒空窗或无效定位才分段。
+  restore(samples) {
+    const active = this.active;
+    this.clear();this.active = active;
+    let previous = null;
+    for (const sample of samples || []) {
+      const raw = sample?.velocity, timestamp = sample?.timestamp;
+      const valid = raw?.received === true && raw.fresh === true && raw.fixValid === true && raw.hasNavigation === true &&
+        Number.isFinite(raw.ageMs) && raw.ageMs >= 0 && raw.ageMs < 1000 && Number.isFinite(raw.latitude) && Number.isFinite(raw.longitude) &&
+        Math.abs(raw.latitude) <= 90 && Math.abs(raw.longitude) <= 180;
+      const point = valid && this.project(raw.latitude, raw.longitude);
+      if (!point || !Number.isFinite(timestamp)) { previous = null; continue; }
+      if (!previous || timestamp <= previous.timestamp || timestamp - previous.timestamp > 5000) this.segments.push([]);
+      const speedMps = raw.velocityValid === true && Number.isFinite(raw.xMps) && Number.isFinite(raw.yMps) ? Math.hypot(raw.xMps, raw.yMps) : null;
+      this.segments[this.segments.length - 1].push({ ...point, speedMps });this.pointCount++;
+      previous = { timestamp, raw };
+    }
+    while (this.segments.length > TRACK_MAX_SEGMENTS) { this.pointCount -= this.segments.shift().length;this.truncated = true; }
+    while (this.pointCount > TRACK_MAX_POINTS) { this.segments[0].shift();this.pointCount--;if (!this.segments[0].length) this.segments.shift();this.truncated = true; }
+    this.breakSegment();this.revision++;
   }
 
   // 暂停、定位无效或断流后另起一段，不能把缺失的航程绘成直线。
