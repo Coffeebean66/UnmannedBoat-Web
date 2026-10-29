@@ -35,7 +35,25 @@ EnvironmentFile=/etc/unmanned-boat-web/ota.env
 
 文件中唯一必需配置为 `BOAT_OTA_KEY=` 后接 **64 个十六进制字符**，与生成的板端私密头一致。不要使用示例、测试密钥，不要把密钥填到浏览器或 MQTT 设备密码框。设备登录密码与 OTA 密钥用途不同；升级密钥保存在服务器与固件中。
 
-然后重载、重启网页服务：
+已有受管理 MQTT 服务器还需从新版完整 Web 源码目录按以下顺序更新。先更新 root MQTT 管理组件；安装脚本会重启网页服务，但不会迁移已有 ACL 或重载 Broker：
+
+```bash
+sudo bash maintenance/install-mqtt-device-admin.sh
+```
+
+再显式补齐已有设备及桥接账号的参数和 OTA 主题权限：
+
+```bash
+sudo node maintenance/configure-parameter-acl.cjs /etc/unmanned-boat-web/acl /etc/unmanned-boat-web/runtime.env
+```
+
+脚本输出 `1` 表示 ACL 已修改，并在配置目录保存 `acl.before-parameters-*` 恢复副本；输出 `0` 表示权限已齐全。原密码和无关 ACL 保留。仅在输出 `1` 时向运行中的 Broker 发送 HUP，使其加载新 ACL：
+
+```bash
+sudo systemctl kill --kill-whom=main --signal=HUP unmanned-boat-mqtt.service
+```
+
+确认 ACL 迁移成功并完成所需的 Broker 重载后，最后统一重载、重启网页服务，让 OTA 配置和主题订阅生效：
 
 ```bash
 sudo systemctl daemon-reload
@@ -43,13 +61,7 @@ sudo systemctl restart unmanned-boat-web
 sudo systemctl status unmanned-boat-web
 ```
 
-已有服务器还需从新版完整 Web 源码目录更新一次 MQTT 管理组件，以补齐精确的 OTA 主题权限：
-
-```bash
-sudo bash maintenance/install-mqtt-device-admin.sh
-```
-
-这可能短暂重连 Broker。普通网页“更新”只替换应用，不替换 root 管理组件；新的设备创建和首次部署也已生成对应 ACL。使用自建外部 Broker 时，手动为每艘船与桥接账号配置下表权限，不要给视频账号授予这些主题。
+最后这次网页重启必须在 ACL 生效之后；若此前 OTA 订阅曾被旧 ACL 拒绝，只重载 Broker 不一定会重新订阅。普通网页“更新”只替换应用，不替换 root 管理组件，也不会执行这次 ACL 迁移；新的设备创建和首次部署已生成对应 ACL。使用自建外部 Broker 时，手动为每艘船与桥接账号配置下表权限，并在权限生效后重启网页服务；不要给视频账号授予这些主题。
 
 | 主题 | 所属船端账户 | 服务器桥接账户 |
 | --- | --- | --- |
