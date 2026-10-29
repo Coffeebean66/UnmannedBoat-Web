@@ -13,8 +13,9 @@
   const videoDevices=new BoatVideoDeviceSettingsPanel();
   const videoView=new BoatVideoView();
   const videoRecording=new BoatVideoRecordingPanel();
+  const firmware=new BoatFirmwarePanel();
   const fleet=new BoatFleetLink(cloud);
-  const fleetView=new BoatFleetView({onSelect:id=>selectBoat(id),onConfigure:id=>openBoatSettings(id).catch(error=>toast(error.message)),onVideo:id=>openBoatVideo(id).catch(error=>toast(error.message))});
+  const fleetView=new BoatFleetView({onSelect:id=>selectBoat(id),onConfigure:id=>openBoatSettings(id).catch(error=>toast(error.message)),onVideo:id=>openBoatVideo(id).catch(error=>toast(error.message)),onFirmware:id=>firmware.open(id)});
   const fleetMapView=new BoatFleetMapView({onSelect:id=>selectBoat(id)});
   let parameterDeviceId='',parameterOpenSequence=0,videoOpenSequence=0;
   const wgs=(latitude,longitude)=>Number.isFinite(latitude)&&Number.isFinite(longitude)&&Math.abs(latitude)<=90&&Math.abs(longitude)<=180?{latitude,longitude}:null;
@@ -376,16 +377,18 @@
   on('mapCenter',()=>{if(!map?.ready)toast('地图尚未就绪，请查看地图底部提示');else if(lastLocation)map.setView(lastLocation,16);else toast('尚无有效定位');});
   $('mapFollow').onchange=()=>{if($('mapFollow').checked&&lastLocation&&map?.ready)map.setView(lastLocation,16);};
   function parameterAccess() {
-    return {canManage:!!window.BoatAuth?.canManage,parameterBusy:params.busy||!!link.pending};
+    return {canManage:!!window.BoatAuth?.canManage,canUpgradeFirmware:window.BoatAuth?.enabled===true&&window.BoatAuth?.ready===true&&window.BoatAuth?.user?.role==='admin',parameterBusy:params.busy||!!link.pending};
   }
   function syncParameterAccess() {
     const access=parameterAccess(),selected=!!(cloud.authenticated&&cloud.selectedId);
-    if(fleetView.state.canManage!==access.canManage||fleetView.state.parameterBusy!==access.parameterBusy)fleetView.update(access);
+    if(fleetView.state.canManage!==access.canManage||fleetView.state.canUpgradeFirmware!==access.canUpgradeFirmware||fleetView.state.parameterBusy!==access.parameterBusy)fleetView.update(access);
     const offline=!cloud.devices.some(device=>device.id===cloud.selectedId&&device.online);
     for(const id of ['settingsToggle','settingsEntry']){
       $(id).hidden=!access.canManage||!selected;
       $(id).disabled=access.parameterBusy||offline;
     }
+    $('firmwareToggle').hidden=!access.canUpgradeFirmware||!selected;
+    $('firmwareToggle').disabled=access.parameterBusy;
     document.querySelector('.settings-callout').hidden=!access.canManage||!selected;
   }
   async function openBoatSettings(id=cloud.selectedId) {
@@ -412,6 +415,7 @@
   }
   const openPlatformSettings=()=>{window.BoatAuth?.assertManage();$('platformSettingsDialog').showModal();users.open();mqttDevices.open();videoDevices.open();videoRecording.open();mapSettings.open();};
   on('settingsToggle',openSettings);
+  on('firmwareToggle',()=>firmware.open(cloud.selectedId));
   on('settingsEntry',openSettings);
   on('settingsClose',()=>$('settingsDialog').close());
   $('settingsDialog').addEventListener('close',()=>{if(!$('settingsDialog').open)delete $('settingsDialog').dataset.deviceId;});
@@ -419,7 +423,7 @@
   on('sidebarPlatformSettings',openPlatformSettings);
   on('platformSettingsClose',()=>$('platformSettingsDialog').close());
   $('platformSettingsDialog').addEventListener('close',()=>{users.close();mqttDevices.close();videoDevices.close();videoRecording.close();mapSettings.close();});
-  window.addEventListener('pagehide',()=>{users.destroy();mqttDevices.destroy();videoDevices.destroy();},{once:true});
+  window.addEventListener('pagehide',()=>{users.destroy();mqttDevices.destroy();videoDevices.destroy();firmware.destroy();},{once:true});
   for(const [id,kind] of [['readParameters','read'],['writeParameters','write'],['saveFlash','flash']])on(id,async()=>{
     if(!$('settingsDialog').open||$('settingsDialog').dataset.deviceId!==cloud.selectedId)throw Error('调参对象已变化，请从对应无人船重新进入');
     try{await params.command(kind);}finally{syncParameterAccess();}

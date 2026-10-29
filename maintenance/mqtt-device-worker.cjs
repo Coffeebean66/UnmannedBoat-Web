@@ -106,7 +106,8 @@ function parseConfigurations(passwd,acl,env){
     if(telemetry.length!==1)throw fail('设备主题权限不明确，操作已拒绝');
     const deviceId=telemetry[0][1],base=prefix+'/'+deviceId+'/',allowed=new Set([
       'topic write '+base+'telemetry','topic write '+base+'status','topic read '+base+'parameter-command',
-      'topic write '+base+'parameter-response','topic write '+base+'parameter-capability'
+      'topic write '+base+'parameter-response','topic write '+base+'parameter-capability',
+      'topic read '+base+'firmware-command','topic write '+base+'firmware-response','topic write '+base+'firmware-capability'
     ]),rules=lines.slice(1).map(line=>line.replace(/[ \t]+/g,' '));
     if(!rules.includes('topic write '+base+'status')||rules.some(line=>!allowed.has(line))||new Set(rules).size!==rules.length||devices.some(item=>item.deviceId===deviceId))throw fail('设备权限超出自身主题或设备 ID 重复，操作已拒绝');
     devices.push({deviceId,username,blockIndex:index});
@@ -344,7 +345,7 @@ function createMqttDeviceManager(options={}){
         const hash=await passwordHash(input.username,input.password);
         const check=await snapshot();if(check.revision!==before.revision||check.records['runtime.env'].text!==before.records['runtime.env'].text)throw fail('MQTT 配置在保存前发生变化，请重新读取',409);
         const base=before.prefix+'/'+input.deviceId+'/';
-        const acl='user '+input.username+'\n'+['write '+base+'telemetry','write '+base+'status','read '+base+'parameter-command','write '+base+'parameter-response','write '+base+'parameter-capability'].map(rule=>'topic '+rule).join('\n')+'\n';
+        const acl='user '+input.username+'\n'+['write '+base+'telemetry','write '+base+'status','read '+base+'parameter-command','write '+base+'parameter-response','write '+base+'parameter-capability','read '+base+'firmware-command','write '+base+'firmware-response','write '+base+'firmware-capability'].map(rule=>'topic '+rule).join('\n')+'\n';
         // 新船只获得自身主题权限，不修改桥接账号、已有船的账号或主题。
         const texts={passwd:before.records.passwd.text.replace(/\n?$/,'\n')+input.username+':'+hash+'\n',
           acl:before.records.acl.text.replace(/\n?$/,'\n')+'\n'+acl,

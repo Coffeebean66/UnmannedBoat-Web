@@ -24,9 +24,9 @@
   }
 
   class BoatFleetView{
-    constructor({onSelect=()=>{},onConfigure=()=>{},onVideo=()=>{},document=scope.document,now=Date.now,setInterval=scope.setInterval.bind(scope),clearInterval=scope.clearInterval.bind(scope)}={}){
-      this.document=document;this.onSelect=onSelect;this.onConfigure=onConfigure;this.onVideo=onVideo;this.now=now;this.clearInterval=clearInterval;this.cards=new Map();this.recentRows=new Map();this.destroyed=false;
-      this.state={devices:[],brokerConnected:false,streamConnected:false,authenticated:false,enabled:true,selectedId:'',serverOffset:0,canManage:false,parameterBusy:false};
+    constructor({onSelect=()=>{},onConfigure=()=>{},onVideo=()=>{},onFirmware=()=>{},document=scope.document,now=Date.now,setInterval=scope.setInterval.bind(scope),clearInterval=scope.clearInterval.bind(scope)}={}){
+      this.document=document;this.onSelect=onSelect;this.onConfigure=onConfigure;this.onVideo=onVideo;this.onFirmware=onFirmware;this.now=now;this.clearInterval=clearInterval;this.cards=new Map();this.recentRows=new Map();this.destroyed=false;
+      this.state={devices:[],brokerConnected:false,streamConnected:false,authenticated:false,enabled:true,selectedId:'',serverOffset:0,canManage:false,canUpgradeFirmware:false,parameterBusy:false};
       this.nodes=Object.fromEntries(['fleetTotal','fleetOnline','fleetOffline','fleetMoving','fleetVisibleCount','fleetStreamState','fleetSearch','fleetFilter','fleetCards','fleetEmpty','fleetEmptyTitle','fleetEmptyDescription','fleetRecentList','fleetRecentSummary','fleetRecentEmpty'].map(id=>[id,document.getElementById(id)]));
       this.onSearch=()=>this.render();this.nodes.fleetSearch?.addEventListener('input',this.onSearch);this.nodes.fleetFilter?.addEventListener('change',this.onSearch);
       this.timer=setInterval(()=>{if(!this.document.hidden)this.render();},500);
@@ -68,8 +68,16 @@
         if(this.destroyed||state.authenticated!==true||state.enabled===false||!state.canManage||state.parameterBusy||!state.brokerConnected||!state.streamConnected||device?.online!==true)return;
         this.onConfigure(id);
       });
+      const firmwareButton=this.make('button','fleet-firmware-button','固件升级',actions);
+      firmwareButton.type='button';firmwareButton.hidden=true;firmwareButton.disabled=true;
+      firmwareButton.setAttribute('aria-haspopup','dialog');firmwareButton.setAttribute('aria-controls','firmwareDialog');
+      firmwareButton.setAttribute('aria-label','升级 '+id+' 的单片机固件');
+      firmwareButton.addEventListener('click',()=>{
+        if(this.destroyed||!this.state.canUpgradeFirmware||!this.state.authenticated||this.state.enabled===false||this.state.parameterBusy||!this.state.devices.some(device=>device.id===id))return;
+        this.onFirmware(id);
+      });
       article.dataset.deviceId=id;
-      return {article,title,status,target,...data,fix,age,button,configureButton,videoButton};
+      return {article,title,status,target,...data,fix,age,button,configureButton,videoButton,firmwareButton};
     }
     createRecentRow(id){
       const element=this.make('button','fleet-recent-row',undefined),name=this.make('strong','',id,element),status=this.make('span','fleet-recent-status','',element),age=this.make('small','',undefined,element);
@@ -115,6 +123,8 @@
         card.videoButton.disabled=!ready;
         card.configureButton.hidden=!ready||!state.canManage;
         card.configureButton.disabled=!value.online||!!state.parameterBusy;
+        card.firmwareButton.hidden=!ready||!state.canUpgradeFirmware;
+        card.firmwareButton.disabled=!ready||!state.canUpgradeFirmware||!!state.parameterBusy;
         const configureReason=!ready?'登录后可调参':!state.canManage?'调参需要管理员权限':state.parameterBusy?'请等待当前无人船的参数操作完成':!value.online?'无人船离线或监测通道未连接':'打开这艘无人船的调参设置';
         card.configureButton.title=value.id+' · '+configureReason;
         card.configureButton.setAttribute('aria-label','调节 '+value.id+' 的电控参数，'+configureReason);
