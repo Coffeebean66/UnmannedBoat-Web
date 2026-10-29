@@ -95,6 +95,8 @@ function createVideoRecordingApi({ env = process.env, accounts, file, client = c
     const result = await transport({ method, path: route, headers: { ...authHeaders, Accept: 'application/json', ...(input ? { 'Content-Type': 'application/json' } : {}) }, ...(input ? { body: Buffer.from(JSON.stringify(input)) } : {}) });
     if (closed) throw fault(503, '录像服务已停止');
     if (allowed.includes(result.status)) return { missing: true, status: result.status };
+    // MediaMTX v1.21 返回 200 JSON，兼容空响应的删除成功状态。
+    if (method === 'DELETE' && result.status === 204) return {};
     if (result.status !== 200 && result.status !== 201) throw fault(503, '录像管理接口不可用，请更新视频管理组件或检查服务日志');
     let value; try { value = JSON.parse(Buffer.isBuffer(result.body) ? result.body.toString('utf8') : result.body || '{}'); } catch (_) { throw fault(502, '录像服务响应格式不正确'); }
     return value;
@@ -246,6 +248,30 @@ function createVideoRecordingApi({ env = process.env, accounts, file, client = c
       return configSnapshot(owner);
     });
   }
+  async function deleteClip(id, clipId, owner, res) {
+    assertUsable();
+    // 与切目录、开始/停止录像和后台配置恢复共用锁，防止校验后换了目标目录。
+    return withLock(async () => {
+      assertActive(owner, res, true);
+      const directory = state.directory, clips = await segmentsFor(id, owner, res);
+      const clip = clips.find(item => item.id === clipId);
+      if (!clip) throw fault(404, '录像不存在或已超过保留期限，请刷新录像列表');
+      const configured = await control('GET', '/v3/config/paths/get/' + id, null, [404]);
+      assertActive(owner, res, true);
+      if (configured.missing || configured.recordPath !== recordPath(id, directory))
+        throw fault(409, '录像保存目录尚未同步，请刷新列表并等待媒体服务确认');
+      // 原生删除接口不区分正在写入的文件。录制开启时保留最新片段，
+      // 较早片段已由后续片段接替写入，可以在不中断整船录像的情况下删除。
+      if ((ownBoat(state, id)?.armed || configured.record === true) && clips[0].id === clipId)
+        throw fault(409, '最新片段可能仍在写入，请先停止这艘船的录像后再删除');
+      const query = new URLSearchParams({ path: clip.alias, start: clip.start });
+      // 仅用服务端目录中查得的船只和开始时间；客户端不能传磁盘路径或时间。
+      await control('DELETE', '/v3/recordings/segments/delete?' + query);
+      assertActive(owner, res, true);
+      for (const record of streams) if (record.deviceId === id && record.clipId === clipId) stopStream(record);
+      return { deviceId: id, deletedId: clipId, deleted: true };
+    });
+  }
   function stopStream(record) { record.request?.destroy(); record.response?.destroy(); record.res.destroy(); }
   const invalidate = key => { for (const record of streams) if (record.owner.key === key) stopStream(record); };
   const detach = accounts?.onInvalidate?.(invalidate);
@@ -260,7 +286,7 @@ function createVideoRecordingApi({ env = process.env, accounts, file, client = c
     if (range !== undefined && (typeof range !== 'string' || !/^bytes=\d*-\d*$/.test(range) || range.length > 80)) throw fault(416, '录像仅支持单段字节范围');
     const query = new URLSearchParams({ path: clip.alias, start: clip.start, duration: String(clip.duration), format: 'mp4' });
     await new Promise((resolve, reject) => {
-      const record = { owner, res, request: null, response: null }; streams.add(record); let finished = false;
+      const record = { owner, res, deviceId: id, clipId, request: null, response: null }; streams.add(record); let finished = false;
       const finish = error => { if (finished) return; finished = true; clearTimeout(timer); streams.delete(record); res.removeListener('close', cancelled); req.removeListener('aborted', cancelled); error ? reject(error) : resolve(); };
       const cancelled = () => { record.request?.destroy(); record.response?.destroy(); finish(); };
       res.once('close', cancelled); req.once('aborted', cancelled);
@@ -308,6 +334,12 @@ function createVideoRecordingApi({ env = process.env, accounts, file, client = c
         if (!match) { if (configRoute) throw fault(405, '录像设置仅支持 GET、PATCH'); throw fault(404, '录像接口不存在'); }
         const id = match[1]; await ensureBoat(id); assertActive(owner, res);
         if (match[3]) {
+          if (req.method === 'DELETE') {
+            if (!admin(owner)) throw fault(403, '仅管理员可以删除录像');
+            if (url.search || req.headers['transfer-encoding'] || Number(req.headers['content-length'] || 0) !== 0)
+              throw fault(400, '删除录像不接受查询参数或请求内容');
+            json(res, 200, await deleteClip(id, match[3], owner, res)); return true;
+          }
           if (!read) throw fault(405, '录像播放仅支持 GET、HEAD');
           if ([...url.searchParams.keys()].some(key => key !== 'download') || url.searchParams.getAll('download').length > 1 || url.searchParams.has('download') && url.searchParams.get('download') !== '1') throw fault(400, '录像播放参数不正确');
           await streamClip(req, res, id, match[3], owner, url.searchParams.get('download') === '1'); return true;

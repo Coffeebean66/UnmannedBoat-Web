@@ -6,7 +6,7 @@ const project = path.resolve(__dirname, '..'), output = path.join(project, '.tes
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function main() {
   fs.mkdirSync(output, { recursive: true }); const run = fs.mkdtempSync(path.join(output, 'recording-browser-'));
-  const sample = path.join(run, 'sample.mp4'), calls = [], errors = [], states = new Map(); let directory = ROOT + '/recordings';
+  const sample = path.join(run, 'sample.mp4'), calls = [], errors = [], states = new Map(), removed = new Set(); let directory = ROOT + '/recordings';
   const generated = spawnSync(process.env.FFMPEG_PATH || (process.platform === 'win32' ? 'D:/ClaudeTools/ffmpeg/ffmpeg-8.1-essentials_build/bin/ffmpeg.exe' : 'ffmpeg'),
     ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=10', '-t', '8', '-an', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', sample],
     { encoding: 'utf8', windowsHide: true, timeout: 60000 });
@@ -19,9 +19,12 @@ async function main() {
 window.BoatAuth=new FixtureAuth();window.recording=new BoatVideoRecordingPanel();recording.update({deviceId:'boat-01',authenticated:true});recording.setVisible(true);`;
   const html = '<!doctype html><html lang="zh-CN" data-theme="dark"><head><meta name="viewport" content="width=device-width,initial-scale=1">' + styles + '</head><body><main style="max-width:1000px;margin:0 auto;padding:16px;box-sizing:border-box">' + card + '</main><dialog id="fixtureSettings" style="width:min(680px,calc(100vw - 32px));box-sizing:border-box">' + settings + '</dialog><script src="/video-recording.js"></script><script>' + bootstrap + '</script></body></html>';
   const snapshot = boat => {
-    const armed = states.get(boat) === true, id = (boat === 'boat-01' ? 'a' : 'b').repeat(64), base = '/api/video/recording/boats/' + boat + '/clips/' + id;
+    const armed = states.get(boat) === true;
     return { deviceId: boat, enabled: true, armed, receiving: boat === 'boat-01', recording: armed && boat === 'boat-01', error: null,
-      segments: [{ id, start: '2026-10-28T01:02:03Z', duration: 8, playbackUrl: base, downloadUrl: base + '?download=1' }] };
+      segments: (boat === 'boat-01' ? ['a', 'c'] : ['b', 'd']).map((letter, index) => {
+        const id = letter.repeat(64), base = '/api/video/recording/boats/' + boat + '/clips/' + id;
+        return { id, start: index ? '2026-10-28T01:01:03Z' : '2026-10-28T01:02:03Z', duration: 8, playbackUrl: base, downloadUrl: base + '?download=1' };
+      }).filter(clip => !removed.has(boat + ':' + clip.id)) };
   };
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
@@ -35,7 +38,13 @@ window.BoatAuth=new FixtureAuth();window.recording=new BoatVideoRecordingPanel()
       }
       const match = /^\/api\/video\/recording\/boats\/([A-Za-z0-9_-]+)(?:\/(start|stop))?$/.exec(url.pathname);
       if (match) { if (req.method === 'POST') states.set(match[1], match[2] === 'start'); return json(200, snapshot(match[1])); }
-      if (/^\/api\/video\/recording\/boats\/(boat-01|boat-02)\/clips\/[ab]{64}$/.test(url.pathname)) {
+      const clipRoute = /^\/api\/video\/recording\/boats\/(boat-01|boat-02)\/clips\/([a-d]{64})$/.exec(url.pathname);
+      if (clipRoute) {
+        if (!snapshot(clipRoute[1]).segments.some(clip => clip.id === clipRoute[2])) return json(404, { error: '录像不存在或已删除' });
+        if (req.method === 'DELETE') {
+          removed.add(clipRoute[1] + ':' + clipRoute[2]);
+          return json(200, { deviceId: clipRoute[1], deletedId: clipRoute[2], deleted: true });
+        }
         const size = fs.statSync(sample).size, range = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range || '');
         const start = range ? Number(range[1]) : 0, end = range?.[2] ? Math.min(size - 1, Number(range[2])) : size - 1;
         if (start >= size) { res.writeHead(416); return res.end(); }
@@ -59,15 +68,16 @@ window.BoatAuth=new FixtureAuth();window.recording=new BoatVideoRecordingPanel()
     if (!fs.existsSync(portFile)) throw Error('Chrome did not start: ' + errors.join('; '));
     const port = fs.readFileSync(portFile, 'utf8').split('\n')[0], pages = await (await fetch('http://127.0.0.1:' + port + '/json/list')).json();
     socket = new WebSocket(pages.find(page => page.type === 'page').webSocketDebuggerUrl); await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
-    let serial = 0; const pending = new Map();
+    let serial = 0, confirmDelete = false; const pending = new Map(), dialogs = [];
     const send = (method, params = {}) => new Promise((resolve, reject) => { const id = ++serial, timer = setTimeout(() => { pending.delete(id); reject(Error('CDP timeout: ' + method)); }, 20000); pending.set(id, { resolve, reject, timer }); socket.send(JSON.stringify({ id, method, params })); });
     socket.onmessage = event => { const data = JSON.parse(event.data); if (data.method === 'Runtime.exceptionThrown') errors.push(data.params.exceptionDetails.exception?.description || data.params.exceptionDetails.text);
+      if (data.method === 'Page.javascriptDialogOpening') { dialogs.push(data.params); send('Page.handleJavaScriptDialog', { accept: confirmDelete }).catch(error => errors.push(error.message)); }
       const item = pending.get(data.id); if (item) { pending.delete(data.id); clearTimeout(item.timer); data.error ? item.reject(Error(data.error.message)) : item.resolve(data.result); } };
     const evaluate = async expression => { const result = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true, userGesture: true }); if (result.exceptionDetails) throw Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text); return result.result.value; };
     const until = async expression => { for (let i = 0; i < 180; i++) { if (await evaluate(expression)) return; await wait(50); } throw Error('Condition timed out: ' + expression + '\n' + await evaluate('document.body.innerText') + '\n' + errors.join('\n')); };
     await send('Runtime.enable'); await send('Page.enable'); await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
     await send('Page.navigate', { url: 'http://127.0.0.1:' + server.address().port });
-    await until('window.recording?.snapshot?.segments.length===1');
+    await until('window.recording?.snapshot?.segments.length===2');
     assert.equal(await evaluate('document.getElementById("recordingStart").disabled'), false);
     await evaluate('document.getElementById("recordingStart").click()'); await until('recording.snapshot?.armed&&!recording.channels.boat.busy');
     assert.equal(states.get('boat-01'), true);
@@ -99,13 +109,37 @@ window.BoatAuth=new FixtureAuth();window.recording=new BoatVideoRecordingPanel()
       const pageShot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }); fs.writeFileSync(path.join(output, 'recording-' + width + '-' + theme + '.png'), Buffer.from(pageShot.data, 'base64'));
       await evaluate('document.getElementById("fixtureSettings").showModal()');
     }
-    await evaluate('document.getElementById("fixtureSettings").close();recording.close();BoatAuth.change("guest")'); await until('recording.snapshot?.segments.length===1');
+    await evaluate('document.getElementById("fixtureSettings").close();recording.close()');
+    // 原生确认框取消不发送 DELETE；确认只删除当前船所选片段。
+    await evaluate('document.querySelector(".recording-row button").click()'); await until('document.getElementById("recordingPlayer").currentTime>0');
+    const deletesBefore = calls.filter(call => call.method === 'DELETE').length;
+    await evaluate('document.querySelector(".recording-delete").click()');
+    assert.equal(calls.filter(call => call.method === 'DELETE').length, deletesBefore);
+    assert.equal(await evaluate('recording.snapshot.segments.length'), 2);
+    assert.equal(dialogs.at(-1).type, 'confirm'); assert.match(dialogs.at(-1).message, /boat-01/);
+    confirmDelete = true;
+    // 删除另一段不打断当前回放。
+    await evaluate('document.querySelectorAll(".recording-delete")[1].click()');
+    await until('recording.snapshot?.segments.length===1&&!recording.channels.boat.busy');
+    assert.equal(calls.filter(call => call.method === 'DELETE').at(-1).path, '/api/video/recording/boats/boat-01/clips/' + 'c'.repeat(64));
+    assert.equal(await evaluate('recording.playingId'), 'a'.repeat(64));
+    assert.equal(await evaluate('document.getElementById("recordingCount").textContent'), '1 段录像');
+    assert.equal(snapshot('boat-02').segments.length, 2);
+    // 删除正播放片段立即卸载播放器，刷新也不会恢复已删录像。
+    await evaluate('document.querySelector(".recording-delete").click()');
+    await until('recording.snapshot?.segments.length===0&&!recording.channels.boat.busy');
+    assert.equal(await evaluate('document.getElementById("recordingPlayer").getAttribute("src")'), null);
+    assert.equal(await evaluate('document.getElementById("recordingPlayerWrap").hidden'), true);
+    await evaluate('recording.refresh()'); assert.equal(await evaluate('recording.snapshot.segments.length'), 0);
+    await evaluate('recording.update({deviceId:"boat-02",authenticated:true})'); await until('recording.snapshot?.deviceId==="boat-02"&&recording.snapshot.segments.length===2');
+    await evaluate('BoatAuth.change("guest")'); await until('recording.snapshot?.segments.length===2');
     assert.equal(await evaluate('document.getElementById("recordingStart").hidden&&document.getElementById("recordingStop").hidden&&document.getElementById("recordingSettings").hidden'), true);
+    assert.equal(await evaluate('[...document.querySelectorAll(".recording-delete")].every(button=>button.hidden)'), true);
     const writes = calls.filter(call => call.method !== 'GET').length; assert.equal(await evaluate('recording.command("start")'), false); assert.equal(calls.filter(call => call.method !== 'GET').length, writes);
     await evaluate('document.querySelector(".recording-row button").click()'); await until('document.getElementById("recordingPlayer").currentTime>0');
     await evaluate('BoatAuth.change(null)'); assert.equal(await evaluate('document.getElementById("recordingList").children.length'), 0);
     assert.equal(await evaluate('document.getElementById("recordingPlayer").getAttribute("src")'), null); assert.deepEqual(errors, []);
-    console.log('Chrome recording UI passed: independent boat recording, waiting source, no stop on hide/switch, real MP4 replay, downloads, admin directory lock/save, guest view-only, logout unloading, 1440/375/320px dark/light layouts.');
+    console.log('Chrome recording UI passed: independent boat recording, real MP4 replay/download, confirmed per-clip deletion/cancel, playback cleanup, boat isolation, directory lock/save, guest view-only, logout unloading, 1440/375/320px dark/light layouts.');
   } finally {
     socket?.close(); browser.kill(); server.closeAllConnections?.(); await new Promise(resolve => server.close(resolve));
     // 只清理本次在 .test-output 内创建的测试目录。

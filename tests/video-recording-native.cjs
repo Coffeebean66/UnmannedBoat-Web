@@ -1,4 +1,4 @@
-/* 本机真实 SRT 输入 → MediaMTX 录像 → 平台鉴权下载 → FFmpeg 解码；不接触生产服务。 */
+/* 本机真实 SRT 输入 → MediaMTX 录像 → 平台鉴权下载/删除 → FFmpeg 解码；不接触生产服务。 */
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),net=require('node:net'),dgram=require('node:dgram');
 const assert=require('node:assert/strict'),{spawn,spawnSync}=require('node:child_process'),{EventEmitter}=require('node:events');
@@ -69,6 +69,23 @@ async function main(){
     const decoded=spawnSync(ffmpeg,['-hide_banner','-loglevel','error','-i',downloaded,'-frames:v','1','-f','null','-'],{encoding:'utf8',windowsHide:true});assert.equal(decoded.status,0,decoded.stderr);
     assert.equal((await request(clip.playbackUrl.replace('boat-alpha','boat-beta'),{cookie:guest})).status,404);
     const ranged=await request(clip.playbackUrl,{cookie:guest,headers:{Range:'bytes=0-127'}});assert.ok([200,206].includes(ranged.status));if(ranged.status===206)assert.equal(ranged.bytes.length,128);
+    // 保留最早的片段用于后面的目录切换验证，删除另一段已经完成的录像。
+    const deletable=await until(async()=>{const response=await request(boat,{cookie:guest});return response.data?.segments.length>=3?response.data:null;},'Completed older recording segments are available for deletion');
+    const deleteClip=deletable.segments.at(-2),recordingFolder=path.join(storage,'recordings','boat-alpha');
+    assert.notEqual(deleteClip.id,clip.id);
+    const beforeDelete=fs.readdirSync(recordingFolder).filter(name=>name.endsWith('.mp4'));
+    assert.equal((await request(deleteClip.playbackUrl,{cookie:guest,method:'DELETE'})).status,403,'Guests cannot delete saved recordings');
+    assert.equal((await request(deleteClip.playbackUrl.replace('boat-alpha','boat-beta'),{cookie:admin,method:'DELETE'})).status,404,'Opaque clip IDs cannot be used for another boat');
+    assert.deepEqual(fs.readdirSync(recordingFolder).filter(name=>name.endsWith('.mp4')&&beforeDelete.includes(name)),beforeDelete,'Rejected requests preserve existing files');
+    const deleted=await request(deleteClip.playbackUrl,{cookie:admin,method:'DELETE'});
+    assert.equal(deleted.status,200,JSON.stringify(deleted.data));assert.deepEqual(deleted.data,{deviceId:'boat-alpha',deletedId:deleteClip.id,deleted:true});
+    const afterDelete=fs.readdirSync(recordingFolder).filter(name=>name.endsWith('.mp4'));
+    assert.equal(beforeDelete.filter(name=>!afterDelete.includes(name)).length,1,'Native deletion removes exactly one physical MP4 file');
+    const afterSnapshot=await request(boat,{cookie:guest});assert.equal(afterSnapshot.data.armed,true,'Deleting an older segment does not stop ongoing recording');
+    assert.ok(!afterSnapshot.data.segments.some(item=>item.id===deleteClip.id),'Deleted segment disappears from the native catalog');
+    assert.ok(afterSnapshot.data.segments.some(item=>item.id===clip.id),'Other saved segments remain available');
+    assert.equal((await request(deleteClip.downloadUrl,{cookie:guest})).status,404,'Deleted segments cannot be replayed or downloaded');
+    assert.equal((await request(deleteClip.playbackUrl,{cookie:admin,method:'DELETE'})).status,404,'Deleting a missing segment is reported clearly');
     assert.equal((await request(boat+'/stop',{cookie:admin,method:'POST',body:{}})).data.armed,false);
     const changed=await request(base+'/config',{cookie:admin,method:'PATCH',body:{directory:root+'/mission-2'}});assert.equal(changed.status,200,JSON.stringify(changed.data));
     await request(boat+'/start',{cookie:admin,method:'POST',body:{}});
@@ -82,8 +99,18 @@ async function main(){
     await until(async()=>{await server.boatRecordingApi.reconcile();const response=await request(boat,{cookie:guest});return response.data?.segments.length&&!response.data.error;},'Native restart restores recording paths');
     assert.equal((await request(base+'/config',{cookie:admin,method:'PATCH',body:{directory:root+'/recordings'}})).status,200);
     assert.equal((await request(clip.downloadUrl,{cookie:guest})).status,200,'Switching back restores the original catalog');
+    // 删除当前目录的录像时，不清理之前任务目录中已经保存的文件。
+    const archivedFolder=path.join(storage,'mission-2','boat-alpha');
+    const archived=new Map(fs.readdirSync(archivedFolder).filter(name=>name.endsWith('.mp4')).map(name=>[name,fs.readFileSync(path.join(archivedFolder,name))]));
+    assert.ok(archived.size>0);
+    const filesBeforeStoppedDelete=fs.readdirSync(recordingFolder).filter(name=>name.endsWith('.mp4'));
+    const stoppedDelete=await request(clip.playbackUrl,{cookie:admin,method:'DELETE'});assert.equal(stoppedDelete.status,200,JSON.stringify(stoppedDelete.data));
+    assert.equal(filesBeforeStoppedDelete.filter(name=>!fs.existsSync(path.join(recordingFolder,name))).length,1,'A stopped recording can be physically deleted');
+    assert.equal((await request(clip.downloadUrl,{cookie:guest})).status,404);
+    assert.deepEqual(fs.readdirSync(archivedFolder).filter(name=>name.endsWith('.mp4')).sort(),[...archived.keys()].sort(),'Other recording folders retain their files');
+    for(const [name,bytes] of archived)assert.ok(fs.readFileSync(path.join(archivedFolder,name)).equals(bytes),'Archived recording contents remain unchanged');
     const stored=JSON.parse(fs.readFileSync(path.join(run,'recording.json'),'utf8'));assert.equal(stored.directory,root+'/recordings');assert.equal(stored.boats['boat-alpha'].armed,false);
-    console.log('PASS: real MediaMTX config, authenticated API/playback, no-viewer '+(udpRtp?'UDP/RTP':'SRT')+' recording, boat isolation, MP4 decode, range, directory change, preserved files and native restart');
+    console.log('PASS: real MediaMTX config, authenticated API/playback/delete, no-viewer '+(udpRtp?'UDP/RTP':'SRT')+' recording, guest delete denial, physical MP4 removal, boat/folder isolation, MP4 decode, range, directory change and native restart');
   }finally{for(const child of children.reverse())await stop(child);if(server){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}fs.writeFileSync(path.join(run,'native.log'),logs.join(''));}
 }
 main().catch(error=>{console.error(error.stack||error);process.exitCode=1;});

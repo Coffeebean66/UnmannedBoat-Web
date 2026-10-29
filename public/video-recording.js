@@ -7,6 +7,7 @@
     constructor(options = {}) {
       this.document = options.document || scope.document; this.auth = options.auth || scope.BoatAuth;
       this.fetch = options.fetcher || options.fetch || scope.fetch.bind(scope);
+      this.confirm = options.confirm || (typeof scope.confirm === 'function' ? scope.confirm.bind(scope) : () => false);
       this.AbortController = options.AbortController || scope.AbortController;
       this.setTimer = options.setTimeout || scope.setTimeout.bind(scope); this.clearTimer = options.clearTimeout || scope.clearTimeout.bind(scope);
       this.nodes = Object.fromEntries(['recordingDevice', 'recordingStatus', 'recordingStart', 'recordingStop', 'recordingRefresh', 'recordingCount',
@@ -15,7 +16,7 @@
         'recordingSettingsRoot', 'recordingSettingsStatus'].map(id => [id, this.document.getElementById(id)]));
       this.deviceId = ''; this.authenticated = false; this.visible = false; this.opened = false; this.destroyed = false;
       this.snapshot = null; this.config = null; this.channels = { boat: { generation: 0, busy: false }, config: { generation: 0, busy: false } };
-      this.listeners = []; this.poll = null; this.playingId = ''; this.identity = this._identity();
+      this.listeners = []; this.deleteButtons = []; this.poll = null; this.playingId = ''; this.identity = this._identity();
       this.onChange = () => {
         const identity = this._identity();
         if (identity !== this.identity) {
@@ -77,6 +78,8 @@
       n.recordingStart.disabled = !monitor || busy || this.snapshot?.enabled !== true || this.snapshot.armed;
       n.recordingStop.disabled = !monitor || busy || this.snapshot?.enabled !== true || !this.snapshot.armed;
       n.recordingRefresh.disabled = !monitor || busy;
+      n.recordingList.setAttribute('aria-busy', String(busy));
+      for (const button of this.deleteButtons) { button.hidden = !admin; button.disabled = !admin || !monitor || !this.visible || busy; }
       n.recordingCount.textContent = this.snapshot ? this.snapshot.segments.length + ' 段录像' : '尚未读取';
       n.recordingEmpty.hidden = !!this.snapshot?.segments.length;
       n.recordingEmpty.textContent = this.snapshot?.enabled === false ? '服务器录像尚未启用' : this.snapshot ? '暂无录像，开始录像后按片段自动保存。' : '选择无人船后读取已保存的录像。';
@@ -116,7 +119,7 @@
         }).then(data => finish(null, data), fault => finish(fault));
       });
     }
-    async _run(kind, method, url, body, accept) {
+    async _run(kind, method, url, body, accept, beforeRequest = null) {
       const channel = this.channels[kind], adminOperation = kind === 'config' || method !== 'GET';
       if (this.destroyed || channel.busy || kind === 'boat' && (!this.visible || !this.monitor()) || kind === 'config' && (!this.opened || !this.admin()) || adminOperation && !this.admin()) return false;
       const operation = ++channel.generation, identity = this._identity(), boat = this.deviceId;
@@ -124,12 +127,19 @@
         (kind === 'boat' ? this.visible && this.monitor() && boat === this.deviceId : this.opened && this.admin());
       channel.busy = true; if (kind === 'boat') this._clearPoll(); this.render();
       try {
+        // 确认窗口也占用当前船的操作通道；期间切船、退出或变更身份会取消请求。
+        if (beforeRequest && !await beforeRequest()) return false;
+        if (!current()) return false;
         const data = await this._request(kind, method, url, body, adminOperation, current);
         if (!current()) return false;
         accept(data); return true;
       } catch (fault) {
         if (fault.cancelled || !current()) return false;
-        if (kind === 'boat') { this.snapshot = null; this._renderList(); this.notice(fault.message || '无法读取录像，请重试。', 'error'); }
+        if (kind === 'boat') {
+          // 删除被拒绝或响应超时时保留列表，不能把尚未确认删除的其他录像一并撤下。
+          if (method !== 'DELETE') { this.snapshot = null; this._renderList(); }
+          this.notice(fault.message || '无法读取录像，请重试。', 'error');
+        }
         else { this.config = null; this.settingsNotice(fault.message || '录像目录保存失败，请重新读取。', 'error'); }
         if (fault.status === 401) { this.auth.expire?.(); this.auth.openLogin?.(); }
         if (fault.status === 403) Promise.resolve(this.auth.initialize?.()).catch(() => {});
@@ -147,6 +157,21 @@
       this.notice(action === 'start' ? '正在请求服务器开始录像…' : '正在停止录像并保存最后一个片段…');
       return this._run('boat', 'POST', BASE + '/boats/' + encodeURIComponent(this.deviceId) + '/' + action, {}, data => this.applyBoat(data));
     }
+    deleteClip(id) {
+      if (!this.admin() || !this.monitor() || !this.visible || this.channels.boat.busy || this.snapshot?.enabled !== true || !CLIP.test(id)) return Promise.resolve(false);
+      const item = this.snapshot.segments.find(item => item.id === id); if (!item) return Promise.resolve(false);
+      const boat = this.deviceId, time = new Date(item.start).toLocaleString('zh-CN', { hour12: false });
+      const message = '确认永久删除这段录像？\n\n无人船：' + boat + '\n开始时间：' + time + '\n时长：' + item.duration.toFixed(1) + ' 秒\n\n删除后无法恢复，不影响其他录像。';
+      return this._run('boat', 'DELETE', BASE + '/boats/' + encodeURIComponent(boat) + '/clips/' + encodeURIComponent(id), null, data => {
+        if (!data || data.deviceId !== boat || data.deletedId !== id || data.deleted !== true) throw Error('录像删除响应无效，请刷新列表确认服务器状态。');
+        if (this.playingId === id) this.stopPlayback();
+        this.snapshot = { ...this.snapshot, segments: this.snapshot.segments.filter(segment => segment.id !== id) };
+        this._renderList(); this.notice('已永久删除 ' + boat + ' 在 ' + time + ' 开始的录像。', 'success');
+      }, async () => {
+        const confirmed = await this.confirm(message);
+        return confirmed === true;
+      });
+    }
     applyBoat(data) {
       if (data?.enabled === false) { this.snapshot = { enabled: false, segments: [] }; this._renderList(); this.notice(data.reason || data.error || '服务器尚未启用录像功能，请联系管理员安装视频组件。', 'warning'); return; }
       if (!data || data.deviceId !== this.deviceId || data.enabled !== true || typeof data.armed !== 'boolean' || typeof data.receiving !== 'boolean' || typeof data.recording !== 'boolean' || !Array.isArray(data.segments) || data.segments.length > 2000) throw Error('录像响应格式无效，请刷新后重试。');
@@ -161,11 +186,12 @@
       if (data.error) this.notice(String(data.error).slice(0, 300), 'error');
       else if (data.armed && data.receiving) this.notice('服务器录像已开启 · 正在接收视频，关闭网页仍会继续', 'success');
       else if (data.armed) this.notice('录像已开启，等待船端视频 · 视频恢复后自动续录', 'warning');
-      else this.notice('录像已停止 · 已保存的片段可回放或下载');
+      else this.notice('录像已停止 · 已保存的片段可回放或下载，管理员可删除');
       if (data.persistent === false) this.nodes.recordingStatus.textContent += ' · 设置未持久化，服务重启后需重新开启录像';
     }
     _renderList() {
       const segments = this.snapshot?.segments || [];
+      this.deleteButtons = [];
       this.nodes.recordingList.replaceChildren(...segments.map(item => {
         const row = this.document.createElement('li'); row.className = 'recording-row';
         const details = this.document.createElement('div'), title = this.document.createElement('strong'), subtitle = this.document.createElement('span');
@@ -175,7 +201,16 @@
         const play = this.document.createElement('button'); play.type = 'button'; play.className = 'small-button'; play.textContent = '回放';
         play.addEventListener('click', () => this.playClip(item.id));
         const download = this.document.createElement('a'); download.href = item.downloadUrl; download.className = 'recording-download'; download.textContent = '下载'; download.setAttribute('download', '');
-        actions.append(play, download); row.append(details, actions); return row;
+        actions.append(play, download);
+        if (this.admin()) {
+          const boat = this.deviceId, remove = this.document.createElement('button');
+          remove.type = 'button'; remove.className = 'small-button recording-delete'; remove.textContent = '删除';
+          remove.disabled = !this.monitor() || !this.visible || this.channels.boat.busy;
+          remove.setAttribute('aria-label', '删除 ' + boat + ' 在 ' + title.textContent + ' 开始的录像');
+          remove.addEventListener('click', () => { if (this.deviceId === boat) this.deleteClip(item.id); });
+          this.deleteButtons.push(remove); actions.append(remove);
+        }
+        row.append(details, actions); return row;
       }));
     }
     playClip(id) {

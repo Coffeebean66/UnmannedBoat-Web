@@ -25,10 +25,11 @@ async function fixture(t, options = {}) {
   const directory = options.directory || fs.mkdtempSync(path.join(os.tmpdir(), 'boat-recording-api-'));
   if (!options.directory) t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const configs = new Map(), recordings = new Map(), ready = new Set(), sources = new Map(), calls = [], playbackCalls = [];
-  let unavailable = false;
+  let unavailable = false, deleteStatus = 200;
   const response = (status, body = {}) => ({ status, body: Buffer.from(JSON.stringify(body)) });
   const transport = async input => {
     calls.push({ method: input.method, path: input.path, input: input.body ? JSON.parse(input.body.toString()) : undefined });
+    await options.beforeTransport?.(input);
     if (options.transport) return options.transport(input);
     if (unavailable) throw Error('private-media-credential-must-not-leak');
     assert.match(input.headers.Authorization, /^Basic /);
@@ -42,6 +43,16 @@ async function fixture(t, options = {}) {
     if (native) return sources.has(native[1]) ? response(200, sources.get(native[1])) : ready.has(native[1]) ? response(200, { online: true }) : response(404);
     const clips = input.path.match(/^\/v3\/recordings\/get\/(.+)$/);
     if (clips) { const conf = configs.get(clips[1]); return conf ? response(200, { name: clips[1], segments: recordings.get(conf.recordPath.replace('%path', clips[1])) || [] }) : response(404); }
+    const deletion = new URL(input.path, 'http://native');
+    if (deletion.pathname === '/v3/recordings/segments/delete') {
+      assert.equal(input.method, 'DELETE'); assert.equal(input.body, undefined);
+      if (![200, 204].includes(deleteStatus)) return response(deleteStatus, { error: 'private-media-credential-must-not-leak' });
+      const id = deletion.searchParams.get('path'), conf = configs.get(id);
+      const list = conf ? recordings.get(conf.recordPath.replace('%path', id)) || [] : [];
+      const index = list.findIndex(item => item.start === deletion.searchParams.get('start'));
+      if (index < 0) return response(400, { error: 'private-recording-path-does-not-exist' });
+      list.splice(index, 1); return deleteStatus === 204 ? { status: 204, body: Buffer.alloc(0) } : response(200, { status: 'ok' });
+    }
     throw Error('Unexpected media route ' + input.path);
   };
   const playback = http.createServer((req, res) => {
@@ -74,7 +85,8 @@ async function fixture(t, options = {}) {
     assert.ok(conf && conf.recordPath.startsWith(directory + '/%path/'), 'recording path must exist');
     const actualPath = conf.recordPath.replace('%path', id), list = recordings.get(actualPath) || []; list.push({ start, duration: 60 }); recordings.set(actualPath, list); return start;
   };
-  return { call, login, start, stop, addClip, close, configs, recordings, ready, sources, calls, playbackCalls, api, directory, server, setUnavailable: value => { unavailable = value; } };
+  return { call, login, start, stop, addClip, close, configs, recordings, ready, sources, calls, playbackCalls, api, directory, server,
+    setUnavailable: value => { unavailable = value; }, setDeleteStatus: value => { deleteStatus = value; } };
 }
 
 test('only normalized absolute subdirectories are accepted; private state paths follow configured precedence', () => {
@@ -218,6 +230,109 @@ test('logout aborts an active upstream video response rather than leaking it to 
   }); await started;
   const logout = await f.call('/api/auth/session', { cookie, method: 'DELETE' }); assert.equal(logout.status, 200);
   await Promise.race([upstreamDone, new Promise((_, reject) => setTimeout(() => reject(Error('upstream was not aborted')), 1000))]);
+});
+
+test('only administrators may delete catalogued clips and deletion rejects cross-origin, bodies, queries and another boat', async t => {
+  const f = await fixture(t), admin = await f.login(), guest = await f.login('guest');
+  await f.start(admin); f.addClip(); await f.stop(admin);
+  const clip = (await f.call(PREFIX + '/boats/boat-01', { cookie: admin })).data.segments[0];
+  const remove = options => f.call(clip.playbackUrl, { cookie: admin, method: 'DELETE', ...options });
+  assert.equal((await remove({ cookie: null })).status, 401);
+  assert.equal((await remove({ cookie: guest })).status, 403);
+  assert.equal((await remove({ origin: 'https://evil.test' })).status, 403);
+  assert.equal((await remove({ origin: null })).status, 403);
+  assert.equal((await remove({ body: { start: clip.start } })).status, 400);
+  assert.equal((await f.call(clip.playbackUrl + '?download=1', { cookie: admin, method: 'DELETE' })).status, 400);
+  assert.equal((await f.call(clip.playbackUrl.replace('boat-01', 'boat-02'), { cookie: admin, method: 'DELETE' })).status, 404);
+  assert.equal((await f.call(clip.playbackUrl.replace('boat-01', 'unknown'), { cookie: admin, method: 'DELETE' })).status, 404);
+  assert.equal((await f.call(clip.playbackUrl.replace(clip.id, 'a'.repeat(64)), { cookie: admin, method: 'DELETE' })).status, 404);
+  assert.equal((await f.call(PREFIX + '/boats/boat-01/clips/%2e%2e%2fvideo.mp4', { cookie: admin, method: 'DELETE' })).status, 404);
+  assert.equal(f.calls.filter(item => item.method === 'DELETE').length, 0);
+  assert.equal((await f.call(PREFIX + '/boats/boat-01', { cookie: admin })).data.segments.length, 1);
+});
+
+test('deleting a finished clip uses only its trusted boat and exact start, preserving other boats and saved recorder intent', async t => {
+  const f = await fixture(t), cookie = await f.login();
+  const start = '2026-01-01T08:01:02.123456+08:00';
+  for (const id of ['boat-01', 'boat-02']) { await f.start(cookie, id); f.addClip(id, ROOT + '/recordings', start); await f.stop(cookie, id); }
+  const before = f.api.getState(), clips = (await f.call(PREFIX + '/boats/boat-01', { cookie })).data.segments;
+  const result = await f.call(clips[0].playbackUrl, { cookie, method: 'DELETE' });
+  assert.equal(result.status, 200, result.raw);
+  assert.deepEqual(result.data, { deviceId: 'boat-01', deletedId: clips[0].id, deleted: true });
+  assert.deepEqual(f.api.getState(), before);
+  const deletion = new URL(f.calls.find(item => item.method === 'DELETE').path, 'http://native');
+  assert.equal(deletion.pathname, '/v3/recordings/segments/delete');
+  assert.deepEqual([...deletion.searchParams], [['path', 'boat-01'], ['start', start]]);
+  assert.equal((await f.call(PREFIX + '/boats/boat-01', { cookie })).data.segments.length, 0);
+  assert.equal((await f.call(PREFIX + '/boats/boat-02', { cookie })).data.segments.length, 1);
+  assert.equal((await f.call(clips[0].playbackUrl, { cookie })).status, 404);
+  assert.equal((await f.call(clips[0].playbackUrl, { cookie, method: 'DELETE' })).status, 404);
+});
+
+test('recording can continue while older clips are deleted, but the latest potentially open segment is protected', async t => {
+  const f = await fixture(t), cookie = await f.login(); await f.start(cookie);
+  f.addClip('boat-01', ROOT + '/recordings', new Date(Date.now() - 180000).toISOString());
+  f.addClip('boat-01', ROOT + '/recordings', new Date(Date.now() - 120000).toISOString());
+  const [latest, older] = (await f.call(PREFIX + '/boats/boat-01', { cookie })).data.segments;
+  assert.equal((await f.call(latest.playbackUrl, { cookie, method: 'DELETE' })).status, 409);
+  assert.equal((await f.call(older.playbackUrl, { cookie, method: 'DELETE' })).status, 200);
+  assert.equal(f.configs.get('boat-01').record, true);
+  assert.equal(f.api.getState().boats['boat-01'].armed, true);
+  await f.stop(cookie); f.setDeleteStatus(204);
+  assert.equal((await f.call(latest.playbackUrl, { cookie, method: 'DELETE' })).status, 200, 'empty upstream success responses are supported');
+});
+
+test('stale clips and unsynchronized media paths cannot delete files in another recording directory', async t => {
+  const f = await fixture(t), cookie = await f.login(); await f.start(cookie); f.addClip(); await f.stop(cookie);
+  const clip = (await f.call(PREFIX + '/boats/boat-01', { cookie })).data.segments[0];
+  assert.equal((await f.call(PREFIX + '/config', { cookie, method: 'PATCH', body: { directory: ROOT + '/trip' } })).status, 200);
+  f.addClip('boat-01', ROOT + '/trip', clip.start);
+  assert.equal((await f.call(clip.playbackUrl, { cookie, method: 'DELETE' })).status, 404);
+  const current = (await f.call(PREFIX + '/boats/boat-01', { cookie })).data.segments[0];
+  assert.notEqual(current.id, clip.id);
+  f.configs.get('boat-01').recordPath = f.configs.get('boat-01').recordPath.replace('/trip/', '/elsewhere/');
+  f.recordings.set(f.configs.get('boat-01').recordPath.replace('%path', 'boat-01'), [{ start: clip.start, duration: 60 }]);
+  assert.equal((await f.call(current.playbackUrl, { cookie, method: 'DELETE' })).status, 409);
+  assert.equal(f.calls.filter(item => item.method === 'DELETE').length, 0);
+});
+
+test('failed native deletion leaves the clip in the catalog and never reports success or private error details', async t => {
+  const f = await fixture(t), cookie = await f.login(); await f.start(cookie); f.addClip(); await f.stop(cookie);
+  const clip = (await f.call(PREFIX + '/boats/boat-01', { cookie })).data.segments[0];
+  for (const code of [400, 403, 404, 500]) {
+    f.setDeleteStatus(code);
+    const result = await f.call(clip.playbackUrl, { cookie, method: 'DELETE' });
+    assert.equal(result.status, 503); assert.equal(result.data.deleted, undefined);
+    assert.doesNotMatch(result.raw, /private-media|var\/lib|Basic|password/);
+    assert.equal((await f.call(PREFIX + '/boats/boat-01', { cookie })).data.segments.length, 1);
+  }
+});
+
+test('deletion rechecks an expired session after catalog lookup and does not issue a native delete', async t => {
+  let release, entered; const waiting = new Promise(resolve => { entered = resolve; });
+  let hold = false;
+  const f = await fixture(t, { beforeTransport: async input => {
+    if (hold && input.path === '/v3/recordings/get/boat-01') { hold = false; entered(); await new Promise(resolve => { release = resolve; }); }
+  } }), cookie = await f.login();
+  await f.start(cookie); f.addClip(); await f.stop(cookie);
+  const clip = (await f.call(PREFIX + '/boats/boat-01', { cookie })).data.segments[0];
+  hold = true; const deletion = f.call(clip.playbackUrl, { cookie, method: 'DELETE' });
+  await waiting; assert.equal((await f.call('/api/auth/session', { cookie, method: 'DELETE' })).status, 200); release();
+  assert.equal((await deletion).status, 401); assert.equal(f.calls.filter(item => item.method === 'DELETE').length, 0);
+});
+
+test('deletion serializes with directory changes and repeated removal while catalog resolution is pending', async t => {
+  let release, entered; const waiting = new Promise(resolve => { entered = resolve; }); let hold = false;
+  const f = await fixture(t, { beforeTransport: async input => {
+    if (hold && input.path === '/v3/recordings/get/boat-01') { hold = false; entered(); await new Promise(resolve => { release = resolve; }); }
+  } }), cookie = await f.login();
+  await f.start(cookie); f.addClip(); await f.stop(cookie);
+  const clip = (await f.call(PREFIX + '/boats/boat-01', { cookie })).data.segments[0];
+  hold = true; const deletion = f.call(clip.playbackUrl, { cookie, method: 'DELETE' }); await waiting;
+  assert.equal((await f.call(PREFIX + '/config', { cookie, method: 'PATCH', body: { directory: ROOT + '/new' } })).status, 409);
+  assert.equal((await f.call(clip.playbackUrl, { cookie, method: 'DELETE' })).status, 409);
+  release(); assert.equal((await deletion).status, 200);
+  assert.equal(f.api.getState().directory, ROOT + '/recordings');
 });
 
 test('disabled, memory-only, corrupt state, unsupported methods and malformed mutations report explicit errors', async t => {

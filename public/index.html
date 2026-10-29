@@ -91,7 +91,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.27.0</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.29.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -315,7 +315,7 @@
           <ul id="recordingList" class="recording-list" aria-label="当前无人船已保存的录像"></ul>
           <div id="recordingPlayerWrap" class="recording-player-wrap" hidden><div class="recording-player-heading"><strong id="recordingPlaybackTitle"></strong><button id="recordingPlaybackClose" type="button" class="ghost">关闭回放</button></div><video id="recordingPlayer" controls playsinline preload="none" aria-label="无人船录像回放"></video></div>
         </article>
-        <aside class="workspace-note"><span data-icon="help"></span><p>实时播放和服务器录像分别控制；停止播放不会停止录像。录像使用 SRT / UDP 视频通道，约每 60 秒保存一段 MP4，默认保留 7 天；列表展示最近 200 段。状态依据录像开关与视频输入判断，如持续没有新片段，请检查服务器磁盘和媒体服务日志。管理员可开始/停止录像并在平台设置中修改保存目录。</p></aside>
+        <aside class="workspace-note"><span data-icon="help"></span><p>实时播放和服务器录像分别控制；停止播放不会停止录像。录像使用 SRT / UDP 视频通道，约每 60 秒保存一段 MP4，默认保留 7 天；列表展示最近 200 段。管理员可确认删除单段录像，删除后无法恢复；录制中的最新一段需停止录像后再删除。状态依据录像开关与视频输入判断，如持续没有新片段，请检查服务器磁盘和媒体服务日志。管理员可开始/停止录像并在平台设置中修改保存目录。</p></aside>
       </section>
       <footer><span>UNMANNED VESSEL MONITOR <b>/</b> 无人船监测平台</span><span>MQTT 云端监测与调参</span></footer>
     </main>
