@@ -12,6 +12,9 @@ test('parameter ACL grants per-device replies and commands while preserving secr
   assert.match(device,/topic read boats\/boat-01\/parameter-command/);assert.match(device,/topic write boats\/boat-01\/parameter-response/);assert.match(device,/topic write boats\/boat-01\/parameter-capability/);
   assert.match(device,/topic read boats\/boat-01\/firmware-command/);assert.match(device,/topic write boats\/boat-01\/firmware-response/);assert.match(device,/topic write boats\/boat-01\/firmware-capability/);
   assert.match(bridge,/topic write boats\/\+\/firmware-command/);assert.match(bridge,/topic read boats\/\+\/firmware-response/);assert.match(bridge,/topic read boats\/\+\/firmware-capability/);
+  assert.match(device,/topic read boats\/boat-01\/control-command/);assert.match(device,/topic write boats\/boat-01\/control-state/);assert.match(device,/topic write boats\/boat-01\/control-capability/);
+  assert.match(bridge,/topic write boats\/\+\/control-command/);assert.match(bridge,/topic read boats\/\+\/control-state/);assert.match(bridge,/topic read boats\/\+\/control-capability/);
+  assert.doesNotMatch(device,/topic write .*control-command/);assert.doesNotMatch(bridge,/topic write .*control-state/);
   assert.doesNotMatch(device,/topic write .*firmware-command/);assert.doesNotMatch(bridge,/topic write .*firmware-response/);
   assert.doesNotMatch(device,/topic write .*parameter-command|boats\/\+/);assert.match(bridge,/topic write boats\/\+\/parameter-command/);assert.match(bridge,/topic read boats\/\+\/parameter-response/);assert.match(bridge,/topic read boats\/\+\/parameter-capability/);
   assert.ok(text.includes('user unrelated\ntopic read weather/#\n\n'));assert.equal(fs.readFileSync(f.envFile,'utf8'),before);

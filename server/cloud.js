@@ -1,4 +1,4 @@
-/* 网口遥测与有确认的参数事务：只发送单次参数命令，不发送航行控制指令。 */
+/* 网口遥测、参数/OTA事务及独立短时驾驶通道；各船维护互斥资源。 */
 'use strict';
 const {EventEmitter}=require('node:events');
 const crypto=require('node:crypto');
@@ -9,6 +9,7 @@ const {unwrapTelemetry,isSyncResponse,UplinkClock}=require('./latency-protocol')
 const {decodeVideoDescriptor}=require('./video-protocol');
 const {TelemetryHistory,historyOptions}=require('./telemetry-history');
 const firmware=require('./firmware-protocol');
+const control=require('./control-protocol');
 const DEVICE_ID=/^[A-Za-z0-9_-]{1,64}$/;
 const LAYOUT=[
   [0,64,1,1,protocol.decodeFrame],
@@ -58,7 +59,7 @@ class CloudBridge extends EventEmitter {
     this.staleMs=staleMs;this.tickMs=tickMs;this.devices=new Map();
     this.parameterFreshMs=parameterFreshMs;this.parameterTimeoutMs=parameterTimeoutMs;this.flashTimeoutMs=flashTimeoutMs;this.pendingParameters=new Map();this.parameterSequence=crypto.randomBytes(4).readUInt32LE();
     this.brokerConnected=false;this.client=null;this.timer=null;this.stopped=false;this.generation=0;
-    this.firmwareLocks=new Set();this.firmwareSubscribed=false;
+    this.firmwareLocks=new Set();this.firmwareSubscribed=false;this.controlLocks=new Set();this.controlSubscribed=false;
     this.history=new TelemetryHistory(historyOptions(env,{now,maxDevices,...historyConfig}));
     this.prefix=env.BOAT_MQTT_TOPIC_PREFIX||'boats';
     if(!/^[A-Za-z0-9_-]{1,64}$/.test(this.prefix))throw Error('Invalid BOAT_MQTT_TOPIC_PREFIX');
@@ -97,6 +98,13 @@ class CloudBridge extends EventEmitter {
             // 仅必需主题的订阅结果决定 brokerConnected，视频授权结果不修改连接状态。
           });
         }catch(_){/* 可选订阅的同步错误同样不改变已就绪的必需链路。 */}
+        // 驾驶主题授权独立于原监测链路，旧 ACL 缺少驾驶规则时仍可监测。
+        try{
+          this.client.subscribe(['control-capability','control-state'].map(kind=>this.prefix+'/+/'+kind),{qos:0,rap:true},(error,granted)=>{
+            if(this.stopped||generation!==this.generation)return;
+            this.controlSubscribed=!error&&!granted?.some(subscription=>subscription.qos>=128);
+          });
+        }catch(_){this.controlSubscribed=false;}
         // 未配置 OTA 的旧部署不增加订阅；新增 ACL 不可用时不影响原遥测/参数主题。
         if(firmware.keyFrom(this.env.BOAT_OTA_KEY))try{
           this.client.subscribe(['firmware-capability','firmware-response'].map(kind=>this.prefix+'/+/'+kind),{qos:0,rap:true},(error,granted)=>{
@@ -113,7 +121,7 @@ class CloudBridge extends EventEmitter {
   setBrokerConnected(connected){
     if(this.stopped||this.brokerConnected===connected)return;
     this.brokerConnected=connected;
-    if(!connected)this.firmwareSubscribed=false;
+    if(!connected){this.firmwareSubscribed=false;this.controlSubscribed=false;}
     // Broker 重连后旧缓存仍保持离线；必须等到新的非 retained 遥测。
     if(!connected)for(const device of this.devices.values()){device.live=false;device.capability=null;device.fleetTelemetry=null;device.uplinkClock.reset();this.cancelParameters(device.id,503,'云端连接已断开，参数结果未知，请读取确认');}
     this.emit('state',{brokerConnected:connected,device:null});
@@ -131,7 +139,7 @@ class CloudBridge extends EventEmitter {
   obtain(id){
     if(this.devices.has(id))return this.devices.get(id);
     if(this.devices.size>=this.maxDevices){
-      const offline=[...this.devices.values()].filter(device=>!this.snapshot(device).online&&!this.firmwareLocks.has(device.id))
+      const offline=[...this.devices.values()].filter(device=>!this.snapshot(device).online&&!this.firmwareLocks.has(device.id)&&!this.controlLocks.has(device.id))
         .sort((a,b)=>(a.lastReceivedAt||a.lastStatusAt||0)-(b.lastReceivedAt||b.lastStatusAt||0));
       if(!offline.length)return null;
       this.cancelParameters(offline[0].id,503,'设备连接已变化，参数结果未知，请读取确认');
@@ -144,6 +152,11 @@ class CloudBridge extends EventEmitter {
     if(this.stopped||!this.enabled||!this.brokerConnected||typeof topic!=='string'||!Buffer.isBuffer(payload))return false;
     const parts=topic.split('/');
     if(parts.length!==3||parts[0]!==this.prefix||!DEVICE_ID.test(parts[1]))return false;
+    if(parts[2]==='control-capability'||parts[2]==='control-state'){
+      if(packet.retain||!control.status(payload)||!this.obtain(parts[1]))return false;
+      // ACK/能力不代替遥测在线，也不持久化成历史控制指令。
+      this.emit(parts[2],{deviceId:parts[1],payload:Buffer.from(payload)});return true;
+    }
     if(parts[2]==='firmware-capability'||parts[2]==='firmware-response'){
       if(packet.retain)return false;
       if(parts[2]==='firmware-capability'){
@@ -220,14 +233,26 @@ class CloudBridge extends EventEmitter {
     const time=this.now(),telemetryAge=time-device.lastReceivedAt,capAge=time-device.capability.receivedAt;
     return telemetryAge>=0&&telemetryAge<=this.parameterFreshMs&&capAge>=0&&capAge<=this.parameterFreshMs;
   }
-  parametersReady(device){return !!(this.parameterLive(device)&&device.capability.token!==device.consumedToken&&!this.pendingParameters.has(device.id)&&!this.firmwareLocks.has(device.id));}
+  parametersReady(device){return !!(this.parameterLive(device)&&device.capability.token!==device.consumedToken&&!this.pendingParameters.has(device.id)&&!this.firmwareLocks.has(device.id)&&!this.controlLocks.has(device.id));}
   claimFirmware(id){
     if(!DEVICE_ID.test(id)||!this.devices.has(id))throw Object.assign(Error('无人船不存在'),{status:404});
-    if(this.firmwareLocks.has(id)||this.pendingParameters.has(id))throw Object.assign(Error('该船正在调参或升级，请等待操作完成'),{status:409});
+    if(this.firmwareLocks.has(id)||this.pendingParameters.has(id)||this.controlLocks.has(id))throw Object.assign(Error('该船正在驾驶、调参或升级，请先停船并等待操作完成'),{status:409});
     if(!this.brokerConnected||!this.firmwareSubscribed||!this.client||this.client.connected===false||this.client.disconnecting)throw Object.assign(Error('OTA MQTT通道未就绪，请检查设备和主题权限'),{status:503});
     this.firmwareLocks.add(id);this.emit('state',this.state(id));
   }
   releaseFirmware(id){if(this.firmwareLocks.delete(id))this.emit('state',this.state(id));}
+  claimControl(id){
+    if(!DEVICE_ID.test(id)||!this.devices.has(id))throw Object.assign(Error('无人船不存在'),{status:404});
+    if(this.controlLocks.has(id)||this.firmwareLocks.has(id)||this.pendingParameters.has(id))throw Object.assign(Error('该船正在驾驶、调参或升级，请等待操作完成'),{status:409});
+    if(!this.brokerConnected||!this.controlSubscribed||!this.client||this.client.connected===false||this.client.disconnecting)throw Object.assign(Error('驾驶MQTT通道未就绪，请检查主题权限'),{status:503});
+    this.controlLocks.add(id);this.emit('state',this.state(id));
+  }
+  releaseControl(id){if(this.controlLocks.delete(id))this.emit('state',this.state(id));}
+  publishControl(id,payload){
+    if(!DEVICE_ID.test(id)||!Buffer.isBuffer(payload)||payload.length!==40||payload.toString('ascii',0,4)!=='BDC1'||!this.controlLocks.has(id)||!this.brokerConnected||!this.controlSubscribed||!this.client||this.client.connected===false||this.client.disconnecting)
+      return Promise.reject(Object.assign(Error('驾驶通道已断开'),{status:503}));
+    return new Promise((resolve,reject)=>{try{this.client.publish(this.prefix+'/'+id+'/control-command',payload,{qos:0,retain:false},error=>error?reject(Object.assign(Error('驾驶指令发送失败'),{status:503})):resolve());}catch(_){reject(Object.assign(Error('驾驶指令发送失败'),{status:503}));}});
+  }
   publishFirmware(id,payload){
     if(!DEVICE_ID.test(id)||!Buffer.isBuffer(payload)||payload.length>296||!this.firmwareLocks.has(id)||!this.brokerConnected||!this.firmwareSubscribed||!this.client||this.client.connected===false||this.client.disconnecting)
       return Promise.reject(Object.assign(Error('OTA通道已断开'),{status:503}));
@@ -243,6 +268,7 @@ class CloudBridge extends EventEmitter {
     try{parameters.validateOperation(kind,values);}catch(error){return Promise.reject(Object.assign(error,{status:400}));}
     if(typeof id!=='string'||!DEVICE_ID.test(id))return Promise.reject(Object.assign(Error('设备编号不正确'),{status:400}));
     const device=this.devices.get(id);
+    if(this.controlLocks.has(id))return Promise.reject(Object.assign(Error('该船正在网页驾驶，请先停止并释放操控'),{status:409}));
     if(this.firmwareLocks.has(id))return Promise.reject(Object.assign(Error('该船正在升级固件，暂不能调参'),{status:409}));
     if(this.pendingParameters.has(id))return Promise.reject(Object.assign(Error('该设备已有参数操作正在等待响应'),{status:409}));
     if(!this.parametersReady(device)||!this.client||this.client.connected===false||this.client.disconnecting)return Promise.reject(Object.assign(Error('设备不在线或尚未提供新参数令牌'),{status:503}));

@@ -30,7 +30,8 @@ test('桥接订阅视频配置，按设备隔离并提供快照；配置不伪�
   const f=fixture(t),states=[];f.bridge.on('state',state=>states.push(state));
   assert.deepEqual(f.client.subscriptions.map(item=>item.topics),[
     ['boats/+/telemetry','boats/+/status','boats/+/parameter-capability','boats/+/parameter-response'],
-    ['boats/+/video']
+    ['boats/+/video'],
+    ['boats/+/control-capability','boats/+/control-state']
   ]);
   assert.equal(f.bridge.acceptMessage('boats/boat-01/video',descriptor(),{retain:true}),true);
   assert.equal(f.bridge.acceptMessage('boats/boat-02/video',descriptor('https://video.test/live/boat-02.flv','flv')),true);

@@ -76,7 +76,8 @@ test('bridge ignores retained/malformed telemetry, preserves source ages and bou
   const f=fixture({maxDevices:2});f.bridge.start();f.client.emit('connect');
   assert.deepEqual(f.client.subscriptions.map(item=>item.topics),[
     ['boats/+/telemetry','boats/+/status','boats/+/parameter-capability','boats/+/parameter-response'],
-    ['boats/+/video']
+    ['boats/+/video'],
+    ['boats/+/control-capability','boats/+/control-state']
   ]);
   for(const subscription of f.client.subscriptions)assert.deepEqual(subscription.options,{qos:0,rap:true});
   assert.equal(f.connection.opts.protocolVersion,5);
@@ -123,22 +124,26 @@ test('rejected subscriptions and callbacks from an old connection never mark bro
 test('optional video subscription rejection preserves telemetry and stale video callbacks cannot change readiness',()=>{
   const f=fixture(),subscriptions=[];
   f.client.subscribe=(topics,options,callback)=>subscriptions.push({topics,callback});
+  const required=()=>subscriptions.filter(item=>item.topics.includes('boats/+/telemetry')).at(-1);
+  const video=()=>subscriptions.filter(item=>item.topics.includes('boats/+/video')).at(-1);
   f.bridge.start();f.client.emit('connect');
   assert.equal(subscriptions.length,1);assert.equal(f.bridge.brokerConnected,false);
-  subscriptions[0].callback(null,[{qos:0},{qos:0},{qos:0},{qos:0}]);
-  assert.equal(f.bridge.brokerConnected,true);assert.deepEqual(subscriptions[1].topics,['boats/+/video']);
+  required().callback(null,[{qos:0},{qos:0},{qos:0},{qos:0}]);
+  const firstVideo=video();
+  assert.equal(f.bridge.brokerConnected,true);assert.deepEqual(firstVideo.topics,['boats/+/video']);
   for(const rejection of [128,0x87]){
-    subscriptions[1].callback(null,[{qos:rejection}]);assert.equal(f.bridge.brokerConnected,true);
+    firstVideo.callback(null,[{qos:rejection}]);assert.equal(f.bridge.brokerConnected,true);
   }
-  subscriptions[1].callback(Error('video subscription denied'));assert.equal(f.bridge.brokerConnected,true);
+  firstVideo.callback(Error('video subscription denied'));assert.equal(f.bridge.brokerConnected,true);
   assert.equal(f.bridge.acceptMessage('boats/boat-01/telemetry',payload()),true);
   assert.equal(f.bridge.get('boat-01').online,true);
   f.client.emit('close');f.client.emit('connect');
-  subscriptions[1].callback(null,[{qos:0}]);assert.equal(f.bridge.brokerConnected,false);
-  subscriptions[1].callback(null,[{qos:128}]);assert.equal(f.bridge.brokerConnected,false);
-  subscriptions[2].callback(null,[{qos:0}]);assert.equal(f.bridge.brokerConnected,true);
-  subscriptions[1].callback(Error('old video callback'));assert.equal(f.bridge.brokerConnected,true);
-  f.bridge.stop();subscriptions[3].callback(null,[{qos:0}]);assert.equal(f.bridge.brokerConnected,false);
+  firstVideo.callback(null,[{qos:0}]);assert.equal(f.bridge.brokerConnected,false);
+  firstVideo.callback(null,[{qos:128}]);assert.equal(f.bridge.brokerConnected,false);
+  required().callback(null,[{qos:0}]);assert.equal(f.bridge.brokerConnected,true);
+  firstVideo.callback(Error('old video callback'));assert.equal(f.bridge.brokerConnected,true);
+  const secondVideo=video();assert.notEqual(secondVideo,firstVideo);
+  f.bridge.stop();secondVideo.callback(null,[{qos:0}]);assert.equal(f.bridge.brokerConnected,false);
 });
 
 test('optional video subscription throwing synchronously does not disconnect the required topics',()=>{
@@ -193,7 +198,12 @@ test('SSE/session bounds, expiry and shutdown release all listeners',async t=>{
   assert.equal((await request(f.port,'/api/cloud/events?device=invalid%2Ftopic',{cookie})).status,400);
   const ended=new Promise(resolve=>stream.res.once('end',resolve));f.setTime(f.now()+101);await ended;
   assert.equal(f.server.boatCloudApi.getClientCount(),0);assert.equal((await request(f.port,'/api/cloud/devices',{cookie})).status,401);
-  f.server.boatCloudApi.close();assert.equal(f.bridge.listenerCount('telemetry'),0);assert.equal(f.bridge.listenerCount('state'),0);
+  const driver=f.server.boatControlApi.manager;
+  f.server.boatCloudApi.close();assert.equal(f.bridge.listenerCount('telemetry'),0);
+  // SSE API 只清理自身监听；驾驶服务仍需监听船端状态以执行超时停船。
+  assert.deepEqual(f.bridge.listeners('state'),[driver.onState]);
+  f.server.boatControlApi.close();assert.equal(f.bridge.listenerCount('state'),0);
+  assert.equal(f.bridge.listenerCount('control-capability'),0);assert.equal(f.bridge.listenerCount('control-state'),0);
 });
 
 test('SSE immediately disconnects backpressured clients instead of buffering telemetry',async()=>{

@@ -7,6 +7,7 @@
   function toast(message){$('toast').textContent=message;$('toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').classList.remove('show'),4500);}
   const params=new ParameterPanel(link,toast), viewer=new AttitudeView($('boatCanvas'));
   const horizon=new BoatArtificialHorizon($('imuHorizon'));
+  const compass=new BoatCompassView($('boatCompass'));
   const mapSettings=new BoatMapSettingsPanel();
   const users=new BoatUserManagementPanel({toast});
   const mqttDevices=new BoatMqttDeviceSettingsPanel();
@@ -14,8 +15,9 @@
   const videoView=new BoatVideoView();
   const videoRecording=new BoatVideoRecordingPanel();
   const firmware=new BoatFirmwarePanel();
+  const driver=new BoatDriverControl({toast});
   const fleet=new BoatFleetLink(cloud);
-  const fleetView=new BoatFleetView({onSelect:id=>selectBoat(id),onConfigure:id=>openBoatSettings(id).catch(error=>toast(error.message)),onVideo:id=>openBoatVideo(id).catch(error=>toast(error.message)),onFirmware:id=>firmware.open(id)});
+  const fleetView=new BoatFleetView({onSelect:id=>selectBoat(id),onConfigure:id=>openBoatSettings(id).catch(error=>toast(error.message)),onVideo:id=>openBoatVideo(id).catch(error=>toast(error.message)),onFirmware:id=>{if(driver.active||driver.pending)return toast('请先停船并退出电脑操控');firmware.open(id);}});
   const fleetMapView=new BoatFleetMapView({onSelect:id=>selectBoat(id)});
   let parameterDeviceId='',parameterOpenSequence=0,videoOpenSequence=0;
   const wgs=(latitude,longitude)=>Number.isFinite(latitude)&&Number.isFinite(longitude)&&Math.abs(latitude)<=90&&Math.abs(longitude)<=180?{latitude,longitude}:null;
@@ -26,7 +28,24 @@
   let map,marker,mapVectors,trackRevision=-1,lastLocation,hadFix=false,viewResizeFrame;
   let autoSelectInFlight=null,autoSelectionSuppressed=false,historyRequest=0,historyController=null;
   let chartPalette;
+  let compassVisible=true;
+  try{compassVisible=localStorage.getItem('boat_compass_visible')!=='0';}catch(_){/* 禁用本地存储时仍可切换罗盘。 */}
   const set=(id,value)=>{const text=value==null?'--':String(value);if($(id).textContent!==text)$(id).textContent=text;};
+  function setCompassVisibility(visible,persist=false) {
+    compassVisible=visible;
+    $('compassCard').hidden=!visible;
+    $('sensorAttitudeLayout').classList.toggle('compass-hidden',!visible);
+    $('compassToggle').setAttribute('aria-pressed',String(visible));
+    set('compassToggle',visible?'隐藏罗盘':'显示罗盘');
+    if(persist)try{localStorage.setItem('boat_compass_visible',visible?'1':'0');}catch(_){}
+  }
+  function renderCompass(now) {
+    if(!compassVisible)return;
+    const x=state.latest;
+    // 绝对船头方向与对地航迹角独立；未定位仍可展示有效航向，断流不伪装成正北。
+    compass.setTelemetry(M.compassDisplay.prepareCompassDisplay(x.boat?.frame,x.boat?.at||0,x.velocity?.frame,x.velocity?.at||0,now,link.connected));
+  }
+  setCompassVisibility(compassVisible);
   function readChartPalette() {
     const style=getComputedStyle(document.documentElement);
     chartPalette={
@@ -220,6 +239,8 @@
   }
   function render() {
     if(document.hidden)return;
+    driver.update({deviceId:cloud.authenticated?cloud.selectedId:'',connected:link.connected,authenticated:cloud.authenticated,
+      parameterBusy:params.busy||!!link.pending||firmware.busy});
     syncParameterAccess();
     const fleetPage=window.BoatWorkspace?.current==='fleet',fleetState=fleet.state();
     const badgeOnline=fleetPage?fleetState.streamConnected&&fleetState.brokerConnected:link.connected;
@@ -227,6 +248,8 @@
     $('connectionBadge').className='badge '+(badgeOnline?'online':'offline');
     const now=performance.now(),x=state.latest;
     const b=M.boatDisplay.prepareBoatDisplay(x.boat?.frame,x.boat?.at||0,now,link.connected);
+    const driverHeading=M.compassDisplay.prepareCompassDisplay(x.boat?.frame,x.boat?.at||0,x.velocity?.frame,x.velocity?.at||0,now,link.connected).headingDegrees;
+    driver.setTelemetry({...b,actualHeading:Number.isFinite(driverHeading)?driverHeading.toFixed(2):'--'});
     for(const [id,key] of Object.entries({boatStatus:'status',boatActual:'actual',boatTarget:'target',boatRequested:'requested',boatDirection:'direction',boatMode:'modeText',boatHeading:'actualHeading',boatTargetHeading:'targetHeading',boatHeadingError:'headingError',boatCommon:'common',boatTurn:'turn'}))set(id,b[key]);
     $('boatMeter').style.width=(Number.isFinite(Number(b.common))?Math.min(100,Math.abs(Number(b.common))):0)+'%';
     const v=M.velocityDisplay.prepareVelocityDisplay(x.velocity?.frame,x.velocity?.at||0,now,link.connected);
@@ -237,6 +260,7 @@
     updateMapAvailability(v.fixFresh);
     renderTrack(v.fixFresh);
     mapVectors.render(M.mapVelocity.prepareMapVelocity(x.boat?.frame,x.boat?.at||0,x.velocity?.frame,x.velocity?.at||0,now,link.connected));
+    renderCompass(now);
     const imu=M.imuDisplay.prepareImuDisplay(x.imu?.frame,x.imu?.at||0,now,link.connected);
     for(const key of ['roll','pitch','yaw','gyroX','gyroY','gyroZ'])set(key,imu[key]);
     for(const [id,key] of Object.entries({imuStatus:'status',imuSequence:'sequence',imuAge:'ageText',imuAlignment:'alignmentText',imuHeadingUpdate:'headingUpdateText'}))set(id,imu[key]);
@@ -288,7 +312,7 @@
   function clearLive() {
     state.latest={};state.lastReceived=null;state.forwardDelayMs=null;
     state.uplinkDelayMs=null;state.uplinkRttMs=null;state.uplinkUncertaintyMs=null;
-    viewer.reset();horizon.reset();track.stop();track.breakSegment();
+    viewer.reset();horizon.reset();compass.reset();track.stop();track.breakSegment();
     marker?.remove();marker=null;lastLocation=null;hadFix=false;updateMapAvailability(false);
   }
   function cancelHistory(){++historyRequest;historyController?.abort();historyController=null;}
@@ -370,6 +394,7 @@
   on('trackStart',()=>{state.trackDisplayEnabled=!track.active;track.active?track.stop():track.start();const x=state.latest.velocity;position(x?.frame,x?.at||0,performance.now());render();});
   on('trackClear',()=>{cancelHistory();state.liveTrackPoints=[];track.clear();render();});
   on('mapVectorsToggle',()=>mapVectors.toggle());
+  on('compassToggle',()=>{setCompassVisibility(!compassVisible,true);renderCompass(performance.now());});
   on('mapProviderToggle',async()=>{
     const switched=await map.switchProvider(map.provider==='amap'||!map.ready?'osm':'amap');
     if(switched)toast('已切换至'+(map.provider==='amap'?'高德地图':' OpenStreetMap'));
@@ -377,7 +402,7 @@
   on('mapCenter',()=>{if(!map?.ready)toast('地图尚未就绪，请查看地图底部提示');else if(lastLocation)map.setView(lastLocation,16);else toast('尚无有效定位');});
   $('mapFollow').onchange=()=>{if($('mapFollow').checked&&lastLocation&&map?.ready)map.setView(lastLocation,16);};
   function parameterAccess() {
-    return {canManage:!!window.BoatAuth?.canManage,canUpgradeFirmware:window.BoatAuth?.enabled===true&&window.BoatAuth?.ready===true&&window.BoatAuth?.user?.role==='admin',parameterBusy:params.busy||!!link.pending};
+    return {canManage:!!window.BoatAuth?.canManage,canUpgradeFirmware:window.BoatAuth?.enabled===true&&window.BoatAuth?.ready===true&&window.BoatAuth?.user?.role==='admin',parameterBusy:params.busy||!!link.pending||driver.active||driver.pending};
   }
   function syncParameterAccess() {
     const access=parameterAccess(),selected=!!(cloud.authenticated&&cloud.selectedId);
@@ -393,6 +418,7 @@
   }
   async function openBoatSettings(id=cloud.selectedId) {
     window.BoatAuth?.assertManage();
+    if(driver.active||driver.pending)throw Error('请先停船并退出电脑操控，再打开调参设置');
     if(!cloud.authenticated||!/^[A-Za-z0-9_-]{1,64}$/.test(id||''))throw Error('请从对应无人船卡片进入调参设置');
     if(params.busy||link.pending)throw Error('请等待当前无人船的参数操作完成，再打开调参设置');
     const request=++parameterOpenSequence,accountGeneration=window.BoatAuth?.generation;
@@ -415,7 +441,7 @@
   }
   const openPlatformSettings=()=>{window.BoatAuth?.assertManage();$('platformSettingsDialog').showModal();users.open();mqttDevices.open();videoDevices.open();videoRecording.open();mapSettings.open();};
   on('settingsToggle',openSettings);
-  on('firmwareToggle',()=>firmware.open(cloud.selectedId));
+  on('firmwareToggle',()=>{if(driver.active||driver.pending)throw Error('请先停船并退出电脑操控');firmware.open(cloud.selectedId);});
   on('settingsEntry',openSettings);
   on('settingsClose',()=>$('settingsDialog').close());
   $('settingsDialog').addEventListener('close',()=>{if(!$('settingsDialog').open)delete $('settingsDialog').dataset.deviceId;});
@@ -507,6 +533,7 @@
     if(cloud.selectedId===id&&(cloud.wanted||cloud.connected)){
       if(showDetails)window.BoatWorkspace?.navigate('overview');return true;
     }
+    driver.stop('正在切换无人船，已停止原船操控');
     // 先撤销旧船正在等待的命令，再建立新船的独立解析器。
     link.disconnect('正在切换无人船');clearHistory();params.reset(false);track.clear();state.deviceId='cloud:'+id;state.lastUpdateAt=null;
     if(showDetails)window.BoatWorkspace?.navigate('overview');
@@ -551,7 +578,7 @@
   set('supportNotice','无人船通过 MQTT 向服务器上报，浏览器通过同源 HTTP/SSE 接收实时数据。船→云延迟在船端校时完成后显示；合计为船→云估计值与云→网页转发耗时之和，不含传感器采样或画面绘制。旧固件或校时失效时显示 --。远程访问建议使用 HTTPS；地图底图需要联网。');
   readChartPalette();setupMap();mapVectors=new MapVelocityView(map);render();
   function refreshWorkspace() {
-    videoView.setVisible(window.BoatWorkspace?.current==='video'&&!document.hidden);
+    videoView.setVisible(['video','driving'].includes(window.BoatWorkspace?.current)&&!document.hidden);
     videoRecording.setVisible(window.BoatWorkspace?.current==='video'&&!document.hidden);
     // 切页保留连接与历史，待新容器布局完成后恢复地图、图表和三维画面。
     viewer.visible=false;viewer.stop();cancelAnimationFrame(viewResizeFrame);
@@ -564,20 +591,21 @@
     });
   }
   window.addEventListener('boat-view-change',refreshWorkspace);
+  window.addEventListener('boat-driver-layout-change',refreshWorkspace);
   refreshWorkspace();
   const timer=setInterval(render,200);
   const cloudTimer=setInterval(()=>{if(cloud.enabled&&cloud.authenticated&&!document.hidden)cloud.refreshDevices().catch(()=>{});},10000);
   document.addEventListener('visibilitychange',()=>{
-    videoView.setVisible(window.BoatWorkspace?.current==='video'&&!document.hidden);
+    videoView.setVisible(['video','driving'].includes(window.BoatWorkspace?.current)&&!document.hidden);
     videoRecording.setVisible(window.BoatWorkspace?.current==='video'&&!document.hidden);
     if(document.hidden){cancelHistory();cloud.suspend();}else{cloud.resume();if(cloud.selectedId&&cloud.wanted)hydrateHistory(cloud.selectedId,cloud.generation);}
     if(!document.hidden)render();
   });
-  window.addEventListener('pagehide',()=>{cancelHistory();cancelAnimationFrame(viewResizeFrame);clearInterval(timer);clearInterval(cloudTimer);videoView.destroy();videoRecording.destroy();viewer.stop();mapSettings.destroy();fleetMapView.destroy();fleet.destroy();fleetView.destroy();link.disconnect();});
+  window.addEventListener('pagehide',()=>{driver.destroy();cancelHistory();cancelAnimationFrame(viewResizeFrame);clearInterval(timer);clearInterval(cloudTimer);videoView.destroy();videoRecording.destroy();viewer.stop();compass.destroy?.();mapSettings.destroy();fleetMapView.destroy();fleet.destroy();fleetView.destroy();link.disconnect();});
   window.addEventListener('pageshow',event=>{if(event.persisted)location.reload();});
   window.addEventListener('resize',()=>render());
   window.addEventListener('boat-theme-change',()=>{readChartPalette();map?.setTheme(document.documentElement.dataset.theme);fleetMapView.setTheme(document.documentElement.dataset.theme);render();});
   // 提供浏览器控制台诊断入口，界面不显示原始字节流。
-  window.boatMonitor={link,params,viewer,horizon,track,map,mapVectors,mapSettings,mqttDevices,fleet,fleetView,fleetMapView,videoView,videoRecording,selectBoat,openBoatSettings,openBoatVideo,
+  window.boatMonitor={link,params,viewer,horizon,compass,driver,track,map,mapVectors,mapSettings,mqttDevices,fleet,fleetView,fleetMapView,videoView,videoRecording,selectBoat,openBoatSettings,openBoatVideo,
     historyState:()=>({deviceId:cloud.selectedId,recordedAt:state.historical?.receivedAt||null,points:track.pointCount,chartSamples:state.history.length,message:state.historyMessage})};
 })();

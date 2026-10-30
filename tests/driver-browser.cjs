@@ -1,0 +1,107 @@
+/* 真实Chrome驾驶专项：检查接管确认、键盘生命周期及共享驾驶画面的布局。 */
+'use strict';
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict'),{spawn,spawnSync}=require('node:child_process');
+const {createDriverFixture,fixtureScript}=require('./driver-browser-fixture.cjs');
+const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function main(){
+  const output=path.resolve(__dirname,'../.test-output');fs.mkdirSync(output,{recursive:true});
+  const run=fs.mkdtempSync(path.join(output,'driver-state-'));
+  const mediaPath=path.join(run,'driver-sample.mp4');
+  const generated=spawnSync(process.env.FFMPEG_PATH||'D:/ClaudeTools/ffmpeg/ffmpeg-8.1-essentials_build/bin/ffmpeg.exe',['-hide_banner','-loglevel','error','-nostdin','-y','-f','lavfi','-i','testsrc2=size=320x180:rate=12','-t','40','-an','-c:v','libx264','-preset','ultrafast','-profile:v','baseline','-pix_fmt','yuv420p','-movflags','+faststart',mediaPath],{windowsHide:true,encoding:'utf8',timeout:60000});
+  if(generated.error||generated.status!==0)throw Error('Local sample video generation failed: '+(generated.error?.message||generated.stderr));
+  const server=createDriverFixture({mediaPath,env:{BOAT_ACCOUNTS_FILE:path.join(run,'accounts.json'),BOAT_MAP_CONFIG_FILE:path.join(run,'map.json'),BOAT_TELEMETRY_HISTORY_FILE:path.join(run,'history.json'),BOAT_OTA_KEY:''}});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const profile=fs.mkdtempSync(path.join(output,'chrome-driver-')),errors=[];
+  const browser=spawn(process.env.CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':'google-chrome'),['--headless','--no-first-run','--no-default-browser-check','--disable-background-networking','--use-angle=swiftshader','--enable-unsafe-swiftshader','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{windowsHide:true,stdio:'ignore'});
+  browser.on('error',error=>errors.push(error.message));let socket;
+  try{
+    const portFile=path.join(profile,'DevToolsActivePort');
+    for(let n=0;n<100&&!fs.existsSync(portFile)&&!errors.length;n++)await wait(100);
+    if(!fs.existsSync(portFile))throw Error(errors.join('\n')||'Chrome did not start');
+    const port=fs.readFileSync(portFile,'utf8').split('\n')[0],pages=await(await fetch('http://127.0.0.1:'+port+'/json/list')).json();
+    socket=new WebSocket(pages.find(page=>page.type==='page').webSocketDebuggerUrl);
+    await new Promise((resolve,reject)=>{socket.onopen=resolve;socket.onerror=reject;});
+    let serial=0;const pending=new Map();
+    socket.onmessage=event=>{const value=JSON.parse(event.data);if(value.method==='Runtime.exceptionThrown')errors.push(value.params.exceptionDetails.exception?.description||value.params.exceptionDetails.text);const item=pending.get(value.id);if(item){pending.delete(value.id);clearTimeout(item.timer);value.error?item.reject(Error(value.error.message)):item.resolve(value.result);}};
+    const send=(method,params={})=>new Promise((resolve,reject)=>{const id=++serial,timer=setTimeout(()=>{pending.delete(id);reject(Error('CDP timeout '+method));},15000);pending.set(id,{resolve,reject,timer});socket.send(JSON.stringify({id,method,params}));});
+    const evaluate=async expression=>{const value=await send('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true,userGesture:true});if(value.exceptionDetails)throw Error(value.exceptionDetails.exception?.description||value.exceptionDetails.text);return value.result.value;};
+    const until=async expression=>{for(let n=0;n<120;n++){if(await evaluate(expression))return;await wait(50);}throw Error('Condition timed out: '+expression+'\n'+errors.join('\n'));};
+    const untilCall=async test=>{for(let n=0;n<100;n++){if(server.driverFixture.calls.some(test))return;await wait(25);}throw Error('Expected control request missing');};
+    const key=async(code,down=true)=>send('Input.dispatchKeyEvent',{type:down?'keyDown':'keyUp',code,key:({KeyW:'w',KeyA:'a',KeyS:'s',KeyD:'d',Space:' '})[code]||code,windowsVirtualKeyCode:({KeyW:87,KeyA:65,KeyS:83,KeyD:68,Space:32,ArrowUp:38,ArrowDown:40,ArrowLeft:37,ArrowRight:39})[code]});
+    const go=async view=>{await evaluate('BoatWorkspace.navigate('+JSON.stringify(view)+',{focus:false})');await wait(100);};
+    const shot=async name=>{const image=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});fs.writeFileSync(path.join(output,name+'.png'),Buffer.from(image.data,'base64'));};
+    const enable=async()=>{await evaluate('boatMonitor.driver.lastPoll=0;boatMonitor.driver.poll()');await until('!document.getElementById("driverEnable").disabled');await evaluate('document.getElementById("driverEnable").click()');await until('boatMonitor.driver.active');};
+    await send('Runtime.enable');await send('Page.enable');await send('Network.enable');
+    await send('Network.setBlockedURLs',{urls:['https://*','http://tile.openstreetmap.org/*']});
+    await send('Page.addScriptToEvaluateOnNewDocument',{source:fixtureScript});
+    await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
+    await send('Page.navigate',{url:'http://127.0.0.1:'+server.address().port+'/#driving'});
+    await until('window.boatMonitor?.driver&&BoatAuth.ready');
+    assert.equal(await evaluate('boatMonitor.driver.active'),false,'Entering driving never arms the vessel');
+    await evaluate('connectTestBoat()');await until('!document.getElementById("driverEnable").disabled');
+    await evaluate('window.__driverInstances={map:boatMonitor.map,viewer:boatMonitor.viewer,compass:boatMonitor.compass,video:boatMonitor.videoView,videoEl:document.getElementById("boatVideo")};true');
+    assert.equal(await evaluate('boatMonitor.videoView.visible'),true,'Driving mounts the same live video player');
+    await until('boatMonitor.videoView.active&&document.getElementById("boatVideo").videoWidth>0&&document.getElementById("boatVideo").currentTime>0');
+    assert.deepEqual(await evaluate("['navigation','attitude','sensorTelemetry','videoCard'].map(id=>document.getElementById(id).parentElement.dataset.workspaceSlot)"),['driving-map','driving-model','driving-sensors','driving-video']);
+    server.driverFixture.ackDelay=350;
+    await evaluate('document.getElementById("driverEnable").click()');await wait(40);await key('KeyW');
+    assert.equal(await evaluate('boatMonitor.driver.active'),false,'MCU ACK is required before accepting keys');
+    assert.equal(server.driverFixture.calls.some(call=>call.action==='input'),false);
+    await key('KeyW',false);await until('boatMonitor.driver.active');server.driverFixture.ackDelay=100;
+    await evaluate('document.activeElement?.blur()');await key('KeyW');
+    await untilCall(call=>call.action==='input'&&call.throttle===200);
+    await key('ArrowUp');await key('KeyW',false);await wait(130);
+    assert.equal(await evaluate('boatMonitor.driver.inputs().throttle'),200,'Releasing W keeps a still-held Up alias moving');
+    await key('ArrowUp',false);await wait(150);assert.equal(server.driverFixture.calls.at(-1).throttle,0,'Releasing the last motion key sends zero');
+    await key('KeyS');await untilCall(call=>call.action==='input'&&call.throttle===-200);await key('KeyS',false);
+    await key('KeyA');await untilCall(call=>call.action==='input'&&call.turn===-200);await key('KeyA',false);
+    await key('KeyD');await untilCall(call=>call.action==='input'&&call.turn===200);await key('KeyD',false);
+    await evaluate('document.getElementById("driverMode").value="2";document.getElementById("driverMode").dispatchEvent(new Event("change"))');
+    await wait(140);assert.equal(await evaluate('Number(document.getElementById("driverHeading").value)'),359,'Entering heading hold starts at the current bow heading');
+    const headingBefore=await evaluate('boatMonitor.driver.headingValue()');await key('KeyD');await wait(180);await key('KeyD',false);
+    assert.notEqual(await evaluate('boatMonitor.driver.headingValue()'),headingBefore,'Heading keys change target angle');
+    assert.equal(server.driverFixture.calls.at(-1).turn,0,'Heading mode uses target angle rather than direct differential command');
+    await evaluate('document.getElementById("driverHeading").focus()');await key('KeyW');await wait(130);await key('KeyW',false);
+    assert.equal(await evaluate('boatMonitor.driver.inputs().throttle'),0,'Editing inputs does not steer');
+    await key('Space');await until('!boatMonitor.driver.active');await untilCall(call=>call.action==='stop');await key('Space',false);
+    await wait(200);assert.equal(await evaluate('boatMonitor.driver.active'),false,'Emergency stop never auto-rearms');
+    await evaluate('document.activeElement?.blur();document.getElementById("driverMode").value="1";document.getElementById("driverMode").dispatchEvent(new Event("change"))');
+    await enable();await key('KeyW');await evaluate('window.dispatchEvent(new Event("blur"))');await until('!boatMonitor.driver.active');await key('KeyW',false);
+    await wait(150);assert.equal(await evaluate('boatMonitor.driver.keys.size'),0,'Blur clears held keys');
+    await enable();await go('navigation');await until('!boatMonitor.driver.active');
+    assert.equal(await evaluate('document.getElementById("navigation").parentElement.dataset.workspaceSlot'),'navigation-map');
+    await go('video');assert.equal(await evaluate('document.getElementById("videoCard").parentElement.dataset.workspaceSlot'),'video-playback');
+    await until('boatMonitor.videoView.playing&&document.getElementById("boatVideo").currentTime>0');
+    await go('overview');assert.deepEqual(await evaluate("['navigation','attitude','sensorTelemetry'].map(id=>document.getElementById(id).parentElement.dataset.workspaceSlot)"),['overview-map','overview-attitude','overview-sensors']);
+    await go('driving');assert.equal(await evaluate('boatMonitor.map===__driverInstances.map&&boatMonitor.viewer===__driverInstances.viewer&&boatMonitor.compass===__driverInstances.compass&&boatMonitor.videoView===__driverInstances.video&&document.getElementById("boatVideo")===__driverInstances.videoEl'),true,'All driving visualizations reuse existing objects');
+    await until('boatMonitor.videoView.playing&&document.getElementById("boatVideo").videoWidth>0');
+    for(const width of [1920,1440,320]){
+      await send('Emulation.setDeviceMetricsOverride',{width,height:width<500?1100:900,deviceScaleFactor:1,mobile:width<500});await wait(180);
+      assert.equal(await evaluate('document.documentElement.scrollWidth>innerWidth'),false,'Driving has no horizontal overflow at '+width);
+      await evaluate('window.scrollTo(0,0)');await shot('driver-'+width+'-dark');
+      if(width>=1440)assert.equal(await evaluate("['#imuHorizon svg','#boatCompass svg','#boatCanvas','.driver-region-video .video-stage','.driver-region-map .map-stage'].every(selector=>{const r=document.querySelector(selector).getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight;})"),true,'All primary driving visuals are fully visible in the desktop viewport at '+width);
+      for(const [type,id]of [['video','driverVideoExpand'],['map','driverMapExpand']]){
+        await evaluate('document.getElementById('+JSON.stringify(id)+').click()');await wait(150);
+        assert.equal(await evaluate('document.getElementById("view-driving").dataset.focus'),type);
+        assert.equal(await evaluate('document.documentElement.scrollWidth>innerWidth'),false,'Expanded '+type+' fits '+width);
+        assert.ok(await evaluate('document.querySelector(".driver-region-'+type+' .'+(type==='map'?'map-stage':'video-stage')+'").getBoundingClientRect().height>380'));
+        if(width===1440){await evaluate('document.querySelector(".driver-region-'+type+'").scrollIntoView({block:"start",behavior:"instant"})');await shot('driver-expanded-'+type);}
+        await evaluate('document.getElementById('+JSON.stringify(id)+').click()');assert.equal(await evaluate('document.getElementById("view-driving").hasAttribute("data-focus")'),false);
+      }
+    }
+    await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
+    await evaluate('document.getElementById("themeToggle").click();document.getElementById("sensorTelemetry").scrollIntoView({block:"center",behavior:"instant"})');await shot('driver-instruments-light');
+    await evaluate('window.scrollTo(0,0)');
+    await enable();const oldId=await evaluate('boatMonitor.driver.context.deviceId');await evaluate('boatMonitor.driver.update({deviceId:"boat-another"})');
+    await untilCall(call=>call.action==='release'&&call.deviceId===oldId);assert.equal(await evaluate('boatMonitor.driver.active'),false,'Changing boats releases the old vessel');
+    await wait(250);await enable();server.driverFixture.failInputs=true;await key('KeyW');await until('!boatMonitor.driver.active');await key('KeyW',false);server.driverFixture.failInputs=false;
+    await wait(150);assert.equal(await evaluate('boatMonitor.driver.keys.size'),0,'Network failure clears movement');
+    await enable();await evaluate('document.getElementById("disconnectButton").click()');await until('!boatMonitor.driver.active');
+    await evaluate('BoatAuth.logout()');await until('!BoatAuth.user');await evaluate('BoatAuth.login("observer","browser-guest-test-only")');await until('BoatAuth.user?.role==="guest"');
+    await go('driving');assert.equal(await evaluate('document.getElementById("driverEnable").hidden'),true,'Guest cannot enable control');
+    const count=server.driverFixture.calls.filter(call=>call.action==='acquire').length;await evaluate('boatMonitor.driver.acquire()');assert.equal(server.driverFixture.calls.filter(call=>call.action==='acquire').length,count,'Guest never sends acquisition');
+    assert.deepEqual(errors,[]);
+    console.log('PASS: real Chrome driving page; MCU ACK gating; WASD/arrows and alias release; zero input; heading initialization/adjustment; editing guard and global Space; explicit rearm; blur/page/boat/disconnect/failure release; admin/guest; shared map/model/compass/video; 320/1440/1920 layouts and media expansion.');
+  }finally{socket?.close();browser.kill();server.closeAllConnections?.();await new Promise(resolve=>server.close(resolve));if(path.dirname(run)===output&&path.basename(run).startsWith('driver-state-'))fs.rmSync(run,{recursive:true,force:true});}
+}
+main().catch(error=>{console.error(error);process.exitCode=1;});

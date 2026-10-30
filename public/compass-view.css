@@ -1,0 +1,79 @@
+/* 航海罗盘与当前深/浅主题共用卡片颜色，指针颜色固定表达不同含义。 */
+.boat-compass {
+  --compass-cyan:#55cce5; --compass-target:#edb65c; --compass-course:#67cbb1;
+  --compass-face:#151b21; --compass-rim:#2a333d; --compass-ink:#d3dee5;
+  --compass-quiet:#8d9ba8; --compass-grid:#33414c;
+  width:100%; min-width:0; color:var(--text); container-type:inline-size;
+}
+.compass-shell { min-width:0; }
+.compass-reference { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:9px; line-height:1.5; color:var(--faint); }
+.compass-reference-label { letter-spacing:.08em; font-size:8px; }
+.compass-source { color:var(--muted); text-align:right; }
+.compass-stage { position:relative; width:100%; max-width:280px; margin:5px auto 7px; }
+.compass-svg { display:block; width:100%; height:auto; overflow:visible; }
+.compass-svg path,.compass-svg line,.compass-svg circle { vector-effect:non-scaling-stroke; }
+.compass-bezel { fill:var(--compass-rim); stroke:var(--line-strong); stroke-width:1; }
+.compass-face { fill:var(--compass-face); stroke:#091219; stroke-width:1; }
+.compass-inner-ring,.compass-range-ring { fill:none; stroke:var(--compass-grid); stroke-width:.6; }
+.compass-range-ring { stroke-dasharray:2 5; opacity:.7; }
+.compass-body-axis { fill:none; stroke:var(--compass-grid); stroke-width:.6; opacity:.7; }
+.compass-rose,.compass-target-pointer,.compass-course-pointer { transform-origin:160px 160px; transition:transform 140ms linear; }
+.compass-tick { stroke:var(--compass-quiet); stroke-width:.7; }
+.compass-tick-major { stroke:var(--compass-ink); stroke-width:1; }
+.compass-degree { fill:var(--compass-quiet); font:9px ui-monospace,SFMono-Regular,Consolas,monospace; font-variant-numeric:tabular-nums; }
+.compass-cardinal { fill:var(--compass-ink); font:600 18px system-ui,sans-serif; letter-spacing:.04em; }
+.compass-intercardinal { fill:var(--compass-quiet); font-size:10px; font-weight:500; letter-spacing:.02em; }
+.compass-north { fill:var(--compass-cyan); }
+.compass-north-diamond { fill:var(--compass-cyan); }
+.compass-lubber { fill:var(--compass-cyan); stroke:var(--compass-face); stroke-width:.8; }
+.compass-heading-line { stroke:var(--compass-cyan); stroke-width:2; }
+.compass-hull-halo { fill:var(--compass-face); stroke:var(--compass-grid); stroke-width:.7; }
+.compass-hull { fill:var(--compass-cyan); stroke:#ade5ed; stroke-width:.7; }
+.compass-hull-detail { fill:none; stroke:#173b48; stroke-width:1.1; stroke-linejoin:round; }
+.compass-target-line { fill:none; stroke:var(--compass-target); stroke-width:1.6; stroke-linecap:round; }
+.compass-target-head { fill:var(--compass-target); stroke:var(--compass-face); stroke-width:.8; }
+.compass-course-line { fill:none; stroke:var(--compass-course); stroke-width:1.6; stroke-dasharray:4 5; stroke-linecap:round; }
+.compass-course-head { fill:var(--compass-course); stroke:var(--compass-face); stroke-width:.8; }
+.compass-heading { position:absolute; left:50%; top:62.5%; transform:translateX(-50%); display:flex; flex-direction:column; align-items:center; gap:2px; padding:3px 8px; min-width:94px; background:var(--compass-face); border-radius:5px; white-space:nowrap; pointer-events:none; }
+.compass-heading-value { color:var(--compass-cyan); font-size:clamp(19px,6vw,26px); line-height:1.15; letter-spacing:.015em; font-weight:600; font-variant-numeric:tabular-nums; }
+.compass-heading-name { color:var(--compass-quiet); font-size:8px; line-height:1.4; }
+.compass-readouts { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); margin:0; padding:10px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+.compass-readout { min-width:0; padding:0 8px; text-align:center; }
+.compass-readout+.compass-readout { border-left:1px solid var(--line); }
+.compass-readout dt { display:flex; justify-content:center; align-items:center; gap:5px; color:var(--muted); font-size:9px; line-height:1.5; white-space:nowrap; }
+.compass-readout dt::before { content:""; display:block; flex:none; width:5px; height:5px; border-radius:1px; background:var(--faint); }
+.compass-readout-target dt::before { background:var(--compass-target); transform:rotate(45deg); }
+.compass-readout-course dt::before { background:var(--compass-course); border-radius:50%; }
+.compass-readout-speed dt::before { display:none; }
+.compass-readout dd { margin:4px 0 0; color:var(--text); font-size:12px; font-weight:550; line-height:1.4; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.compass-footer { display:flex; justify-content:space-between; align-items:center; gap:6px 12px; flex-wrap:wrap; padding-top:9px; font-size:9px; line-height:1.6; color:var(--faint); }
+.compass-status { min-width:0; overflow-wrap:anywhere; }
+.compass-turn-value { color:var(--compass-target); font-variant-numeric:tabular-nums; }
+.boat-compass[data-valid="true"] .compass-status::before { content:""; display:inline-block; width:5px; height:5px; margin-right:5px; border-radius:50%; background:var(--success); vertical-align:1px; }
+.boat-compass[data-valid="false"] .compass-rose { opacity:.35; }
+.boat-compass[data-valid="false"] .compass-hull,.boat-compass[data-valid="false"] .compass-heading-line,.boat-compass[data-valid="false"] .compass-lubber { opacity:.3; }
+.boat-compass[data-valid="false"] .compass-heading-value { color:var(--compass-quiet); }
+[data-theme="light"] .boat-compass { --compass-cyan:#137b99; --compass-target:#ac650b; --compass-course:#14856d; --compass-face:#f6f9fc; --compass-rim:#e7edf4; --compass-ink:#33495f; --compass-quiet:#6b7d8f; --compass-grid:#d9e2eb; }
+[data-theme="light"] .compass-face { stroke:#d1dce7; }
+[data-theme="light"] .compass-hull { stroke:#376a7b; }
+[data-theme="light"] .compass-hull-detail { stroke:#e3f6fa; }
+@media (prefers-reduced-motion:reduce) {
+  .compass-rose,.compass-target-pointer,.compass-course-pointer { transition:none!important; }
+}
+@media (max-width:380px) {
+  .compass-readout { padding:0 4px; }
+  .compass-readout dd { font-size:11px; }
+}
+@container (max-width:210px) {
+  .compass-reference { font-size:8px; gap:4px; }
+  .compass-reference-label { font-size:7px; letter-spacing:.02em; }
+  .compass-heading { min-width:70px; padding:2px 5px; }
+  .compass-heading-value { font-size:19px; }
+  .compass-heading-name { font-size:6px; }
+  .compass-readouts { padding:7px 0; }
+  .compass-readout { padding:0 3px; }
+  .compass-readout dt { font-size:7px; gap:3px; }
+  .compass-readout dt::before { width:4px; height:4px; }
+  .compass-readout dd { font-size:10px; margin-top:3px; }
+  .compass-footer { font-size:8px; padding-top:6px; gap:2px 6px; }
+}

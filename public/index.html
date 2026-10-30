@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="ui.css">
   <link rel="stylesheet" href="dashboard.css">
   <link rel="stylesheet" href="artificial-horizon.css">
+  <link rel="stylesheet" href="compass-view.css">
   <link rel="stylesheet" href="map-view.css">
   <link rel="stylesheet" href="map-settings.css">
   <link rel="stylesheet" href="user-management.css">
@@ -23,6 +24,7 @@
   <link rel="stylesheet" href="video.css">
   <link rel="stylesheet" href="video-recording.css">
   <link rel="stylesheet" href="firmware.css">
+  <link rel="stylesheet" href="driver-control.css">
   <script defer src="vendor/leaflet/leaflet.js"></script>
   <script defer src="vendor/hls/hls.min.js"></script>
   <script defer src="vendor/mpegts/mpegts.js"></script>
@@ -34,6 +36,7 @@
   <script defer src="parameter-panel.js"></script>
   <script defer src="attitude-view.js"></script>
   <script defer src="artificial-horizon.js"></script>
+  <script defer src="compass-view.js"></script>
   <script defer src="ui.js"></script>
   <script defer src="workspace-navigation.js"></script>
   <script defer src="map-view.js"></script>
@@ -47,6 +50,7 @@
   <script defer src="video-view.js"></script>
   <script defer src="video-recording.js"></script>
   <script defer src="firmware-panel.js"></script>
+  <script defer src="driver-control.js"></script>
   <script defer src="app.js"></script>
   <script defer src="update-panel.js"></script>
 </head>
@@ -79,6 +83,7 @@
           <a href="#propulsion"><span data-icon="motor"></span><span>推进系统</span><span class="nav-index">06</span></a>
           <a href="#diagnostics"><span data-icon="activity"></span><span>通信诊断</span><span class="nav-index">07</span></a>
           <a href="#video"><span data-icon="video"></span><span>视频监控</span><span class="nav-index">08</span></a>
+          <a href="#driving"><span data-icon="monitor"></span><span>驾驶操控</span><span class="nav-index">09</span></a>
           <button id="settingsToggle" type="button" class="nav-parameter-button" aria-haspopup="dialog" aria-controls="settingsDialog" hidden><span data-icon="sliders"></span><span>调参设置</span></button>
           <button id="firmwareToggle" type="button" class="nav-parameter-button" aria-haspopup="dialog" aria-controls="firmwareDialog" hidden><span data-icon="download"></span><span>固件升级</span></button>
         </div>
@@ -94,11 +99,11 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.30.0</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.32.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
-    <nav class="mobile-nav" aria-label="快捷导航"><a href="#fleet">船队</a><a href="#overview">单船</a><a href="#navigation">轨迹</a><a href="#attitude">姿态</a><a href="#analysis">曲线</a><a href="#propulsion">电机</a><a href="#diagnostics">诊断</a><a href="#video">视频</a></nav>
+    <nav class="mobile-nav" aria-label="快捷导航"><a href="#fleet">船队</a><a href="#overview">单船</a><a href="#navigation">轨迹</a><a href="#attitude">姿态</a><a href="#analysis">曲线</a><a href="#propulsion">电机</a><a href="#diagnostics">诊断</a><a href="#video">视频</a><a href="#driving">驾驶</a></nav>
     <main class="page" id="mainContent">
       <nav class="workspace-breadcrumb" aria-label="当前位置"><a href="#fleet" data-view-link><span data-icon="dashboard"></span>工作台</a><span aria-hidden="true">/</span><span id="workspaceBreadcrumbBoat" hidden></span><span id="workspaceBreadcrumbView" aria-current="page">船队总览</span></nav>
       <section class="hero">
@@ -214,13 +219,14 @@
         </div>
         <div class="workspace-slot" data-workspace-slot="overview-sensors">
         <article id="sensorTelemetry" class="card telemetry-card sensor-card" aria-label="RTK 与 IMU 实时监测">
-          <div class="card-title"><div class="title-with-icon"><span data-icon="activity"></span><h2>实时监测</h2></div><span class="panel-caption">SENSORS</span></div>
+          <div class="card-title"><div class="title-with-icon"><span data-icon="activity"></span><h2>实时监测</h2></div><div class="sensor-panel-actions"><button id="compassToggle" type="button" class="small-button" aria-pressed="true" aria-controls="compassCard">隐藏罗盘</button><span class="panel-caption">SENSORS</span></div></div>
           <div class="sensor-sources" aria-label="同时显示 RTK 定位与 IMU 姿态"><span><i data-icon="satellite"></i>RTK 定位</span><span><i data-icon="compass"></i>IMU 姿态</span></div>
           <div class="sensor-status-strip">
             <div id="sensorFixState" data-valid="false"><span>定位状态</span><strong id="fixStatus">等待定位</strong></div>
             <div id="sensorImuState" data-valid="false"><span>IMU 状态</span><strong id="imuStatus">等待数据</strong></div>
           </div>
           <section id="imuPanel" class="sensor-instrument-panel" aria-label="姿态与运动数据">
+            <div id="sensorAttitudeLayout" class="sensor-attitude-layout">
             <div class="sensor-instruments">
               <dl class="imu-euler-values" aria-label="IMU 欧拉角，单位度">
                 <div><dt><span>ROLL</span>横滚</dt><dd><b id="roll">--</b><small>°</small></dd></div>
@@ -238,6 +244,11 @@
                   <dl class="sensor-axis-values"><div><dt><abbr title="东向为正，西向为负">E</abbr></dt><dd id="velocityX">--</dd></div><div><dt><abbr title="北向为正，南向为负">N</abbr></dt><dd id="velocityY">--</dd></div></dl>
                 </section>
               </div>
+            </div>
+            <section id="compassCard" class="sensor-compass-panel" aria-labelledby="compassTitle">
+              <div class="compass-panel-title"><span data-icon="compass"></span><h3 id="compassTitle">航向罗盘</h3><span class="compass-panel-reference">真北 · TRUE</span></div>
+              <div id="boatCompass"></div>
+            </section>
             </div>
           </section>
           <section id="rtkPanel" class="sensor-navigation" aria-label="RTK 定位与航行数据">
@@ -257,6 +268,21 @@
         <a href="#propulsion" data-view-link><span class="card-icon teal" data-icon="motor"></span><div><strong>推进系统</strong><p>查看双电机输出与运行状态</p></div><span data-icon="arrow"></span></a>
         <a href="#diagnostics" data-view-link><span class="card-icon neutral" data-icon="activity"></span><div><strong>通信诊断</strong><p>检查链路、数据帧和遥控状态</p></div><span data-icon="arrow"></span></a>
       </div>
+      </section>
+      <section id="view-driving" class="workspace-view driving-workspace" data-workspace-view="driving" aria-labelledby="viewTitle" hidden>
+        <article class="card driver-console" aria-label="驾驶操控控制台">
+          <div class="driver-console-heading"><div><span class="driver-eyebrow">PILOT STATION</span><h2>驾驶操控 <span id="driverBoatName">未选择无人船</span></h2></div><span id="driverState" class="driver-state" data-state="idle">监测待机</span><div class="driver-actions"><button id="driverEnable" type="button" class="primary" disabled>启用操控</button><button id="driverRelease" type="button" class="ghost" disabled>停船并退出操控</button><button id="driverEmergency" type="button" class="driver-emergency" disabled><span data-icon="power"></span>急停 · SPACE</button></div></div>
+          <p id="driverNotice" class="driver-notice" role="status" aria-live="polite">选择在线无人船，由管理员启用操控后使用键盘驾驶。</p>
+          <div class="driver-telemetry" aria-label="驾驶实时读数"><div><span>实际船速</span><strong id="driverActualSpeed">--</strong><small>m/s</small></div><div><span>目标船速</span><strong id="driverTargetSpeed">--</strong><small>m/s</small></div><div><span>船头航向</span><strong id="driverActualHeading">--</strong><small>°</small></div><div><span>实际控制模式</span><strong id="driverActualMode">--</strong></div><div><span>键盘推进 / 转向</span><strong id="driverInput">0% / 0%</strong></div></div>
+          <div class="driver-inputs"><label>控制模式<select id="driverMode"><option value="0">PWM 油门</option><option value="1" selected>船速闭环</option><option value="2">航向闭环</option></select></label><label class="driver-limit">运动幅度 <output id="driverLimitValue" for="driverLimit">20%</output><input id="driverLimit" type="range" min="5" max="100" step="5" value="20" aria-label="键盘运动幅度百分比"></label><label class="driver-heading">目标航向 · 真北<input id="driverHeading" type="number" min="0" max="359.99" step="1" value="0" inputmode="decimal"><span>°</span></label><button id="driverHoldHeading" type="button" class="small-button">取当前航向</button><div class="driver-keyboard" aria-label="键盘操作说明"><div class="driver-key-row"><kbd data-driver-key="KeyW">W / ↑</kbd></div><div class="driver-key-row"><kbd data-driver-key="KeyA">A / ←</kbd><kbd data-driver-key="KeyS">S / ↓</kbd><kbd data-driver-key="KeyD">D / →</kbd></div><span>按住运动，松开归零</span></div></div>
+          <p class="driver-help">W/S 前进后退，A/D 左右转向；启用航向模式时以当前船头为目标；A/D 调整目标航向，松键后仍可能自动转向，需急停或退出操控才能撤去全部输出。空格急停。切换模式先归零，失焦、离开驾驶页或断连会停船并退出操控，重新启用后才可继续。</p>
+          <p class="driver-keyboard-hint">建议使用带实体键盘的电脑；手机端可查看驾驶画面。</p>
+        </article>
+        <div class="driver-media-grid">
+          <section class="driver-region driver-region-video" data-driver-region="video" aria-label="驾驶图传画面"><div class="driver-region-toolbar"><span><i data-icon="video"></i>前方视野 <small>LIVE VIDEO</small></span><button id="driverVideoExpand" type="button" class="small-button" aria-pressed="false">放大图传</button></div><div class="workspace-slot" data-workspace-slot="driving-video"></div></section>
+          <section class="driver-region driver-region-map" data-driver-region="map" aria-label="驾驶导航地图"><div class="driver-region-toolbar"><span><i data-icon="map"></i>船位与航迹 <small>NAVIGATION</small></span><button id="driverMapExpand" type="button" class="small-button" aria-pressed="false">放大地图</button></div><div class="workspace-slot" data-workspace-slot="driving-map"></div></section>
+        </div>
+        <div class="driver-instrument-grid"><div class="workspace-slot" data-workspace-slot="driving-model"></div><div class="workspace-slot" data-workspace-slot="driving-sensors"></div></div>
       </section>
       <section id="view-navigation" class="workspace-view navigation-workspace" data-workspace-view="navigation" aria-labelledby="viewTitle" hidden>
         <div class="workspace-slot" data-workspace-slot="navigation-map"></div>
@@ -302,7 +328,8 @@
         </article>
       </section>
       <section id="view-video" class="workspace-view video-workspace" data-workspace-view="video" aria-labelledby="viewTitle" hidden>
-        <article class="card video-card">
+        <div class="workspace-slot" data-workspace-slot="video-playback">
+        <article id="videoCard" class="card video-card">
           <div class="video-heading"><div><h2 id="videoTitle">船载实时画面</h2><p>独立视频通道 · 与当前无人船同步切换</p></div><span id="videoDeviceName" class="video-device">未选择无人船</span></div>
           <div class="video-stage">
             <video id="boatVideo" controls muted playsinline preload="none" aria-label="当前无人船摄像头画面"></video>
@@ -311,6 +338,7 @@
           <div class="video-toolbar"><span id="videoStatus" class="video-status" role="status">等待视频地址</span><div class="video-buttons"><button id="videoPlay" type="button" class="primary" disabled>播放</button><button id="videoStop" type="button" class="ghost" disabled>停止</button><button id="videoRetry" type="button" class="ghost" disabled>重新连接</button><button id="videoFullscreen" type="button" class="ghost" disabled>全屏</button></div></div>
           <dl class="video-details"><div><dt>播放格式</dt><dd id="videoFormat">--</dd></div><div><dt>视频来源</dt><dd id="videoSource">--</dd></div><div><dt>地址更新时间</dt><dd id="videoUpdated">--</dd></div></dl>
         </article>
+        </div>
         <article class="card recording-card" aria-labelledby="recordingTitle">
           <div class="recording-heading"><div><h2 id="recordingTitle">服务器录像</h2><p>按船只独立保存 · 开始录像后，关闭网页或切换船只仍会继续</p></div><span id="recordingDevice" class="video-device">未选择无人船</span></div>
           <div class="recording-toolbar"><p id="recordingStatus" class="recording-status" role="status" aria-live="polite">请选择一艘无人船查看服务器录像。</p><div class="recording-buttons"><button id="recordingStart" type="button" class="primary" hidden disabled>开始录像</button><button id="recordingStop" type="button" class="ghost" hidden disabled>停止录像</button><button id="recordingRefresh" type="button" class="ghost" disabled>刷新录像</button></div></div>

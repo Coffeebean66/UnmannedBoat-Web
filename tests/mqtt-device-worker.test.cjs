@@ -134,14 +134,14 @@ test('HTTP worker accepts bounded fixed routes and emits only safe errors',async
   assert.equal((await put({revision:data.revision,username:'new-name',password:'a'.repeat(3000)})).status,413);
 });
 
-test('new boat gets an independent account and exactly eight own-topic permissions while existing credentials persist',async t=>{
+test('new boat gets an independent account and eleven own-topic permissions while existing credentials persist',async t=>{
   const f=await fixture(t),before=await f.manager.list();assert.equal(before.canCreate,true);
   const password='new-boat-test-Secret!23',created=await f.manager.create({deviceId:'boat-02',username:'vessel-two',password,revision:before.revision});
   assert.deepEqual(created.devices,[{deviceId:'boat-01',username:'boat-01'},{deviceId:'boat-02',username:'vessel-two'}]);
   assert.equal(created.requiresReconnect,true);assert.notEqual(created.revision,before.revision);
   const passwd=await fsp.readFile(f.file('passwd'),'utf8');assert.ok(passwd.startsWith(f.initial.passwd));assert.match(passwd,/vessel-two:\$7\$/);assert.ok(!passwd.includes(password));
   const nextAcl=await fsp.readFile(f.file('acl'),'utf8');assert.ok(nextAcl.startsWith(f.initial.acl));
-  assert.equal(nextAcl.slice(f.initial.acl.length).trim(),'user vessel-two\ntopic write boats/boat-02/telemetry\ntopic write boats/boat-02/status\ntopic read boats/boat-02/parameter-command\ntopic write boats/boat-02/parameter-response\ntopic write boats/boat-02/parameter-capability\ntopic read boats/boat-02/firmware-command\ntopic write boats/boat-02/firmware-response\ntopic write boats/boat-02/firmware-capability');
+  assert.equal(nextAcl.slice(f.initial.acl.length).trim(),'user vessel-two\ntopic write boats/boat-02/telemetry\ntopic write boats/boat-02/status\ntopic read boats/boat-02/parameter-command\ntopic write boats/boat-02/parameter-response\ntopic write boats/boat-02/parameter-capability\ntopic read boats/boat-02/firmware-command\ntopic write boats/boat-02/firmware-response\ntopic write boats/boat-02/firmware-capability\ntopic read boats/boat-02/control-command\ntopic write boats/boat-02/control-state\ntopic write boats/boat-02/control-capability');
   assert.equal(await fsp.readFile(f.file('runtime.env'),'utf8'),f.initial['runtime.env']);
   assert.doesNotMatch(JSON.stringify(created),/password|\$7\$/);assert.ok(!(await fsp.readFile(f.file('access.txt'),'utf8')).includes(password));assert.equal(f.services.length,1);
   assert.deepEqual((await createMqttDeviceManager(f.managerOptions).list()).devices,created.devices);

@@ -83,6 +83,9 @@ topic write boats/boat-01/parameter-capability
 topic read boats/boat-01/firmware-command
 topic write boats/boat-01/firmware-response
 topic write boats/boat-01/firmware-capability
+topic read boats/boat-01/control-command
+topic write boats/boat-01/control-state
+topic write boats/boat-01/control-capability
 
 user boat-web-bridge
 topic read boats/+/telemetry
@@ -94,6 +97,9 @@ topic read boats/+/parameter-capability
 topic write boats/+/firmware-command
 topic read boats/+/firmware-response
 topic read boats/+/firmware-capability
+topic write boats/+/control-command
+topic read boats/+/control-state
+topic read boats/+/control-capability
 EOF
   cat > "$stage/mosquitto.conf" <<'EOF'
 # Owned by unmanned-boat-cloud-v1

@@ -1,7 +1,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname,'../public/workspace-navigation.js'),'utf8');
-const names = ['overview','navigation','attitude','analysis','propulsion','diagnostics','video'];
+const names = ['overview','navigation','attitude','analysis','propulsion','diagnostics','video','driving'];
 
 function setup(hash = '', includeFleet = false) {
   const activeNames = includeFleet ? ['fleet',...names] : names;
@@ -17,10 +17,10 @@ function setup(hash = '', includeFleet = false) {
     nodes.set(id,value);return value;
   }
   const panels = activeNames.map(name => {const panel=node('view-'+name);panel.dataset.workspaceView=name;panel.hidden=name!==(includeFleet?'fleet':'overview');return panel;});
-  for (const name of ['overview-map','overview-attitude','overview-sensors','navigation-map','attitude-model','attitude-sensors']) {
+  for (const name of ['overview-map','overview-attitude','overview-sensors','navigation-map','attitude-model','attitude-sensors','video-playback','driving-map','driving-model','driving-sensors','driving-video']) {
     const slot=node(name);slots.set(name,slot);panels.find(panel=>panel.dataset.workspaceView===name.split('-')[0]).append(slot);
   }
-  for (const [id,slot] of [['navigation','overview-map'],['attitude','overview-attitude'],['sensorTelemetry','overview-sensors']]) slots.get(slot).append(node(id));
+  for (const [id,slot] of [['navigation','overview-map'],['attitude','overview-attitude'],['sensorTelemetry','overview-sensors'],['videoCard','video-playback']]) slots.get(slot).append(node(id));
   for (const id of ['viewTitle','viewEnglish','viewSubtitle','singleBoatNav','singleBoatNavName','workspaceBreadcrumbView','workspaceBreadcrumbBoat']) node(id);
   const links = [...activeNames,...activeNames].map((name,index)=>Object.assign(node('link-'+index),{hash:'#'+name}));
   const document = {
@@ -79,6 +79,18 @@ test('前进后退与手动片段同步可见页面；重复事件不重复发�
   assert.equal(s.click('attitude',{ctrlKey:true}),false);assert.equal(s.window.BoatWorkspace.current,'propulsion');
   assert.equal(s.click('attitude',{button:1}),false);assert.equal(s.window.BoatWorkspace.current,'propulsion');
   s.hash('#invalid');assert.equal(s.window.location.hash,'#overview');assert.equal(s.window.BoatWorkspace.current,'overview');
+});
+
+test('驾驶页共享视频地图姿态与仪表，返回原页恢复原实例',()=>{
+  const s=setup(),objects=['navigation','attitude','sensorTelemetry','videoCard'].map(id=>s.nodes.get(id));
+  for(const [index,node] of objects.entries())node.savedState=index;
+  s.click('driving');assert.equal(s.window.BoatWorkspace.current,'driving');
+  for(const [index,slot]of ['driving-map','driving-model','driving-sensors','driving-video'].entries())assert.equal(objects[index].parentElement,s.slots.get(slot));
+  s.click('video');assert.equal(objects[3].parentElement,s.slots.get('video-playback'));
+  s.click('overview');
+  for(const [index,slot]of ['overview-map','overview-attitude','overview-sensors'].entries())assert.equal(objects[index].parentElement,s.slots.get(slot));
+  objects.forEach((node,index)=>assert.equal(node.savedState,index));
+  assert.equal(s.document.title,'船况概览 · 无人船监测平台');
 });
 
 test('多船页面默认和无效地址进入船队总览，单船面板在返回船队时保留同一实例',()=>{
