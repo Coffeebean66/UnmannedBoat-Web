@@ -19,7 +19,7 @@ function fixture(t,options={}){
   t.after(async()=>{manager.close();await bridge.stop();});
   const publish=(value,id='boat-01',packet={},kind='control-state')=>bridge.acceptMessage('boats/'+id+'/'+kind,Buffer.from(JSON.stringify(value)),packet);
   const live=(id='boat-01')=>bridge.acceptMessage('boats/'+id+'/telemetry',telemetry());
-  const ack=(command=client.sent.at(-1),values={},id=command.topic.split('/')[1])=>publish(status({token:command.payload.subarray(4,12).toString('hex'),uptimeMs:command.payload.readUInt32LE(12),leaseId:command.payload.subarray(16,24).toString('hex'),sequence:command.payload.readUInt32LE(24),mode:command.payload[29],state:command.payload[28]<=2?1:2,reason:command.payload[28]===3?2:command.payload[28]===4?3:0,...values}),id);
+  const ack=(command=client.sent.at(-1),values={},id=command.topic.split('/')[1])=>publish(status({token:command.payload.subarray(4,12).toString('hex'),uptimeMs:command.payload.readUInt32LE(12),leaseId:command.payload.subarray(16,24).toString('hex'),sequence:command.payload.readUInt32LE(24),mode:command.payload[29],state:command.payload[28]<=2?1:2,reason:command.payload[28]===3?2:command.payload[28]===4?3:0,...(command.payload[36]?{testMode:command.payload[28]<=2}:{}),...values}),id);
   live();publish(status(),undefined,{},'control-capability');
   return {bridge,manager,client,publish,live,ack,now:()=>time,setTime:value=>{time=value;},async acquire(owner='session-a',clientId=CLIENT,id='boat-01'){const pending=manager.acquire(id,owner,clientId,INPUT);ack();return pending;}};
 }
@@ -42,6 +42,34 @@ test('BDC1 uses a stable forty-byte signed little-endian protocol vector and str
   assert.deepEqual(P.status(Buffer.from(JSON.stringify(status()))),status());
   for(const value of [{...status(),version:2},{...status(),timeoutMs:501},{...status(),leaseId:'unsafe'},{...status(),token:P.ZERO},{...status(),token:[TOKEN]},{...status(),state:3},{...status(),sequence:-1},{...status(),extra:true}])assert.equal(P.status(Buffer.from(JSON.stringify(value))),null);
   for(const value of [{...INPUT,throttle:1001},{...INPUT,mode:'1'},{...INPUT,targetHeading:36000},{...INPUT,turn:NaN}])assert.throws(()=>P.controls(value),{status:400});
+});
+
+test('test mode adds an explicit flag, requires PWM, and advertises capability without breaking old statuses',()=>{
+  const packet=P.command({token:TOKEN,uptimeMs:1000,leaseId:CLIENT,sequence:7,action:'input',mode:0,throttle:200,turn:-100,targetHeading:0,testMode:true});
+  assert.equal(packet.length,40);assert.equal(packet[36],1);assert.deepEqual([...packet.subarray(37)],[0,0,0]);
+  const current=status({mode:0,testMode:false});assert.deepEqual(P.status(Buffer.from(JSON.stringify(current))),current);
+  assert.deepEqual(P.status(Buffer.from(JSON.stringify(status()))),status());
+  for(const value of [status({testMode:'false'}),status({testMode:null}),status({testMode:true}),status({state:1,mode:1,testMode:true})])assert.equal(P.status(Buffer.from(JSON.stringify(value))),null);
+  for(const input of [{...INPUT,testMode:true},{...INPUT,testMode:'true'},{...INPUT,testMode:1}])assert.throws(()=>P.controls(input),{status:400});
+  assert.ok(P.status(Buffer.from(JSON.stringify(status({state:1,mode:0,testMode:true})))));
+  const largest=status({uptimeMs:0xffffffff,sequence:0xffffffff,state:1,mode:0,testMode:true});assert.ok(Buffer.byteLength(JSON.stringify(largest))<=256);
+});
+
+test('test leases require firmware support and matching ACK; input cannot toggle the test flag mid-lease',async t=>{
+  const f=fixture(t),input={mode:0,throttle:0,turn:0,targetHeading:0,testMode:true};
+  assert.throws(()=>f.manager.acquire('boat-01','session-a',CLIENT,input),{status:409});assert.equal(f.client.sent.length,0);
+  f.publish(status({uptimeMs:1100,testMode:false}));assert.equal(f.manager.snapshot('boat-01').testSupported,true);
+  const pending=f.manager.acquire('boat-01','session-a',CLIENT,input);assert.equal(f.client.sent.at(-1).payload[36],1);f.ack();const lease=await pending;
+  assert.equal(lease.testMode,true);assert.equal(lease.active,true);
+  assert.throws(()=>f.manager.command('boat-01','session-a',CLIENT,lease.leaseId,1,'input',{...input,testMode:false}),{status:409});
+  f.manager.command('boat-01','session-a',CLIENT,lease.leaseId,2,'input',{...input,throttle:600});f.ack();assert.equal(f.client.sent.at(-1).payload.readInt16LE(30),600);
+  f.manager.command('boat-01','session-a',CLIENT,lease.leaseId,3,'release',input);f.ack();assert.equal(f.manager.snapshot('boat-01').testMode,false);assert.equal(f.manager.jobs.size,0);
+});
+
+test('a firmware ACK without the requested test flag cancels takeover instead of enabling ordinary control',async t=>{
+  const f=fixture(t);f.publish(status({uptimeMs:1100,testMode:false}));
+  const pending=f.manager.acquire('boat-01','session-a',CLIENT,{mode:0,throttle:0,turn:0,targetHeading:0,testMode:true});
+  f.ack(undefined,{testMode:false});await assert.rejects(pending,{status:409});assert.equal(f.manager.snapshot('boat-01').ready,false);assert.equal(f.manager.jobs.get('boat-01').status,'stopping');
 });
 
 test('acquire remains pending until the exact current boat token and lease receive a nonretained hardware acknowledgement',async t=>{
@@ -153,6 +181,20 @@ test('control HTTP rejects guests, cross origins, extra fields, old browser sequ
   assert.equal((await f.post(other,{...input,sequence:3})).status,409);
 });
 
+test('HTTP test takeover validates role, boolean flag, firmware support and the returned test acknowledgement',async t=>{
+  const f=await apiFixture(t),guest=await f.login('guest'),admin=await f.login(),input={mode:0,testMode:true};
+  assert.equal((await f.post(guest,input)).status,403);
+  assert.equal((await f.post(admin,{mode:0,testMode:'true'})).status,400);
+  assert.equal((await f.post(admin,{mode:1,testMode:true})).status,400);
+  assert.equal((await f.post(admin,input)).status,409);assert.equal(f.client.sent.length,0);
+  f.publish(status({uptimeMs:1100,testMode:false}));
+  const pending=f.post(admin,input);await until(()=>f.manager.jobs.has('boat-01'));f.ack();const acquired=await pending;
+  assert.equal(acquired.status,200);assert.equal(acquired.json.testMode,true);assert.equal(acquired.json.testSupported,true);
+  const command={...input,action:'input',leaseId:acquired.json.leaseId,sequence:1,throttle:300};
+  assert.equal((await f.post(admin,command)).status,202);assert.equal(f.client.sent.at(-1).payload[36],1);
+  assert.equal((await f.post(admin,{...command,sequence:2,testMode:false})).status,409);
+});
+
 test('account logout stops active controls and late credentials cannot publish another motion input',async t=>{
   const f=await apiFixture(t),admin=await f.login(),pending=f.post(admin);await until(()=>f.manager.jobs.has('boat-01'));f.ack();const result=await pending;
   assert.equal((await f.call('/api/auth/session',{method:'DELETE',cookie:admin})).status,200);
@@ -184,4 +226,14 @@ test('missing optional driving ACL leaves existing monitoring connected and cann
   const bridge=new CloudBridge({env:ENV,connect:()=>client,tickMs:60000});bridge.start();client.emit('connect');t.after(()=>bridge.stop());
   assert.equal(bridge.brokerConnected,true);assert.equal(bridge.controlSubscribed,false);assert.equal(bridge.acceptMessage('boats/boat-01/telemetry',telemetry()),true);
   assert.equal(bridge.get('boat-01').online,true);assert.throws(()=>bridge.claimControl('boat-01'),{status:503});
+  const manager=new ControlService({bridge,pollMs:60000});t.after(()=>manager.close());
+  const view=manager.snapshot('boat-01');assert.equal(view.ready,false);assert.equal(view.supported,false);assert.match(view.message,/驾驶主题订阅未就绪/);
+});
+
+test('missing or expired driving state is reported separately from telemetry and MQTT availability',t=>{
+  const f=fixture(t);f.manager.caps.clear();
+  let view=f.manager.snapshot('boat-01');assert.equal(view.ready,false);assert.equal(view.supported,false);assert.match(view.message,/尚未收到有效的船端驾驶状态/);
+  assert.throws(()=>f.manager.acquire('boat-01','session-a',CLIENT,INPUT),{status:503});assert.equal(f.client.sent.length,0);
+  f.setTime(f.now()+1001);view=f.manager.snapshot('boat-01');assert.match(view.message,/实时遥测未就绪或已超时/);
+  f.client.emit('close');view=f.manager.snapshot('boat-01');assert.match(view.message,/云端 MQTT 通道未就绪/);assert.equal(view.ready,false);
 });

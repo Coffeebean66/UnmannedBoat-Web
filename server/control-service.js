@@ -24,8 +24,9 @@ class ControlService {
     const active=!!(cap&&this.live(id)&&cap.state===1),available=!this.closed&&this.bridge?.enabled&&this.bridge?.brokerConnected&&this.bridge?.controlSubscribed&&this.live(id);
     const ready=!!(available&&cap&&cap.state!==1&&!job&&!this.bridge.firmwareLocks?.has(id)&&!this.bridge.pendingParameters?.has(id));
     const state=cap?.state??null,status=job?.status||(active?'active':state===2?'hold':available&&cap?'idle':'unavailable');
-    let message=!available?'船端或云端数据未就绪':!cap?'等待船端驾驶协议；请更新固件并检查 MQTT 主题权限':job?.status==='acquiring'?'等待单片机确认接管':job?.status==='stopping'?'正在停船并释放操控':active?(owned?'网页已接管，遥控器无效':'该船已由其他驾驶会话接管'):REASONS[cap?.reason??0];
+    let message=this.closed||!this.bridge?.enabled||!this.bridge?.brokerConnected?'云端 MQTT 通道未就绪':!this.live(id)?'船端实时遥测未就绪或已超时':!this.bridge.controlSubscribed?'驾驶主题订阅未就绪，请检查 MQTT 驾驶主题权限及管理组件':!cap?'尚未收到有效的船端驾驶状态，请检查固件及 MQTT 驾驶主题权限':job?.status==='acquiring'?'等待单片机确认接管':job?.status==='stopping'?'正在停船并释放操控':active?(owned?'网页已接管，遥控器无效':'该船已由其他驾驶会话接管'):REASONS[cap?.reason??0];
     return {deviceId:id,supported,ready,active,owned,state,status,reason:cap?.reason??null,message,mode:cap?.mode??0,
+      testSupported:!!cap&&Object.hasOwn(cap,'testMode'),testMode:cap?.testMode===true,
       sequence:cap?.sequence??0,clientSequence:owned?job.lastBrowserSequence:0,...(owned?{leaseId:job.leaseId}:{}),timeoutMs:500};
   }
   accept({deviceId,payload}){
@@ -46,6 +47,9 @@ class ControlService {
     this.caps.set(deviceId,{...value,receivedAt:this.now()-sourceAge});
     if(!job)return;
     if(value.token!==job.token){this.drop(job,fault(409,'船端连接已变化，网页操控已取消'));return;}
+    if(value.leaseId===job.leaseId&&value.state===1&&!!value.testMode!==!!job.input.testMode){
+      this.stopJob(job,'stop',fault(409,'船端确认的测试场景不匹配，已取消操控'));return;
+    }
     if(value.leaseId===job.leaseId&&value.state===1&&value.sequence>=1&&job.status==='acquiring'){
       job.status='active';job.resolve?.(this.snapshot(deviceId,job.owner,job.clientId));job.resolve=job.reject=null;return;
     }
@@ -61,6 +65,7 @@ class ControlService {
     this.assertClient(id,owner,clientId);P.controls(input);
     if(input.throttle!==0||input.turn!==0)throw fault(400,'接管时运动输入必须归零');
     this.assertReady(id);const cap=this.cap(id);
+    if(input.testMode&&!Object.hasOwn(cap,'testMode'))throw fault(409,'当前船端未声明测试场景能力，请先更新单片机固件');
     if(this.jobs.has(id)||cap.state===1)throw fault(409,'这艘船已有驾驶会话，请先停止并释放操控');
     this.bridge.claimControl(id);
     const job={id,owner,clientId,leaseId:crypto.randomBytes(8).toString('hex'),token:cap.token,sequence:0,lastBrowserSequence:0,lastInputAt:this.now(),startedAt:this.now(),status:'acquiring',input:{...input},resolve:null,reject:null};
@@ -79,6 +84,7 @@ class ControlService {
     job.lastBrowserSequence=sequence;
     if(action==='input'){
       if(job.status!=='active')throw fault(409,'驾驶接管尚未确认或已停止');
+      if(!!input.testMode!==!!job.input.testMode)throw fault(409,'切换测试场景前请先停止并释放操控');
       this.assertReady(id);
       const cap=this.cap(id);if(cap.token!==job.token||cap.state!==1||cap.leaseId!==job.leaseId){this.stopJob(job,'stop');throw fault(409,'船端已停止网页操控，请重新启用');}
       if(input.mode!==job.input.mode&&(input.throttle||input.turn))throw fault(400,'切换控制模式时请先松开运动按键');
@@ -117,7 +123,7 @@ class ControlService {
     for(const job of [...this.jobs.values()]){
       if(job.status==='stopping'){if(now-job.stopAt>=this.stopTimeoutMs)this.drop(job);continue;}
       if(!this.bridge.brokerConnected||!this.live(job.id)||!this.cap(job.id))this.stopJob(job,'stop',fault(503,'驾驶数据已断开，已取消操控'));
-      else if(job.status==='acquiring'&&now-job.startedAt>=this.ackTimeoutMs)this.stopJob(job,'stop',fault(504,'单片机未确认接管，请检查固件和主题权限'));
+      else if(job.status==='acquiring'&&now-job.startedAt>=this.ackTimeoutMs)this.stopJob(job,'stop',fault(504,job.input.testMode?'单片机未确认测试接管，请检查测试场景固件和驾驶指令通道':'单片机未确认接管，请确认双电调反馈有效且停稳满1秒；联调可使用测试场景'));
       else if(job.status==='active'&&now-job.lastInputAt>=this.inputTimeoutMs)this.stopJob(job,'release',fault(504,'驾驶指令超时，已取消操控'));
     }
   }

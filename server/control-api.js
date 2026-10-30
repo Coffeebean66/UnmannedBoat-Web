@@ -43,10 +43,10 @@ function createControlApi({bridge,accounts,service,serviceOptions={}}={}){
         if(req.method!=='POST')throw fault(405,'网页操控只支持GET或POST');
         if(url.search)throw fault(400,'驾驶指令不接受查询参数');
         const input=await readJson(req);authorize(req,res,owner);
-        const fields=['deviceId','clientId','action','leaseId','sequence','mode','throttle','turn','targetHeading'];
+        const fields=['deviceId','clientId','action','leaseId','sequence','mode','throttle','turn','targetHeading','testMode'];
         if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!fields.includes(key)))throw fault(400,'驾驶请求字段不正确');
-        const {deviceId,clientId,action,leaseId,sequence,mode,throttle,turn,targetHeading}=input;
-        const controls={mode,throttle,turn,targetHeading};
+        const {deviceId,clientId,action,leaseId,sequence,mode,throttle,turn,targetHeading,testMode=false}=input;
+        const controls={mode,throttle,turn,targetHeading,testMode};
         if(action==='acquire'){
           if(leaseId!==undefined||sequence!==undefined)throw fault(400,'新接管不能复用旧租约或序号');
           const onClose=()=>{if(!res.writableEnded)manager.cancelAcquire(deviceId,owner.key,clientId);};res.once('close',onClose);

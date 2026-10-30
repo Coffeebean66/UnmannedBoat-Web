@@ -17,8 +17,14 @@ html[data-workspace-view="driving"] .cloud-source-label,html[data-workspace-view
 .driver-state[data-state="active"] { color:var(--driver-live); border-color:color-mix(in srgb,var(--driver-live) 35%,transparent); background:color-mix(in srgb,var(--driver-live) 9%,transparent); }
 .driver-state[data-state="active"]::before { background:var(--driver-live); box-shadow:0 0 8px #45c9a155; }
 .driver-state[data-state="pending"] { color:var(--warn); }
+.driver-state[data-state="test"] { color:var(--warn); border-color:var(--warn); }
+.driver-state[data-state="test"]::before { background:var(--warn); }
 .driver-actions { display:flex; flex-wrap:wrap; gap:7px; margin-left:auto; }
 .driver-actions button { min-height:33px; padding:7px 11px; font-size:11px; }
+button.driver-test-mode { border:1px solid var(--line-strong); background:var(--soft); color:var(--muted); }
+button.driver-test-mode[aria-pressed="true"] { border-color:var(--warn); background:color-mix(in srgb,var(--warn) 12%,var(--panel)); color:var(--warn); }
+.driver-test-notice { margin:7px 0; padding:6px 9px; border-left:2px solid var(--warn); color:var(--warn); background:var(--panel); font-size:10px; line-height:1.6; overflow-wrap:anywhere; }
+.driver-test-notice span { margin-left:8px; font-variant-numeric:tabular-nums; }
 button.driver-emergency { border:1px solid #e26067; background:#e2606715; color:#ee8790; font-weight:600; }
 /* 放大或滚动地图时也始终保留鼠标急停入口。 */
 .driver-actions button.driver-emergency { position:fixed; z-index:800; right:22px; bottom:18px; min-width:134px; background:var(--panel); box-shadow:0 4px 18px #0005; }
