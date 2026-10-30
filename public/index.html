@@ -283,6 +283,10 @@
           <section class="driver-region driver-region-map" data-driver-region="map" aria-label="驾驶导航地图"><div class="driver-region-toolbar"><span><i data-icon="map"></i>船位与航迹 <small>NAVIGATION</small></span><button id="driverMapExpand" type="button" class="small-button" aria-pressed="false">放大地图</button></div><div class="workspace-slot" data-workspace-slot="driving-map"></div></section>
         </div>
         <div class="driver-instrument-grid"><div class="workspace-slot" data-workspace-slot="driving-model"></div><div class="workspace-slot" data-workspace-slot="driving-sensors"></div></div>
+        <div id="driverFocusTools" class="driver-focus-tools" hidden>
+          <label for="driverOverlayOpacity">数据透明度 <output id="driverOverlayOpacityValue" for="driverOverlayOpacity">88%</output></label>
+          <input id="driverOverlayOpacity" type="range" min="0" max="100" step="5" value="88" aria-label="驾驶数据浮层透明度">
+        </div>
       </section>
       <section id="view-navigation" class="workspace-view navigation-workspace" data-workspace-view="navigation" aria-labelledby="viewTitle" hidden>
         <div class="workspace-slot" data-workspace-slot="navigation-map"></div>

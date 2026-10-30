@@ -85,6 +85,14 @@ async function main(){
         assert.equal(await evaluate('document.getElementById("view-driving").dataset.focus'),type);
         assert.equal(await evaluate('document.documentElement.scrollWidth>innerWidth'),false,'Expanded '+type+' fits '+width);
         assert.ok(await evaluate('document.querySelector(".driver-region-'+type+' .'+(type==='map'?'map-stage':'video-stage')+'").getBoundingClientRect().height>380'));
+        const focusLayout=await evaluate('(()=>{const view=document.getElementById("view-driving").getBoundingClientRect(),stage=document.querySelector(".driver-region-'+type+' .'+(type==='map'?'map-stage':'video-stage')+'").getBoundingClientRect();return {viewWidth:view.width,viewHeight:view.height,stageWidth:stage.width,stageHeight:stage.height,mediaZ:getComputedStyle(document.querySelector(".driver-media-grid")).zIndex,consoleZ:getComputedStyle(document.querySelector(".driver-console")).zIndex,instrumentZ:getComputedStyle(document.querySelector(".driver-instrument-grid")).zIndex};})()');
+        assert.ok(focusLayout.stageWidth>=focusLayout.viewWidth-4&&focusLayout.stageHeight>=focusLayout.viewHeight-4,'Expanded '+type+' fills the driving workspace at '+width+': '+JSON.stringify(focusLayout));
+        assert.ok(Number(focusLayout.consoleZ)>Number(focusLayout.mediaZ)&&Number(focusLayout.instrumentZ)>Number(focusLayout.mediaZ),'Driving controls and data layer above expanded media');
+        await evaluate('(()=>{const opacity=document.getElementById("driverOverlayOpacity");opacity.value="45";opacity.dispatchEvent(new Event("input",{bubbles:true}))})()');
+        assert.equal(await evaluate('getComputedStyle(document.querySelector(".driver-instrument-grid")).opacity'),'0.45','Overlay opacity updates live');
+        assert.equal(await evaluate('document.getElementById("driverOverlayOpacityValue").textContent'),'45%');
+        assert.equal(await evaluate('getComputedStyle(document.getElementById("driverEmergency")).opacity'),'1','Emergency stop stays fully opaque');
+        await evaluate('(()=>{const opacity=document.getElementById("driverOverlayOpacity");opacity.value="88";opacity.dispatchEvent(new Event("input",{bubbles:true}))})()');
         if(width===1440){await evaluate('document.querySelector(".driver-region-'+type+'").scrollIntoView({block:"start",behavior:"instant"})');await shot('driver-expanded-'+type);}
         await evaluate('document.getElementById('+JSON.stringify(id)+').click()');assert.equal(await evaluate('document.getElementById("view-driving").hasAttribute("data-focus")'),false);
       }

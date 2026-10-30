@@ -7,7 +7,7 @@
   class BoatDriverControl {
     constructor({document=window.document,fetch=window.fetch.bind(window),auth=window.BoatAuth,toast=()=>{}}={}) {
       this.document=document;this.fetch=fetch;this.auth=auth;this.toast=toast;
-      this.nodes=Object.fromEntries(['view-driving','driverBoatName','driverState','driverEnable','driverRelease','driverEmergency','driverNotice','driverActualSpeed','driverTargetSpeed','driverActualHeading','driverActualMode','driverInput','driverMode','driverLimit','driverLimitValue','driverHeading','driverHoldHeading','driverVideoExpand','driverMapExpand'].map(id=>[id,document.getElementById(id)]));
+      this.nodes=Object.fromEntries(['view-driving','driverBoatName','driverState','driverEnable','driverRelease','driverEmergency','driverNotice','driverActualSpeed','driverTargetSpeed','driverActualHeading','driverActualMode','driverInput','driverMode','driverLimit','driverLimitValue','driverHeading','driverHoldHeading','driverVideoExpand','driverMapExpand','driverOverlayOpacity','driverOverlayOpacityValue','driverFocusTools'].map(id=>[id,document.getElementById(id)]));
       const random=new Uint8Array(8);window.crypto.getRandomValues(random);
       this.clientId=Array.from(random,value=>value.toString(16).padStart(2,'0')).join('');
       this.context={deviceId:'',connected:false,authenticated:false,canManage:false,parameterBusy:false};
@@ -26,6 +26,11 @@
         this.lastMode=mode;this.keys.clear();this.renderKeys();this.headingMode();this.sendInput();this.render();
       });
       this.listen(this.nodes.driverLimit,'input',()=>{this.text('driverLimitValue',this.nodes.driverLimit.value+'%');this.sendInput();});
+      let savedOpacity;
+      try{const storedOpacity=window.localStorage?.getItem('boat-driver-overlay-opacity');if(storedOpacity!==null)savedOpacity=Number(storedOpacity);}catch(_){}
+      if(Number.isFinite(savedOpacity))this.nodes.driverOverlayOpacity.value=String(Math.max(0,Math.min(100,Math.round(savedOpacity/5)*5)));
+      this.setOverlayOpacity(this.nodes.driverOverlayOpacity.value);
+      this.listen(this.nodes.driverOverlayOpacity,'input',()=>this.setOverlayOpacity(this.nodes.driverOverlayOpacity.value));
       this.listen(this.nodes.driverHeading,'change',()=>{this.headingValue(true);this.sendInput();});
       this.listen(this.nodes.driverHoldHeading,'click',()=>{
         if(!Number.isFinite(this.actualHeading))return this.toast('等待有效的真北船头航向');
@@ -44,6 +49,7 @@
         if(event.detail?.view!=='driving'){
           this.stop('已离开驾驶界面，已停船并退出操控');
           delete this.nodes['view-driving'].dataset.focus;
+          this.nodes.driverFocusTools.hidden=true;
           for(const [name,id]of [['video','driverVideoExpand'],['map','driverMapExpand']]){this.nodes[id].setAttribute('aria-pressed','false');this.text(id,name==='video'?'放大图传':'放大地图');}
         }
         this.render();if(event.detail?.view==='driving'){this.lastPoll=0;this.poll();}
@@ -211,7 +217,15 @@
         const active=panel.dataset.focus===type;this.nodes[id].setAttribute('aria-pressed',String(active));
         this.text(id,active?'还原布局':type==='video'?'放大图传':'放大地图');
       }
+      this.nodes.driverFocusTools.hidden=!panel.hasAttribute('data-focus');
       window.dispatchEvent(new CustomEvent('boat-driver-layout-change'));
+    }
+    setOverlayOpacity(value) {
+      const opacity=Math.max(0,Math.min(100,Number(value)||0));
+      this.nodes.driverOverlayOpacity.value=String(opacity);
+      this.nodes['view-driving'].style.setProperty('--driver-overlay-opacity',(opacity/100).toFixed(2));
+      this.text('driverOverlayOpacityValue',opacity+'%');
+      try{window.localStorage?.setItem('boat-driver-overlay-opacity',String(opacity));}catch(_){}
     }
     render() {
       if(this.destroyed)return;
