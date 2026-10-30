@@ -22,16 +22,25 @@ html { scroll-behavior:auto; }
 .workspace-note svg { width:16px; height:16px; }
 .navigation-workspace .map-stage { flex:none; min-height:420px; height:clamp(420px,calc(100dvh - 370px),900px); }
 .navigation-workspace #map { min-height:0; }
-/* 罗盘随地图面板换页，不依赖底图联网，也不遮住地图的缩放按钮。 */
-.compass-map-panel { position:absolute; z-index:560; top:52px; right:12px; width:228px; padding:10px; border:1px solid var(--line-strong); border-radius:10px; background:var(--panel); box-shadow:0 8px 28px #0003; }
-.compass-map-panel[hidden] { display:none; }
+/* 航向与姿态集中展示；根据监测卡片的实际宽度决定并排或上下排列。 */
+.sensor-panel-actions { display:flex; align-items:center; gap:7px; }
+.sensor-panel-actions .small-button { min-height:26px; padding:3px 6px; font-size:9px; white-space:nowrap; }
+.sensor-attitude-layout { display:grid; grid-template-columns:minmax(0,1fr); gap:12px; align-items:center; margin:10px 0; }
+/* 并排时字号和内部留白按仪表行宽度计算，避免极值角度挤出数字栏。 */
+.sensor-attitude-layout>.sensor-instruments { margin:0; container-type:inline-size; }
+.sensor-compass-panel { width:100%; max-width:310px; justify-self:center; padding:10px 12px; border:1px solid var(--line); border-radius:7px; background:var(--soft); }
+.sensor-compass-panel[hidden] { display:none; }
+.sensor-compass-panel .compass-stage { max-width:220px; }
 .compass-panel-title { display:flex; align-items:center; gap:6px; margin-bottom:3px; color:var(--text); }
 .compass-panel-title>[data-icon] { color:var(--blue); }
 .compass-panel-title svg { width:13px; height:13px; }
 .compass-panel-title h3 { margin:0; font-size:11px; font-weight:600; }
 .compass-panel-reference { margin-left:auto; font-size:8px; color:var(--muted); letter-spacing:.03em; }
-.has-compass .map-north { left:12px; right:auto; }
-.navigation-workspace .compass-map-panel { width:250px; }
+@container (min-width:600px) {
+  .sensor-attitude-layout { grid-template-columns:minmax(320px,1.35fr) minmax(220px,1fr); align-items:center; }
+  .sensor-attitude-layout.compass-hidden { grid-template-columns:minmax(0,1fr); }
+  .sensor-compass-panel { max-width:none; }
+}
 .navigation-workspace [href="#navigation"],.attitude-workspace [href="#attitude"] { display:none; }
 .attitude-workspace { display:grid; grid-template-columns:minmax(0,1.55fr) minmax(340px,1fr); gap:16px; align-items:start; }
 .attitude-workspace #boatCanvas { height:clamp(340px,calc(100dvh - 390px),680px); }
@@ -82,12 +91,12 @@ html { scroll-behavior:auto; }
   .workspace-connection { font-size:10px; }
   .overview-shortcuts { grid-template-columns:minmax(0,1fr); }.overview-shortcuts>a { padding:14px; }.overview-shortcuts .card-icon { display:inline-flex; }.overview-shortcuts p { font-size:10px; }
   .navigation-workspace .map-stage { min-height:360px; height:58dvh; }
-  .compass-map-panel,.navigation-workspace .compass-map-panel { width:164px; padding:7px; top:50px; right:8px; border-radius:8px; }
+  .sensor-compass-panel { padding:8px 10px; }
   .compass-panel-title { gap:4px; }
   .compass-panel-title h3 { font-size:10px; }
   .compass-panel-reference { font-size:7px; }
   .compass-panel-title svg { width:11px; height:11px; }
-  /* 窄屏按钮分两列，加入显隐入口后长标签也不会被挤出按钮。 */
+  /* 窄屏地图按钮分两列，长标签不会被挤出按钮。 */
   .map-controls>.button-row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; width:100%; }
   .map-controls>.button-row>.small-button { min-width:0; min-height:32px; justify-content:center; padding:6px 7px; font-size:10px; white-space:nowrap; }
   .map-card .card-title>.button-row { gap:6px; flex-wrap:wrap; justify-content:flex-end; }.map-card .panel-caption { display:none; }

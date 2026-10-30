@@ -103,26 +103,50 @@ async function main() {
     await feed({ actualHeading: 359, targetHeading: 1, x: 1, y: 1 });
     await until("document.getElementById('boatCompass').dataset.valid==='true'");
     await evaluate("window.__compassHost=document.getElementById('boatCompass');window.__compassSvg=__compassHost.querySelector('svg')");
-    for (const view of ['navigation', 'overview']) {
+    for (const view of ['attitude', 'overview']) {
       await navigate(view);
-      assert.equal(await evaluate("document.getElementById('boatCompass')===window.__compassHost && document.getElementById('boatCompass').querySelector('svg')===window.__compassSvg"), true, 'Navigation keeps the same instrument and SVG');
+      assert.equal(await evaluate("document.getElementById('boatCompass')===window.__compassHost && document.getElementById('boatCompass').querySelector('svg')===window.__compassSvg"), true, 'Workspace changes keep the same instrument and SVG');
       assert.equal(await evaluate("document.querySelectorAll('#boatCompass').length"), 1);
       assert.ok(await evaluate("document.getElementById('compassCard').getBoundingClientRect().width>0"), 'Compass visible on ' + view);
+      assert.equal(await evaluate("document.getElementById('sensorTelemetry').contains(document.getElementById('compassCard'))"), true, 'Compass belongs to the sensor panel on ' + view);
     }
     await navigate('navigation');
-    for (const [width, theme] of [[1440, 'dark'], [1440, 'light'], [390, 'dark'], [320, 'light']]) {
+    assert.equal(await evaluate("document.getElementById('compassCard').getBoundingClientRect().width"), 0, 'Map page does not display the sensor compass');
+    assert.equal(await evaluate("document.getElementById('navigation').contains(document.getElementById('compassCard'))"), false, 'Compass is no longer a map overlay');
+    await navigate('attitude');
+    let besideObserved = false, belowObserved = false;
+    for (const [width, theme] of [[2048, 'dark'], [1920, 'dark'], [1920, 'light'], [1440, 'dark'], [1440, 'light'], [390, 'dark'], [390, 'light'], [320, 'dark'], [320, 'light']]) {
       await send('Emulation.setDeviceMetricsOverride', { width, height: width < 500 ? 844 : 1000, deviceScaleFactor: 1, mobile: width < 500 });
       await evaluate('if(document.documentElement.dataset.theme!==' + JSON.stringify(theme) + ')document.getElementById("themeToggle").click()');
       await wait(150);
       assert.equal(await evaluate('document.documentElement.scrollWidth>innerWidth'), false, 'Page overflow at ' + width);
       assert.equal(await evaluate("(()=>{const c=document.getElementById('compassCard');return c.scrollWidth>c.clientWidth;})()"), false, 'Compass card overflow at ' + width);
-      const layout = await evaluate("(()=>{const h=document.getElementById('boatCompass'),r=h.querySelector('svg').getBoundingClientRect(),p=h.getBoundingClientRect(),c=document.getElementById('compassCard').getBoundingClientRect(),m=document.querySelector('#navigation .map-stage').getBoundingClientRect(),buttons=document.querySelector('#navigation .map-controls').getBoundingClientRect();return {svg:r.width,host:p.width,left:r.left,right:r.right,card:{left:c.left,right:c.right,top:c.top,bottom:c.bottom},map:{left:m.left,right:m.right,top:m.top,bottom:m.bottom},controlsTop:buttons.top};})()");
+      const layout = await evaluate("(()=>{const h=document.getElementById('boatCompass'),r=h.querySelector('svg').getBoundingClientRect(),p=h.getBoundingClientRect(),c=document.getElementById('compassCard').getBoundingClientRect(),s=document.getElementById('sensorTelemetry'),m=s.getBoundingClientRect(),i=s.querySelector('.sensor-instruments').getBoundingClientRect(),row=s.querySelector('.sensor-attitude-layout').getBoundingClientRect(),style=getComputedStyle(s);return {svg:r.width,host:p.width,contentWidth:s.clientWidth-parseFloat(style.paddingLeft)-parseFloat(style.paddingRight),card:{left:c.left,right:c.right,top:c.top,bottom:c.bottom},sensor:{left:m.left,right:m.right,top:m.top,bottom:m.bottom},instruments:{left:i.left,right:i.right,top:i.top,bottom:i.bottom},rowWidth:row.width};})()");
       assert.ok(layout.svg > 140 && layout.svg <= layout.host + 1, 'Dial remains readable and within its container at ' + width);
-      assert.ok(layout.card.left >= layout.map.left - 2 && layout.card.right <= layout.map.right + 2 && layout.card.top >= layout.map.top - 2 && layout.card.bottom <= layout.map.bottom + 2, 'Compass overlay stays inside map stage at ' + width);
-      assert.ok(layout.card.bottom <= layout.controlsTop + 2, 'Compass overlay does not cover map controls at ' + width);
-      assert.equal(await evaluate("[...document.querySelectorAll('#navigation .map-controls button')].every(button=>button.scrollWidth<=button.clientWidth+1)"), true, 'Map control labels fit their buttons at ' + width);
-      await shot('compass-navigation-' + width + '-' + theme);
+      assert.ok(layout.card.left >= layout.sensor.left - 2 && layout.card.right <= layout.sensor.right + 2 && layout.card.top >= layout.sensor.top - 2 && layout.card.bottom <= layout.sensor.bottom + 2, 'Compass stays inside the sensor card at ' + width);
+      if (layout.contentWidth >= 600) {
+        besideObserved = true;
+        assert.ok(layout.card.left >= layout.instruments.right - 2 && layout.card.top < layout.instruments.bottom && layout.card.bottom > layout.instruments.top, 'Wide sensor panel shows compass beside the horizon instruments at ' + width);
+      } else {
+        belowObserved = true;
+        assert.ok(layout.card.top >= layout.instruments.bottom - 2, 'Narrow sensor panel shows compass below the horizon instruments at ' + width);
+      }
+      assert.equal(await evaluate("(()=>{const b=document.getElementById('compassToggle');return b.scrollWidth<=b.clientWidth+1;})()"), true, 'Compass toggle label fits at ' + width);
+      await evaluate('document.getElementById("compassToggle").click()');
+      assert.equal(await evaluate('document.getElementById("compassCard").hidden'), true);
+      const hiddenLayout = await evaluate("(()=>{const panel=document.querySelector('#sensorTelemetry .sensor-attitude-layout'),row=panel.querySelector('.sensor-instruments');return {available:panel.getBoundingClientRect().width,instruments:row.getBoundingClientRect().width};})()");
+      assert.ok(hiddenLayout.instruments >= hiddenLayout.available - 2, 'Hiding compass leaves no empty grid column at ' + width);
+      await evaluate('document.getElementById("compassToggle").click()');
+      await shot('compass-attitude-' + width + '-' + theme);
+      // 并排后欧拉角列更窄，检查带负号的极值及角度单位仍完整显示。
+      await feed({ actualHeading: 359, targetHeading: 1, x: 1, y: 1, roll: -179.99, pitch: -89.99, yaw: -179.99 });
+      await until("document.getElementById('roll').textContent==='-179.99'");
+      assert.equal(await evaluate("[...document.querySelectorAll('.imu-euler-values dd')].every(row=>row.scrollWidth<=row.clientWidth&&row.lastElementChild.getBoundingClientRect().right<=row.getBoundingClientRect().right+1)"), true, 'Extreme Euler numbers and units fit beside the compass at ' + width);
+      if (width === 2048) await shot('compass-attitude-2048-extreme');
+      await feed({ actualHeading: 359, targetHeading: 1, x: 1, y: 1 });
     }
+    assert.equal(besideObserved, true, 'At least one desktop width exercises side-by-side instruments');
+    assert.equal(belowObserved, true, 'Mobile widths exercise stacked instruments');
 
     // 显隐只控制仪表面板，不中断遥测；偏好随刷新恢复。
     await evaluate('document.getElementById("compassToggle").click()');
@@ -151,13 +175,13 @@ async function main() {
     await evaluate('stopTelemetry()');
     await until("document.getElementById('boatCompass').dataset.valid==='false'");
     current = await data(); assert.equal(current.headingText, '--'); assert.equal(current.targetVisible, false); assert.equal(current.courseVisible, false);
-    await shot('compass-navigation-stale');
+    await shot('compass-attitude-stale');
     await evaluate('startTelemetry()'); await until("document.getElementById('boatCompass').dataset.valid==='true'");
     await evaluate('document.getElementById("disconnectButton").click()');
     await until("document.getElementById('boatCompass').dataset.valid==='false'");
     assert.equal((await data()).headingText, '--');
     assert.deepEqual(errors, []);
-    console.log('Compass Chrome passed: local login/binary telemetry/SSE; fused/RTK sources; cardinal/course axes; low-speed/invalid/stale/disconnect; 359→1 shortest arc; reset; shared navigation; 320/390/1440px dark/light.');
+    console.log('Compass Chrome passed: local login/binary telemetry/SSE; fused/RTK sources; cardinal/course axes; low-speed/invalid/stale/disconnect; 359→1 shortest arc; reset; shared sensor card; side-by-side/stacked/hidden layouts and extreme Euler values; 320/390/1440/1920px dark/light and 2048px side-by-side.');
   } finally {
     socket?.close(); browser.kill(); server.closeAllConnections?.(); await new Promise(resolve => server.close(resolve));
     if (path.dirname(run) === output && path.basename(run).startsWith('compass-state-')) fs.rmSync(run, { recursive: true, force: true });

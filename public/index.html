@@ -194,12 +194,8 @@
             <div class="map-north" aria-label="地图上方为正北"><b>N</b><span>↑</span></div>
             <div id="mapEmpty" class="map-empty"><div class="radar-rings" aria-hidden="true"></div><span data-icon="location"></span><strong>正在加载地图</strong><span>正在准备底图，无需等待船位定位</span></div>
             <p id="mapFixStatus" class="map-fix-status" role="status" hidden>等待有效定位 · 可拖动、缩放地图</p>
-            <section id="compassCard" class="compass-map-panel" aria-labelledby="compassTitle">
-              <div class="compass-panel-title"><span data-icon="compass"></span><h3 id="compassTitle">航向罗盘</h3><span class="compass-panel-reference">真北 · TRUE</span></div>
-              <div id="boatCompass"></div>
-            </section>
           </div>
-          <div class="map-controls"><div class="button-row"><button id="mapProviderToggle" type="button" class="small-button" aria-controls="map" disabled>切换地图</button><button id="trackStart" class="small-button primary">开始追踪</button><button id="trackClear" class="small-button subtle">清除痕迹</button><button id="mapVectorsToggle" class="small-button" aria-pressed="true" aria-controls="mapVectorReadouts">隐藏速度箭头</button><button id="compassToggle" type="button" class="small-button" aria-pressed="true" aria-controls="compassCard">隐藏罗盘</button></div><label class="switch-label"><input type="checkbox" id="mapFollow" checked><span class="switch-track"></span>跟随船位</label></div>
+          <div class="map-controls"><div class="button-row"><button id="mapProviderToggle" type="button" class="small-button" aria-controls="map" disabled>切换地图</button><button id="trackStart" class="small-button primary">开始追踪</button><button id="trackClear" class="small-button subtle">清除痕迹</button><button id="mapVectorsToggle" class="small-button" aria-pressed="true" aria-controls="mapVectorReadouts">隐藏速度箭头</button></div><label class="switch-label"><input type="checkbox" id="mapFollow" checked><span class="switch-track"></span>跟随船位</label></div>
           <div class="vector-info"><div id="mapVectorReadouts" class="map-vector-readouts"><span class="target"><i></i>目标 <b id="mapVectorTarget">--</b></span><span class="actual"><i></i>实际 <b id="mapVectorActual">--</b></span></div><p id="mapVectorStatus" class="map-vector-status">仅在速度 / 角度闭环显示</p></div>
           <div class="map-track-info"><p id="trackStatus" class="muted">等待云端轨迹</p><div class="track-legend" id="trackLegend"></div></div>
           <div class="map-footer"><span id="mapStatus">正在加载地图配置</span><span title="RTK 原始经纬度，WGS84 坐标">RTK 原始坐标 <span id="mapCoordinate">--</span></span></div>
@@ -220,13 +216,14 @@
         </div>
         <div class="workspace-slot" data-workspace-slot="overview-sensors">
         <article id="sensorTelemetry" class="card telemetry-card sensor-card" aria-label="RTK 与 IMU 实时监测">
-          <div class="card-title"><div class="title-with-icon"><span data-icon="activity"></span><h2>实时监测</h2></div><span class="panel-caption">SENSORS</span></div>
+          <div class="card-title"><div class="title-with-icon"><span data-icon="activity"></span><h2>实时监测</h2></div><div class="sensor-panel-actions"><button id="compassToggle" type="button" class="small-button" aria-pressed="true" aria-controls="compassCard">隐藏罗盘</button><span class="panel-caption">SENSORS</span></div></div>
           <div class="sensor-sources" aria-label="同时显示 RTK 定位与 IMU 姿态"><span><i data-icon="satellite"></i>RTK 定位</span><span><i data-icon="compass"></i>IMU 姿态</span></div>
           <div class="sensor-status-strip">
             <div id="sensorFixState" data-valid="false"><span>定位状态</span><strong id="fixStatus">等待定位</strong></div>
             <div id="sensorImuState" data-valid="false"><span>IMU 状态</span><strong id="imuStatus">等待数据</strong></div>
           </div>
           <section id="imuPanel" class="sensor-instrument-panel" aria-label="姿态与运动数据">
+            <div id="sensorAttitudeLayout" class="sensor-attitude-layout">
             <div class="sensor-instruments">
               <dl class="imu-euler-values" aria-label="IMU 欧拉角，单位度">
                 <div><dt><span>ROLL</span>横滚</dt><dd><b id="roll">--</b><small>°</small></dd></div>
@@ -244,6 +241,11 @@
                   <dl class="sensor-axis-values"><div><dt><abbr title="东向为正，西向为负">E</abbr></dt><dd id="velocityX">--</dd></div><div><dt><abbr title="北向为正，南向为负">N</abbr></dt><dd id="velocityY">--</dd></div></dl>
                 </section>
               </div>
+            </div>
+            <section id="compassCard" class="sensor-compass-panel" aria-labelledby="compassTitle">
+              <div class="compass-panel-title"><span data-icon="compass"></span><h3 id="compassTitle">航向罗盘</h3><span class="compass-panel-reference">真北 · TRUE</span></div>
+              <div id="boatCompass"></div>
+            </section>
             </div>
           </section>
           <section id="rtkPanel" class="sensor-navigation" aria-label="RTK 定位与航行数据">

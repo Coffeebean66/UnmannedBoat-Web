@@ -33,7 +33,7 @@
   function setCompassVisibility(visible,persist=false) {
     compassVisible=visible;
     $('compassCard').hidden=!visible;
-    $('compassCard').closest('.map-stage').classList.toggle('has-compass',visible);
+    $('sensorAttitudeLayout').classList.toggle('compass-hidden',!visible);
     $('compassToggle').setAttribute('aria-pressed',String(visible));
     set('compassToggle',visible?'隐藏罗盘':'显示罗盘');
     if(persist)try{localStorage.setItem('boat_compass_visible',visible?'1':'0');}catch(_){}
