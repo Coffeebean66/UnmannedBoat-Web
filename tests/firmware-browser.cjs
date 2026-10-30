@@ -6,18 +6,19 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function main() {
   const root = path.resolve(__dirname, '..'), output = path.join(root, '.test-output'); fs.mkdirSync(output, { recursive: true });
   const server = createFixtureServer(), original = server.listeners('request')[0], calls = [], deviceId = 'boat-mqtt-test';
-  let supported = false, currentJob = null, upload = null;
-  const snapshot = () => ({ deviceId, supported, online: true, capability: supported ? { ready: true, state: 'idle' } : null, job: currentJob });
+  let supported = false, normalReady = true, forceSupport = false, forceReady = false, currentJob = null, upload = null;
+  const snapshot = () => ({ deviceId, supported, online: true,
+    capability: supported ? { ready: normalReady, state: 'idle', ...(forceSupport ? { forceSupported: true, forceReady } : {}) } : null, job: currentJob });
   server.removeListener('request', original);
   server.on('request', async (req, res) => {
     if (!req.url.startsWith('/api/firmware/')) return original(req, res);
     calls.push({ method: req.method, url: req.url }); const chunks = []; for await (const chunk of req) chunks.push(chunk);
     const bytes = Buffer.concat(chunks), json = data => { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(data)); };
-    if (req.url.endsWith('/config')) return json({ enabled: true, maxSize: 655360, chunkSize: 256 });
+    if (req.url.endsWith('/config')) return json({ enabled: true, forceSupported: true, maxSize: 655360, chunkSize: 256 });
     if (req.method === 'POST' && req.url.endsWith('/cancel')) currentJob = { ...currentJob, state: 'cancelled', cancelable: false };
     else if (req.method === 'POST') {
-      upload = { bytes, name: decodeURIComponent(req.headers['x-firmware-name']), type: req.headers['content-type'], url: req.url };
-      currentJob = { id: 'test', deviceId, name: upload.name, size: bytes.length, sha256: 'a'.repeat(64), state: 'transferring', receivedBytes: 256, progress: 25, cancelable: true, error: null };
+      upload = { bytes, name: decodeURIComponent(req.headers['x-firmware-name']), forceHeader: req.headers['x-firmware-force'], type: req.headers['content-type'], url: req.url };
+      currentJob = { id: 'test', deviceId, name: upload.name, size: bytes.length, sha256: 'a'.repeat(64), state: 'transferring', receivedBytes: 256, progress: 25, cancelable: true, error: null, force: upload.forceHeader === '1' };
     }
     json(snapshot());
   });
@@ -42,7 +43,8 @@ async function main() {
     const evaluate = async expression => { const result = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true, userGesture: true }); if (result.exceptionDetails) throw Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text); return result.result.value; };
     const until = async expression => { for (let i = 0; i < 140; i++) { if (await evaluate(expression)) return; await wait(75); } throw Error('Condition timed out: ' + expression); };
     const shot = async name => { const image = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }); fs.writeFileSync(path.join(output, name + '.png'), Buffer.from(image.data, 'base64')); };
-    await send('Runtime.enable'); await send('Page.enable'); await send('Page.addScriptToEvaluateOnNewDocument', { source: fixtureScript + '\nwindow.confirm=()=>true;' });
+    const selectFirmware = () => evaluate('(()=>{const b=new Uint8Array(1024);new DataView(b.buffer).setUint32(0,0x20020000,true);new DataView(b.buffer).setUint32(4,0x08020101,true);const transfer=new DataTransfer();transfer.items.add(new File([b],"boat-ota.bin",{type:"application/octet-stream"}));const input=document.getElementById("firmwareFile");input.files=transfer.files;input.dispatchEvent(new Event("change"));})()');
+    await send('Runtime.enable'); await send('Page.enable'); await send('Page.addScriptToEvaluateOnNewDocument', { source: fixtureScript + '\nwindow.__firmwareConfirmations=[];window.confirm=message=>{window.__firmwareConfirmations.push(message);return true;};' });
     await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
     await send('Page.navigate', { url: 'http://127.0.0.1:' + server.address().port });
     await until('window.boatMonitor && BoatAuth.ready');
@@ -52,16 +54,21 @@ async function main() {
     await until('document.getElementById("firmwareDialog").open && document.getElementById("firmwareStatus").textContent.includes("首次")');
     assert.equal(await evaluate('document.getElementById("firmwareDevice").textContent'), deviceId);
     assert.equal(await evaluate('document.getElementById("firmwareStart").disabled'), true);
+    assert.equal(await evaluate('document.getElementById("firmwareForceStart").disabled'), true, 'No firmware capability can never enable forced OTA');
     supported = true;
     await evaluate('document.getElementById("firmwareRefresh").click()');
     await until('document.getElementById("firmwareCapability").textContent.includes("支持 OTA")');
-    await evaluate('(()=>{const b=new Uint8Array(1024);new DataView(b.buffer).setUint32(0,0x20020000,true);new DataView(b.buffer).setUint32(4,0x08020101,true);const transfer=new DataTransfer();transfer.items.add(new File([b],"boat-ota.bin",{type:"application/octet-stream"}));const input=document.getElementById("firmwareFile");input.files=transfer.files;input.dispatchEvent(new Event("change"));})()');
+    await selectFirmware();
     assert.equal(await evaluate('document.getElementById("firmwareStart").disabled'), false);
+    assert.equal(await evaluate('document.getElementById("firmwareForceStart").disabled'), true, 'Old capability without optional force fields keeps forced OTA disabled');
     await shot('firmware-desktop-ready');
     await evaluate('document.getElementById("firmwareStart").click()');
     await until('document.getElementById("firmwarePhase").textContent==="传输固件"');
     assert.equal(upload.type, 'application/octet-stream'); assert.equal(upload.bytes.length, 1024); assert.equal(upload.name, 'boat-ota.bin');
     assert.equal(upload.url, '/api/firmware/boats/' + deviceId);
+    assert.equal(upload.forceHeader, undefined, 'Ordinary upload never sends a force header');
+    assert.equal(currentJob.force, false);
+    assert.equal(await evaluate('["firmwareStart","firmwareForceStart"].every(id=>document.getElementById(id).disabled)'), true, 'Both upload actions are disabled during an ordinary task');
     await evaluate('document.getElementById("firmwareClose").click()');
     assert.equal(calls.some(call => call.url.endsWith('/cancel')), false);
     await evaluate('document.querySelector(".fleet-firmware-button").click()');
@@ -79,12 +86,42 @@ async function main() {
     currentJob = { ...currentJob, state: 'succeeded' };
     await evaluate('document.getElementById("firmwareRefresh").click()');
     await until('document.getElementById("firmwarePhase").textContent==="升级完成"');
+    currentJob = null; normalReady = false; forceSupport = true; forceReady = false;
+    await evaluate('document.getElementById("firmwareRefresh").click()');
+    await until('document.getElementById("firmwarePhase").textContent==="尚无升级任务"');
+    await selectFirmware();
+    assert.equal(await evaluate('["firmwareStart","firmwareForceStart"].every(id=>document.getElementById(id).disabled)'), true, 'Missing normal and force readiness cannot enable either upload');
+    forceReady = true;
+    await evaluate('document.getElementById("firmwareRefresh").click()');
+    await until('!document.getElementById("firmwareForceStart").disabled');
+    assert.equal(await evaluate('document.getElementById("firmwareStart").disabled'), true, 'Missing external peripheral feedback still blocks ordinary OTA');
+    assert.equal(await evaluate('document.getElementById("firmwareDevice").textContent'), deviceId, 'Forced maintenance keeps the selected vessel');
+    for (const width of [1440, 390, 320]) {
+      await send('Emulation.setDeviceMetricsOverride', { width, height: width < 500 ? 844 : 1000, deviceScaleFactor: 1, mobile: width < 500 });
+      await wait(100);
+      assert.equal(await evaluate('document.getElementById("firmwareDialog").scrollWidth>document.getElementById("firmwareDialog").clientWidth'), false, 'Forced OTA dialog overflow at ' + width);
+      const buttons = await evaluate('["firmwareStart","firmwareForceStart"].map(id=>{const n=document.getElementById(id),r=n.getBoundingClientRect(),dialog=document.getElementById("firmwareDialog").getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {id,inside:r.width>0&&r.left>=dialog.left&&r.right<=dialog.right&&r.top>=Math.max(0,dialog.top)&&r.bottom<=Math.min(innerHeight,dialog.bottom),uncovered:hit?.closest("button")===n};})');
+      assert.ok(buttons.every(button=>button.inside), 'Both OTA buttons fit the dialog at ' + width + ': ' + JSON.stringify(buttons));
+      assert.ok(buttons.every(button=>button.uncovered), 'Both OTA actions remain reachable above the dialog scroll area at ' + width);
+      await shot('firmware-force-' + width + '-ready');
+    }
+    const forceButton = await evaluate('(()=>{const r=document.getElementById("firmwareForceStart").getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2};})()');
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...forceButton, button: 'left', clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...forceButton, button: 'left', clickCount: 1 });
+    await until('document.getElementById("firmwarePhase").textContent==="传输固件"');
+    assert.equal(upload.forceHeader, '1', 'Explicit forced upload sends the fixed force header');
+    assert.equal(upload.url, '/api/firmware/boats/' + deviceId, 'Forced upload stays scoped to the chosen vessel');
+    assert.equal(upload.bytes.length, 1024); assert.equal(upload.name, 'boat-ota.bin');
+    assert.equal(currentJob.force, true);
+    assert.equal(await evaluate('window.__firmwareConfirmations.at(-1).includes("强制")&&window.__firmwareConfirmations.at(-1).includes('+JSON.stringify(deviceId)+')'), true, 'Forced OTA requires its own vessel-specific confirmation');
+    assert.equal(await evaluate('document.getElementById("firmwareStatus").textContent.includes("强制")'), true, 'Active forced job is explicitly identified');
+    assert.equal(await evaluate('["firmwareStart","firmwareForceStart"].every(id=>document.getElementById(id).disabled)'), true, 'Neither upload action can overlap a forced task');
     await evaluate('BoatAuth.logout()'); await until('!document.getElementById("firmwareDialog").open');
     await evaluate('BoatAuth.login("observer","browser-guest-test-only")');
     await until('document.querySelector(".fleet-card")');
     assert.equal(await evaluate('document.querySelector(".fleet-firmware-button").hidden'), true);
     assert.equal(await evaluate('document.getElementById("firmwareToggle").hidden'), true);
-    assert.deepEqual(errors, []); console.log('Firmware browser passed: per-boat upload, legacy gate, background task, install confirmation, guest access and 320–1440px.');
+    assert.deepEqual(errors, []); console.log('Firmware browser passed: per-boat ordinary/forced uploads, explicit force header and confirmation, old capability gate, missing peripheral readiness, mutually exclusive tasks, install confirmation, guest access and 320–1440px.');
   } finally { socket?.close(); browser.kill(); await new Promise(resolve => server.close(resolve)); }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

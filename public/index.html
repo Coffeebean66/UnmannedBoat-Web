@@ -99,7 +99,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.32.0</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.34.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -284,8 +284,8 @@
         </div>
         <div class="driver-instrument-grid"><div class="workspace-slot" data-workspace-slot="driving-model"></div><div class="workspace-slot" data-workspace-slot="driving-sensors"></div></div>
         <div id="driverFocusTools" class="driver-focus-tools" hidden>
-          <label for="driverOverlayOpacity">数据透明度 <output id="driverOverlayOpacityValue" for="driverOverlayOpacity">88%</output></label>
-          <input id="driverOverlayOpacity" type="range" min="0" max="100" step="5" value="88" aria-label="驾驶数据浮层透明度">
+          <label for="driverOverlayOpacity" title="0% 隐藏数据，100% 完全显示；操控与急停保持可见">数据可见度 <output id="driverOverlayOpacityValue" for="driverOverlayOpacity">90%</output></label>
+          <input id="driverOverlayOpacity" type="range" min="0" max="100" step="5" value="90" aria-label="驾驶数据浮层可见度，0为隐藏100为完全显示">
         </div>
       </section>
       <section id="view-navigation" class="workspace-view navigation-workspace" data-workspace-view="navigation" aria-labelledby="viewTitle" hidden>
@@ -467,10 +467,11 @@
       <p id="firmwareCapability" class="muted">等待设备上报升级能力</p>
       <p id="firmwareStatus" class="firmware-status" role="status" aria-live="polite">请从对应无人船卡片打开固件升级。</p>
       <label class="firmware-upload" for="firmwareFile"><strong>选择应用固件</strong><input id="firmwareFile" type="file" accept=".bin,application/octet-stream" disabled><small id="firmwareFileInfo">上传 OTA 构建的应用 .bin，不能选择 Bootloader、.hex 或原直烧固件。</small></label>
+      <div class="firmware-force-info"><strong>外设未通电时升级</strong><p id="firmwareForceHint">强制 OTA 仍需单片机通电联网，并上报有效升级能力。</p></div>
       <div class="firmware-job"><div class="firmware-phase"><strong id="firmwarePhase">尚无升级任务</strong><span id="firmwarePercent">--</span></div><progress id="firmwareProgress" max="100" value="0" aria-label="单片机确认接收进度" hidden></progress><p id="firmwareBytes">下载后会完整校验，再重启安装</p><dl><div><dt>固件文件</dt><dd id="firmwareJobName">尚无固件</dd></div><div><dt>SHA-256</dt><dd><code id="firmwareHash">尚未上传</code></dd></div></dl></div>
       <details class="firmware-help"><summary>首次启用与升级条件</summary><p>首次需用 ST-LINK/USB 安装专用 Bootloader 和 OTA 应用，并在服务器与固件配置相同的升级密钥；之后可从此处上传 .bin 无线更新。原直烧工程的固件地址不适用。</p><p>将 CH6 设为低档，两路电机停稳且反馈正常满 1 秒。升级期间保持供电与网络稳定，推进会锁定停机，原参数区保留。下载完整校验后才安装；不提供错误版本的自动回滚。</p><p>关闭窗口或退出网页后服务器继续任务。100% 表示下载完成，只有收到设备重启后匹配的固件摘要才显示“升级完成”。</p><a class="firmware-guide" href="https://github.com/Coffeebean66/UnmannedBoat-Web/blob/main/OTA_SETUP.md" target="_blank" rel="noopener noreferrer">查看无线升级接入教程 ↗</a></details>
     </div>
-    <div class="dialog-actions"><button id="firmwareRefresh" type="button">重新读取状态</button><div class="button-row"><button id="firmwareCancel" type="button" hidden>取消传输</button><button id="firmwareStart" type="button" class="primary" disabled>上传并升级</button></div></div>
+    <div class="dialog-actions"><button id="firmwareRefresh" type="button">重新读取状态</button><div class="button-row"><button id="firmwareCancel" type="button" hidden>取消传输</button><button id="firmwareForceStart" type="button" class="firmware-force-button" aria-describedby="firmwareForceHint" disabled>强制 OTA 升级</button><button id="firmwareStart" type="button" class="primary" disabled>上传并升级</button></div></div>
   </dialog>
   <dialog id="cloudLoginDialog" class="cloud-login-dialog" aria-labelledby="cloudLoginTitle">
     <form id="cloudLoginForm">

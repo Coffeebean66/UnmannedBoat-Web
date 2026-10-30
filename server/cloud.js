@@ -159,11 +159,17 @@ class CloudBridge extends EventEmitter {
     }
     if(parts[2]==='firmware-capability'||parts[2]==='firmware-response'){
       if(packet.retain)return false;
+      let directoryChanged=false;
       if(parts[2]==='firmware-capability'){
-        if(!firmware.capability(payload)||!this.obtain(parts[1]))return false;
+        if(!firmware.capability(payload))return false;
+        directoryChanged=!this.devices.has(parts[1]);
+        const device=this.obtain(parts[1]);if(!device)return false;
+        // 当前 MCU 的非 retained 能力撤销旧离线标记，但不伪造传感器遥测在线时间。
+        if(device.status==='offline'){device.status='unknown';directoryChanged=true;}
       }else if(!firmware.response(payload))return false;
       // OTA 能力与 ACK 不延长遥测在线时间，不进入参数事务或遥测历史。
-      this.emit(parts[2],{deviceId:parts[1],payload:Buffer.from(payload)});return true;
+      this.emit(parts[2],{deviceId:parts[1],payload:Buffer.from(payload)});
+      if(directoryChanged)this.emit('state',this.state(parts[1]));return true;
     }
     if(parts[2]==='video'){
       const descriptor=decodeVideoDescriptor(payload);if(!descriptor)return false;

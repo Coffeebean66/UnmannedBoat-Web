@@ -75,26 +75,59 @@ async function main(){
     await go('overview');assert.deepEqual(await evaluate("['navigation','attitude','sensorTelemetry'].map(id=>document.getElementById(id).parentElement.dataset.workspaceSlot)"),['overview-map','overview-attitude','overview-sensors']);
     await go('driving');assert.equal(await evaluate('boatMonitor.map===__driverInstances.map&&boatMonitor.viewer===__driverInstances.viewer&&boatMonitor.compass===__driverInstances.compass&&boatMonitor.videoView===__driverInstances.video&&document.getElementById("boatVideo")===__driverInstances.videoEl'),true,'All driving visualizations reuse existing objects');
     await until('boatMonitor.videoView.playing&&document.getElementById("boatVideo").videoWidth>0');
-    for(const width of [1920,1440,320]){
-      await send('Emulation.setDeviceMetricsOverride',{width,height:width<500?1100:900,deviceScaleFactor:1,mobile:width<500});await wait(180);
+    for(const [width,height]of [[1920,900],[1440,900],[375,667],[320,812]]){
+      await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<500});await wait(180);
       assert.equal(await evaluate('document.documentElement.scrollWidth>innerWidth'),false,'Driving has no horizontal overflow at '+width);
       await evaluate('window.scrollTo(0,0)');await shot('driver-'+width+'-dark');
       if(width>=1440)assert.equal(await evaluate("['#imuHorizon svg','#boatCompass svg','#boatCanvas','.driver-region-video .video-stage','.driver-region-map .map-stage'].every(selector=>{const r=document.querySelector(selector).getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight;})"),true,'All primary driving visuals are fully visible in the desktop viewport at '+width);
       for(const [type,id]of [['video','driverVideoExpand'],['map','driverMapExpand']]){
+        await enable();const focusLease=await evaluate('boatMonitor.driver.leaseId');
         await evaluate('document.getElementById('+JSON.stringify(id)+').click()');await wait(150);
         assert.equal(await evaluate('document.getElementById("view-driving").dataset.focus'),type);
+        assert.equal(await evaluate('boatMonitor.driver.active&&boatMonitor.driver.leaseId==='+JSON.stringify(focusLease)),true,'Expanding media preserves the active driving lease');
         assert.equal(await evaluate('document.documentElement.scrollWidth>innerWidth'),false,'Expanded '+type+' fits '+width);
-        assert.ok(await evaluate('document.querySelector(".driver-region-'+type+' .'+(type==='map'?'map-stage':'video-stage')+'").getBoundingClientRect().height>380'));
-        const focusLayout=await evaluate('(()=>{const view=document.getElementById("view-driving").getBoundingClientRect(),stage=document.querySelector(".driver-region-'+type+' .'+(type==='map'?'map-stage':'video-stage')+'").getBoundingClientRect();return {viewWidth:view.width,viewHeight:view.height,stageWidth:stage.width,stageHeight:stage.height,mediaZ:getComputedStyle(document.querySelector(".driver-media-grid")).zIndex,consoleZ:getComputedStyle(document.querySelector(".driver-console")).zIndex,instrumentZ:getComputedStyle(document.querySelector(".driver-instrument-grid")).zIndex};})()');
-        assert.ok(focusLayout.stageWidth>=focusLayout.viewWidth-4&&focusLayout.stageHeight>=focusLayout.viewHeight-4,'Expanded '+type+' fills the driving workspace at '+width+': '+JSON.stringify(focusLayout));
+        const focusLayout=await evaluate('(()=>{const box=node=>{const r=node.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};};return {view:box(document.getElementById("view-driving")),stage:box(document.querySelector(".driver-region-'+type+' .'+(type==='map'?'map-stage':'video-stage')+'")),viewport:{width:innerWidth,height:innerHeight},mediaZ:getComputedStyle(document.querySelector(".driver-media-grid")).zIndex,consoleZ:getComputedStyle(document.querySelector(".driver-console")).zIndex,instrumentZ:getComputedStyle(document.querySelector(".driver-instrument-grid")).zIndex};})()');
+        for(const [name,box]of Object.entries({workspace:focusLayout.view,media:focusLayout.stage}))assert.ok(Math.abs(box.x)<=2&&Math.abs(box.y)<=2&&Math.abs(box.width-focusLayout.viewport.width)<=4&&Math.abs(box.height-focusLayout.viewport.height)<=4,'Expanded '+type+' '+name+' fills the viewport at '+width+': '+JSON.stringify(focusLayout));
+        assert.equal(await evaluate('getComputedStyle(document.querySelector(".driver-region-'+(type==='map'?'video':'map')+'")).display'),'none','Only the selected media is visible in expanded mode');
         assert.ok(Number(focusLayout.consoleZ)>Number(focusLayout.mediaZ)&&Number(focusLayout.instrumentZ)>Number(focusLayout.mediaZ),'Driving controls and data layer above expanded media');
+        if(width<500){
+          const layers=await evaluate('(()=>{const console=document.querySelector(".driver-console").getBoundingClientRect(),instruments=document.querySelector(".driver-instrument-grid").getBoundingClientRect();return {consoleTop:console.top,consoleBottom:console.bottom,instrumentTop:instruments.top,instrumentBottom:instruments.bottom,gap:instruments.top-console.bottom,mode:document.getElementById("driverMode").value,viewport:{width:innerWidth,height:innerHeight}};})()');
+          assert.equal(layers.mode,'1','Short-screen overlap check uses speed mode');
+          assert.ok(layers.gap>=8,'Expanded '+type+' controls and instruments keep at least 8px separation at '+width+'x'+height+': '+JSON.stringify(layers));
+          assert.ok(layers.consoleTop>=0&&layers.instrumentBottom<=height,'Short-screen driving overlays stay inside the viewport: '+JSON.stringify(layers));
+          await shot('driver-expanded-'+type+'-'+width+'x'+height+'-active');
+        }
+        if(width>=1440){
+          const instruments=await evaluate('(()=>{function visible(selector){const node=document.querySelector(selector),r=node.getBoundingClientRect(),clipped=[];let complete=r.width>0&&r.height>0&&r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight;for(let parent=node.parentElement;parent;parent=parent.parentElement){const style=getComputedStyle(parent),p=parent.getBoundingClientRect(),x=/hidden|clip|auto|scroll/.test(style.overflowX)&&(r.left<p.left-2||r.right>p.right+2),y=/hidden|clip|auto|scroll/.test(style.overflowY)&&(r.top<p.top-2||r.bottom>p.bottom+2);if(x||y){complete=false;clipped.push({node:parent.id||parent.className,x,y,bounds:{left:p.left,top:p.top,right:p.right,bottom:p.bottom}});}if(style.position==="fixed")break;}return {selector,complete,bounds:{left:r.left,top:r.top,right:r.right,bottom:r.bottom},clipped};}return ["#imuHorizon svg","#boatCompass svg"].map(visible);})()');
+          assert.ok(instruments.every(value=>value.complete),'Expanded '+type+' keeps complete desktop compass and horizon visible: '+JSON.stringify(instruments));
+        }
         await evaluate('(()=>{const opacity=document.getElementById("driverOverlayOpacity");opacity.value="45";opacity.dispatchEvent(new Event("input",{bubbles:true}))})()');
         assert.equal(await evaluate('getComputedStyle(document.querySelector(".driver-instrument-grid")).opacity'),'0.45','Overlay opacity updates live');
         assert.equal(await evaluate('document.getElementById("driverOverlayOpacityValue").textContent'),'45%');
-        assert.equal(await evaluate('getComputedStyle(document.getElementById("driverEmergency")).opacity'),'1','Emergency stop stays fully opaque');
-        await evaluate('(()=>{const opacity=document.getElementById("driverOverlayOpacity");opacity.value="88";opacity.dispatchEvent(new Event("input",{bubbles:true}))})()');
-        if(width===1440){await evaluate('document.querySelector(".driver-region-'+type+'").scrollIntoView({block:"start",behavior:"instant"})');await shot('driver-expanded-'+type);}
-        await evaluate('document.getElementById('+JSON.stringify(id)+').click()');assert.equal(await evaluate('document.getElementById("view-driving").hasAttribute("data-focus")'),false);
+        assert.equal(await evaluate('localStorage.getItem("boat-driver-overlay-opacity")'),'45','Overlay preference is stored locally');
+        assert.equal(await evaluate('boatMonitor.driver.active&&boatMonitor.driver.leaseId==='+JSON.stringify(focusLease)),true,'Adjusting data visibility preserves the active driving lease');
+        await evaluate('(()=>{const opacity=document.getElementById("driverOverlayOpacity");opacity.value="0";opacity.dispatchEvent(new Event("input",{bubbles:true}))})()');
+        const transparentData=await evaluate('(()=>{const data=document.querySelector(".driver-instrument-grid"),r=data.getBoundingClientRect(),x=Math.max(0,Math.min(innerWidth-1,r.left+r.width/2)),y=Math.max(0,Math.min(innerHeight-1,r.top+r.height/2)),hit=document.elementFromPoint(x,y);return {opacity:getComputedStyle(data).opacity,pointerEvents:getComputedStyle(data).pointerEvents,intercepts:data.contains(hit)};})()');
+        assert.deepEqual(transparentData,{opacity:'0',pointerEvents:'none',intercepts:false},'Completely transparent data cannot intercept video/map mouse input');
+        assert.equal(await evaluate('boatMonitor.driver.active&&boatMonitor.driver.leaseId==='+JSON.stringify(focusLease)),true,'Hiding data never stops or reacquires the driving session');
+        const emergency=await evaluate('(()=>{const button=document.getElementById("driverEmergency"),r=button.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;let opacity=1;for(let node=button;node;node=node.parentElement)opacity*=Number(getComputedStyle(node).opacity);return {x,y,opacity,clickable:x>=0&&y>=0&&x<innerWidth&&y<innerHeight&&document.elementFromPoint(x,y)?.closest("#driverEmergency")===button};})()');
+        assert.equal(emergency.opacity,1,'Emergency stop stays fully opaque through all ancestor layers');
+        assert.equal(emergency.clickable,true,'Emergency stop remains above full-screen media and receives real mouse hits at '+width);
+        const stopStart=server.driverFixture.calls.length;
+        await send('Input.dispatchMouseEvent',{type:'mousePressed',x:emergency.x,y:emergency.y,button:'left',clickCount:1});
+        await send('Input.dispatchMouseEvent',{type:'mouseReleased',x:emergency.x,y:emergency.y,button:'left',clickCount:1});
+        await until('!boatMonitor.driver.active');
+        await untilCall(call=>call.action==='stop'&&server.driverFixture.calls.indexOf(call)>=stopStart);
+        await evaluate('(()=>{const opacity=document.getElementById("driverOverlayOpacity");opacity.value="85";opacity.dispatchEvent(new Event("input",{bubbles:true}))})()');
+        if(width===1440)await shot('driver-expanded-'+type);
+        if(width<500)await shot('driver-expanded-'+type+'-'+width);
+        if(type==='map'){await key('Escape');await key('Escape',false);}else await evaluate('document.getElementById('+JSON.stringify(id)+').click()');
+        assert.equal(await evaluate('document.getElementById("view-driving").hasAttribute("data-focus")'),false,'Both Escape and restore buttons exit expanded mode');
+        assert.equal(await evaluate('document.documentElement.hasAttribute("data-driver-focus")'),false,'Exiting expanded mode unlocks the document');
+        assert.equal(await evaluate('getComputedStyle(document.querySelector(".driver-instrument-grid")).opacity'),'1','Restoring layout restores fully opaque normal data');
+        assert.equal(await evaluate('["video","map"].every(type=>getComputedStyle(document.querySelector(".driver-region-"+type)).display!=="none")'),true,'Restoring layout shows both media panels again');
+        assert.equal(await evaluate('document.getElementById("driverFocusTools").hidden'),true,'Restoring layout hides the full-screen transparency controls');
+        assert.equal(await evaluate('getComputedStyle(document.getElementById("view-driving")).position!=="fixed"'),true,'Restoring layout exits the viewport overlay');
       }
     }
     await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
@@ -109,7 +142,7 @@ async function main(){
     await go('driving');assert.equal(await evaluate('document.getElementById("driverEnable").hidden'),true,'Guest cannot enable control');
     const count=server.driverFixture.calls.filter(call=>call.action==='acquire').length;await evaluate('boatMonitor.driver.acquire()');assert.equal(server.driverFixture.calls.filter(call=>call.action==='acquire').length,count,'Guest never sends acquisition');
     assert.deepEqual(errors,[]);
-    console.log('PASS: real Chrome driving page; MCU ACK gating; WASD/arrows and alias release; zero input; heading initialization/adjustment; editing guard and global Space; explicit rearm; blur/page/boat/disconnect/failure release; admin/guest; shared map/model/compass/video; 320/1440/1920 layouts and media expansion.');
+    console.log('PASS: real Chrome driving page; MCU ACK gating; WASD/arrows and alias release; zero input; heading initialization/adjustment; editing guard and global Space; explicit rearm; blur/page/boat/disconnect/failure release; admin/guest; shared map/model/compass/video; 320x812/375x667/1440x900/1920x900 layouts; viewport media, nonoverlapping mobile data, complete instruments, transparent data hit-through and real mouse emergency stop.');
   }finally{socket?.close();browser.kill();server.closeAllConnections?.();await new Promise(resolve=>server.close(resolve));if(path.dirname(run)===output&&path.basename(run).startsWith('driver-state-'))fs.rmSync(run,{recursive:true,force:true});}
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

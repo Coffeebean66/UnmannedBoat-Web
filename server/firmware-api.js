@@ -49,7 +49,7 @@ function createFirmwareApi({ env = process.env, accounts, bridge, service, uploa
         if (url.pathname === PREFIX + '/config') {
           if (!read) throw fault(405, '固件配置只支持GET');
           json(res, 200, { enabled: enabled(), reason: reason(), maxSize: protocol.MAX_SIZE, chunkSize: protocol.CHUNK_SIZE,
-            boardId: protocol.BOARD_ID, applicationAddress: protocol.APPLICATION_ADDRESS }); return true;
+            boardId: protocol.BOARD_ID, applicationAddress: protocol.APPLICATION_ADDRESS, forceSupported: true }); return true;
         }
         const match = /^\/api\/firmware\/boats\/([A-Za-z0-9_-]{1,64})(?:\/(cancel))?$/.exec(url.pathname);
         if (!match || !DEVICE.test(match[1])) throw fault(404, '固件接口不存在');
@@ -69,11 +69,14 @@ function createFirmwareApi({ env = process.env, accounts, bridge, service, uploa
         if (uploads.size >= maxUploads) throw fault(429, '同时上传的固件过多，请稍后再试');
         if (!/^application\/octet-stream(?:\s*;|$)/i.test(String(req.headers['content-type'] || ''))) throw fault(415, '请以二进制格式上传.bin固件');
         const name = firmwareName(req.headers['x-firmware-name']);
+        const forceHeader = req.headers['x-firmware-force'];
+        if (forceHeader !== undefined && forceHeader !== '1') throw fault(400, '强制升级须明确使用X-Firmware-Force: 1');
+        const force = forceHeader === '1';
         if (manager.isActive(id)) throw fault(409, '该船已有固件升级任务');
         uploads.add(id);
         try {
           const image = await readBytes(req, protocol.MAX_SIZE, uploadTimeoutMs);
-          try { authorize(owner, req, res); usable(); json(res, 202, manager.start(id, name, image)); }
+          try { authorize(owner, req, res); usable(); json(res, 202, manager.start(id, name, image, { force })); }
           finally { image.fill(0); }
         } finally { uploads.delete(id); }
       } catch (error) { req.resume(); if (!res.headersSent) json(res, error.status || 503, { error: error.status ? error.message : '固件升级服务不可用，请检查服务器和设备状态' }); else res.destroy(); }

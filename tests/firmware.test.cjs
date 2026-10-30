@@ -45,6 +45,58 @@ test('OTA parser rejects malformed fields and fixed headers; command bytes follo
   for(const mutate of [b=>b[4]=9,b=>b[5]=10,b=>b[6]=1,b=>b[44]=1,b=>b[0]=0]){const bad=Buffer.from(response);mutate(bad);assert.equal(P.response(bad),null);}
   assert.equal(P.response(response.subarray(1)),null);
 });
+
+test('forced BEGIN keeps manifest88 and authenticates the entire current BOT1 header plus manifest',()=>{
+  const key=Buffer.alloc(32,0x33),bin=image(256),manifest=P.manifest(bin,key),transfer='31'.repeat(16),session='0102030405060708';
+  const packet=P.forceBegin(session,transfer,manifest,key);
+  assert.equal(manifest.length,88);assert.equal(packet.length,160);assert.equal(packet[4],P.OP.BEGIN_FORCE);
+  assert.equal(packet.readUInt32LE(32),0);assert.equal(packet.readUInt32LE(36),120);assert.deepEqual(packet.subarray(40,128),manifest);
+  // 固定向量供 MCU 测试交叉核对；镜像 256 字节，初填 0x55，MSP=0x20020000，reset=0x08020081。
+  assert.equal(P.validateImage(bin).sha256,'a26f3f424744f88995a8e7d505fbbb4a978f8e6fa1eb1bc195220454dc409031');
+  assert.equal(manifest.subarray(56).toString('hex'),'226822fb193f18d4588cbce77026629318284678e740389177b3da2183ad93c5');
+  assert.equal(packet.subarray(128).toString('hex'),'9d1353a016a9db9adb2c66491bc817ac1135edd41b76ed57db650c09dd611ca2');
+  const valid=(bytes,secret=key)=>crypto.timingSafeEqual(bytes.subarray(128),crypto.createHmac('sha256',secret).update(bytes.subarray(0,128)).digest());
+  assert.equal(valid(packet),true);assert.equal(valid(packet,Buffer.alloc(32,0x34)),false);
+  for(const offset of [4,5,8,16,32,36,40,56,96,127]){const changed=Buffer.from(packet);changed[offset]^=1;assert.equal(valid(changed),false);}
+  assert.deepEqual(P.command(P.OP.BEGIN_FORCE,session,transfer,0,packet.subarray(40)),packet);
+  assert.equal(P.response(ack(packet)).op,P.OP.BEGIN_FORCE);
+  for(const size of [0,88,119,121,256])assert.throws(()=>P.command(P.OP.BEGIN_FORCE,session,transfer,0,Buffer.alloc(size)));
+  assert.throws(()=>P.command(P.OP.BEGIN_FORCE,session,transfer,1,Buffer.alloc(120)));
+  assert.throws(()=>P.command(P.OP.BEGIN,session,transfer,0,Buffer.alloc(120)));
+  assert.throws(()=>P.forceBegin(session,transfer,Buffer.alloc(120),key));assert.throws(()=>P.forceBegin(session,transfer,manifest,Buffer.alloc(31)));
+});
+
+test('force capability flags are optional for old firmware and strictly Boolean when supplied',()=>{
+  const legacy=P.capability(capability());assert.equal(legacy.forceSupported,false);assert.equal(legacy.forceReady,false);
+  const modern=P.capability(capability({forceSupported:true,forceReady:true}));assert.equal(modern.forceSupported,true);assert.equal(modern.forceReady,true);
+  for(const key of ['forceSupported','forceReady'])for(const value of [null,0,1,'true',[],{}])assert.equal(P.capability(capability({[key]:value})),null);
+});
+
+test('forced start is explicit, validates fresh force readiness, and never upgrades an ordinary request',async t=>{
+  let now=1000;const f=serviceFixture(t,{now:()=>now});
+  const start=options=>f.service.start('boat-01','force.bin',image(),options);
+  for(const invalid of [{force:'1'},{force:1},{force:null},{force:undefined},null,[]])assert.throws(()=>start(invalid),{status:400});
+  for(const flags of [{},{forceSupported:true},{forceReady:true},{forceSupported:false,forceReady:true},{forceSupported:true,forceReady:false}]){
+    f.bridge.cap({ready:false,...flags});assert.throws(()=>start({force:true}),{status:503});
+  }
+  const ready={ready:false,forceSupported:true,forceReady:true};
+  for(const state of ['receiving','ready','installing']){f.bridge.cap({...ready,state});assert.throws(()=>start({force:true}),{status:503});}
+  f.bridge.cap(ready);assert.throws(()=>start(),{status:503});assert.throws(()=>start({force:false}),{status:503});
+  now+=5001;assert.throws(()=>start({force:true}),{status:503});assert.equal(f.bridge.sent.length,0);
+  f.bridge.cap({...ready,state:'failed'});assert.equal(start({force:true}).job.force,true);await turn();assert.equal(f.bridge.sent[0].payload[4],P.OP.BEGIN_FORCE);
+});
+
+test('forced BEGIN retries are identical, still need matching op ACKs, and complete only on reboot with matching digest',async t=>{
+  const f=serviceFixture(t,{beginTimeoutMs:30,blockTimeoutMs:100,installTimeoutMs:150});f.bridge.cap({ready:false,forceSupported:true,forceReady:true});
+  f.service.start('boat-01','force.bin',image(),{force:true});await until(()=>f.bridge.sent.length>=2);
+  const begins=f.bridge.sent.filter(sent=>sent.payload[4]===P.OP.BEGIN_FORCE);assert.equal(begins.length,2);assert.deepEqual(begins[0].payload,begins[1].payload);
+  const wrong=ack(begins[0].payload);wrong[4]=P.OP.BEGIN;f.bridge.emit('firmware-response',{deviceId:'boat-01',payload:wrong});await turn();assert.equal(f.service.snapshot('boat-01').job.progress,0);
+  f.bridge.onPublish=sent=>{if(sent.payload[4]!==P.OP.ABORT)f.bridge.reply(sent);};f.bridge.reply(begins[0]);
+  await until(()=>f.service.snapshot('boat-01').job.state==='installing');assert.equal(f.bridge.sent.filter(sent=>sent.payload[4]===P.OP.DATA).length,4);
+  assert.equal(f.bridge.sent.filter(sent=>sent.payload[4]===P.OP.COMMIT).length,1);assert.equal(f.service.snapshot('boat-01').job.force,true);
+  const sha256=P.validateImage(image()).sha256;f.bridge.cap({imageSha256:sha256});assert.equal(f.service.snapshot('boat-01').job.state,'installing');
+  f.bridge.cap({bootId:'77'.repeat(8),imageSha256:sha256});assert.equal(f.service.snapshot('boat-01').job.state,'succeeded');assert.equal(f.bridge.locks.size,0);
+});
 test('progress needs matching device/session/transfer/offset ACK; only reboot plus exact installed hash means success',async t=>{
   const f=serviceFixture(t);const snapshot=f.service.start('boat-01','test.bin',image());assert.equal(snapshot.job.progress,0);await turn();
   assert.equal(f.bridge.sent[0].payload[4],P.OP.BEGIN);assert.equal(f.service.snapshot('boat-01').job.receivedBytes,0);
@@ -123,6 +175,25 @@ test('MQTT OTA grants no telemetry freshness, rejects retained and enforces para
   f.client.failOta=true;f.client.emit('close');f.client.emit('connect');assert.equal(f.bridge.brokerConnected,true);assert.equal(f.bridge.firmwareSubscribed,false);assert.throws(()=>f.bridge.claimFirmware('boat-01'),{status:503});
 });
 
+test('capability-only forced OTA remains usable after an old offline status without fabricating telemetry or bypassing driving locks',async t=>{
+  const f=cloudFixture(t),service=new FirmwareService({bridge:f.bridge,key:P.keyFrom(KEY),beginTimeoutMs:100});t.after(()=>service.close());
+  f.bridge.acceptMessage('boats/boat-01/status',Buffer.from('offline'),{retain:true});assert.equal(f.bridge.get('boat-01').status,'offline');
+  const forceCapability=capability({ready:false,forceSupported:true,forceReady:true});
+  assert.equal(f.bridge.acceptMessage('boats/boat-01/firmware-capability',forceCapability,{retain:true}),false);
+  assert.equal(service.snapshot('boat-01').supported,false);
+  assert.equal(f.bridge.acceptMessage('boats/boat-01/firmware-capability',forceCapability),true);
+  assert.equal(service.snapshot('boat-01').supported,true);assert.equal(f.bridge.get('boat-01').status,'unknown');
+  assert.equal(f.bridge.get('boat-01').online,false);assert.equal(f.bridge.get('boat-01').lastReceivedAt,null);assert.equal(f.bridge.get('boat-01').parametersReady,false);
+  f.bridge.claimControl('boat-01');assert.throws(()=>service.start('boat-01','busy.bin',image(),{force:true}),{status:409});f.bridge.releaseControl('boat-01');
+  assert.equal(service.start('boat-01','no-sensors.bin',image(),{force:true}).job.force,true);await turn();
+  assert.equal(f.client.sent.at(-1).payload[4],P.OP.BEGIN_FORCE);assert.equal(service.snapshot('boat-01').supported,true);
+  // 更新目录/锁发出的 state 不应将旧离线状态误判为当前 MCU 已断线。
+  f.bridge.emit('state',f.bridge.state('boat-01'));assert.equal(service.snapshot('boat-01').job.state,'transferring');service.cancel('boat-01');
+  f.bridge.acceptMessage('boats/boat-01/firmware-capability',forceCapability);service.start('boat-01','disconnect.bin',image(),{force:true});await turn();
+  f.bridge.acceptMessage('boats/boat-01/status',Buffer.from('offline'));assert.equal(service.snapshot('boat-01').job.state,'failed');
+  assert.equal(service.snapshot('boat-01').supported,false);
+});
+
 function request(port,route,{method='GET',cookie,origin=ORIGIN,body,raw,headers={}}={}){const data=raw!==undefined?raw:body===undefined?undefined:JSON.stringify(body);return new Promise((resolve,reject)=>{
   const req=http.request({host:'127.0.0.1',port,path:route,method,agent:false,headers:{...(data!==undefined?{'Content-Type':'application/json','Content-Length':Buffer.byteLength(data)}:{}),...(cookie?{Cookie:cookie}:{}),...(origin?{Origin:origin}:{}),...headers}},res=>{
     const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>{const raw=Buffer.concat(chunks).toString();let data;try{data=JSON.parse(raw);}catch(_){}resolve({status:res.statusCode,raw,data,headers:res.headers});});});req.once('error',reject);req.end(data);
@@ -135,13 +206,25 @@ async function apiFixture(t,options={}){const env={...ENV,...options.env},f=clou
 test('firmware HTTP is admin-only and same-origin, rejects unsafe filenames/media/size/vectors, and does not expose signing/session secrets',async t=>{
   const f=await apiFixture(t),admin=await f.login(),guest=await f.login('guest');assert.equal((await f.call('/api/firmware/config')).status,401);assert.equal((await f.call('/api/firmware/config',{cookie:guest})).status,403);
   const config=await f.call('/api/firmware/config',{cookie:admin});assert.equal(config.status,200);assert.equal(config.data.enabled,true);assert.doesNotMatch(config.raw,new RegExp(KEY));
+  assert.equal(config.data.forceSupported,true);
   assert.equal((await f.upload(guest)).status,403);assert.equal((await f.upload(admin,{origin:'https://evil.test'})).status,403);assert.equal((await f.upload(admin,{origin:null})).status,403);
   assert.equal((await f.upload(admin,{headers:{'Content-Type':'application/json','X-Firmware-Name':'ota.bin'}})).status,415);
   for(const filename of ['../ota.bin','C%3A%5Cota.bin','.bin','ota.hex','ota%00.bin'])assert.equal((await f.upload(admin,{headers:{'Content-Type':'application/octet-stream','X-Firmware-Name':filename}})).status,400);
   assert.equal((await f.upload(admin,{raw:Buffer.alloc(256)})).status,400);assert.equal((await f.upload(admin,{headers:{'Content-Type':'application/octet-stream','X-Firmware-Name':'ota.bin','Content-Length':P.MAX_SIZE+1}})).status,413);assert.equal(f.client.sent.length,0);
   assert.equal((await f.call('/api/firmware/boats/unknown',{cookie:admin})).status,404);
-  const result=await f.upload(admin);assert.equal(result.status,202,result.raw);assert.equal(result.data.job.name,'ota.bin');assert.equal(result.data.job.progress,0);assert.doesNotMatch(result.raw,new RegExp(KEY+'|'+SESSION+'|session|bootId'));
+  const result=await f.upload(admin);assert.equal(result.status,202,result.raw);assert.equal(result.data.job.name,'ota.bin');assert.equal(result.data.job.progress,0);assert.equal(result.data.job.force,false);assert.doesNotMatch(result.raw,new RegExp(KEY+'|'+SESSION+'|session|bootId'));
   assert.equal((await f.upload(admin)).status,409);const cancelled=await f.call('/api/firmware/boats/boat-01/cancel',{method:'POST',cookie:admin,body:{}});assert.equal(cancelled.status,200);assert.equal(cancelled.data.job.state,'cancelled');
+});
+
+test('forced upload requires the exact explicit header, modern capability, same origin and an active administrator',async t=>{
+  const f=await apiFixture(t),admin=await f.login(),guest=await f.login('guest'),headers={'Content-Type':'application/octet-stream','X-Firmware-Name':'force.bin','X-Firmware-Force':'1'};
+  for(const value of ['','0','true','false','2','1,1'])assert.equal((await f.upload(admin,{headers:{...headers,'X-Firmware-Force':value}})).status,400);
+  assert.equal((await f.upload(admin,{headers})).status,503);assert.equal(f.client.sent.length,0);
+  f.bridge.acceptMessage('boats/boat-01/firmware-capability',capability({ready:false,forceSupported:true,forceReady:true}));
+  assert.equal((await f.upload(admin)).status,503);assert.equal((await f.upload(guest,{headers})).status,403);
+  assert.equal((await f.upload(admin,{headers,origin:'https://evil.test'})).status,403);assert.equal(f.client.sent.length,0);
+  const result=await f.upload(admin,{headers});assert.equal(result.status,202,result.raw);assert.equal(result.data.job.force,true);await turn();
+  assert.equal(f.client.sent.at(-1).payload[4],P.OP.BEGIN_FORCE);
 });
 test('disabled OTA and expired upload session cannot queue a command; installed service is present in server lifecycle',async t=>{
   const disabled=await apiFixture(t,{env:{BOAT_OTA_KEY:''}}),cookie=await disabled.login();assert.equal((await disabled.call('/api/firmware/config',{cookie})).data.enabled,false);assert.equal((await disabled.upload(cookie)).status,503);assert.equal(disabled.client.sent.length,0);

@@ -32,7 +32,7 @@ class FirmwareService {
     let capability = null;
     if (cap) { const { session, bootId, receivedAt, ...visible } = cap; capability = visible; }
     return { deviceId: id, supported: this.fresh(cap), online: this.fresh(cap), capability,
-      job: job ? { id: job.id, deviceId: id, name: job.name, size: job.size, sha256: job.sha256, state: job.state,
+      job: job ? { id: job.id, deviceId: id, name: job.name, size: job.size, sha256: job.sha256, state: job.state, force: job.force,
         receivedBytes: job.receivedBytes, progress: Math.floor(job.receivedBytes * 100 / job.size), error: job.error,
         startedAt: job.startedAt, updatedAt: job.updatedAt, cancelable: ACTIVE.has(job.state) && !job.commitSent } : null };
   }
@@ -61,11 +61,14 @@ class FirmwareService {
     if (ack.nextOffset !== pending.nextOffset || ack.size !== job.size) return false;
     pending.finish(null, ack); return true;
   }
-  start(id, name, image) {
+  start(id, name, image, options = {}) {
     if (this.closed || !this.key) throw fault(503, '服务器尚未配置OTA密钥');
     if (typeof id !== 'string' || !DEVICE.test(id)) throw fault(400, '设备编号不正确');
+    if (!options || typeof options !== 'object' || Array.isArray(options) || Object.hasOwn(options, 'force') && typeof options.force !== 'boolean') throw fault(400, '强制升级选项必须为布尔值');
+    const force = options.force === true;
     const cap = this.caps.get(id);
-    if (!this.fresh(cap) || !cap.ready || !['idle', 'failed'].includes(cap.state)) throw fault(503, '该船未在线提供可用OTA能力；需先有线安装Bootloader及OTA固件，并确认电机停稳');
+    if (!this.fresh(cap) || !['idle', 'failed'].includes(cap.state) || (force ? !cap.forceSupported || !cap.forceReady : !cap.ready))
+      throw fault(503, force ? '该船尚未提供可用的强制OTA能力；请确认在线运行支持强制升级的OTA固件' : '该船未在线提供可用OTA能力；需先有线安装Bootloader及OTA固件，并确认电机停稳');
     if (this.isActive(id)) throw fault(409, '该船已有固件升级任务');
     if ([...this.jobs.values()].filter(job => ACTIVE.has(job.state)).length >= this.maxActive) throw fault(429, '同时升级的船只已达上限，请稍后再试');
     const info = protocol.validateImage(image), signed = protocol.manifest(image, this.key);
@@ -75,7 +78,7 @@ class FirmwareService {
       const old = [...this.jobs.values()].filter(job => !ACTIVE.has(job.state)).sort((a, b) => a.updatedAt - b.updatedAt)[0];
       if (!old) { this.bridge.releaseFirmware(id); throw fault(429, '升级任务目录已满'); } this.jobs.delete(old.deviceId);
     }
-    const job = { id: crypto.randomBytes(16).toString('hex'), deviceId: id, name, ...info, image: Buffer.from(image), manifest: signed,
+    const job = { id: crypto.randomBytes(16).toString('hex'), deviceId: id, name, ...info, force, image: Buffer.from(image), manifest: signed,
       state: 'queued', receivedBytes: 0, error: null, startedAt: this.now(), updatedAt: this.now(), session: cap.session, bootId: cap.bootId,
       commitSent: false, pending: null, installTimer: null };
     this.jobs.set(id, job); setImmediate(() => this.run(job)); return this.snapshot(id);
@@ -83,7 +86,8 @@ class FirmwareService {
   update(job, state) { job.state = state; job.updatedAt = this.now(); }
   send(job, op, offset, payload, nextOffset) {
     if (!ACTIVE.has(job.state) || this.closed) return Promise.reject(fault(409, '升级任务已结束'));
-    const packet = protocol.command(op, job.session, job.id, offset, payload), timeout = op === protocol.OP.BEGIN ? this.beginTimeoutMs : this.blockTimeoutMs;
+    const packet = op === protocol.OP.BEGIN_FORCE ? protocol.forceBegin(job.session, job.id, payload, this.key) : protocol.command(op, job.session, job.id, offset, payload);
+    const timeout = [protocol.OP.BEGIN, protocol.OP.BEGIN_FORCE].includes(op) ? this.beginTimeoutMs : this.blockTimeoutMs;
     return new Promise((resolve, reject) => {
       let timer, attempts = 0, settled = false;
       const pending = { op, nextOffset, finish: (error, ack) => {
@@ -103,7 +107,7 @@ class FirmwareService {
   async run(job) {
     if (this.closed || this.jobs.get(job.deviceId) !== job || !ACTIVE.has(job.state)) return;
     try {
-      this.update(job, 'transferring'); await this.send(job, protocol.OP.BEGIN, 0, job.manifest, 0);
+      this.update(job, 'transferring'); await this.send(job, job.force ? protocol.OP.BEGIN_FORCE : protocol.OP.BEGIN, 0, job.manifest, 0);
       while (ACTIVE.has(job.state) && job.receivedBytes < job.size) {
         const offset = job.receivedBytes, block = job.image.subarray(offset, Math.min(job.size, offset + protocol.CHUNK_SIZE));
         await this.send(job, protocol.OP.DATA, offset, block, offset + block.length); if (!ACTIVE.has(job.state)) return;

@@ -48,9 +48,7 @@
       this.listen(window,'boat-view-change',event=>{
         if(event.detail?.view!=='driving'){
           this.stop('已离开驾驶界面，已停船并退出操控');
-          delete this.nodes['view-driving'].dataset.focus;
-          this.nodes.driverFocusTools.hidden=true;
-          for(const [name,id]of [['video','driverVideoExpand'],['map','driverMapExpand']]){this.nodes[id].setAttribute('aria-pressed','false');this.text(id,name==='video'?'放大图传':'放大地图');}
+          this.setMediaFocus('');
         }
         this.render();if(event.detail?.view==='driving'){this.lastPoll=0;this.poll();}
       });
@@ -177,6 +175,7 @@
       this.lastPoll=0;this.render();
     }
     keyDown(event) {
+      if(event.code==='Escape'&&this.nodes['view-driving'].hasAttribute('data-focus')){event.preventDefault();this.setMediaFocus('');return;}
       if(!this.active||!this.permitted())return;
       if(event.code==='Space'){event.preventDefault();this.stop('急停已触发；需要重新启用操控',true);return;}
       if(event.ctrlKey||event.metaKey||event.altKey||this.editing(event.target))return;
@@ -211,21 +210,34 @@
       this.nodes.driverHeading.closest('label').dataset.disabled=String(!enabled);
     }
     focusMedia(name) {
+      this.setMediaFocus(this.nodes['view-driving'].dataset.focus===name?'':name);
+    }
+    setMediaFocus(name) {
       const panel=this.nodes['view-driving'];
-      if(panel.dataset.focus===name)delete panel.dataset.focus;else panel.dataset.focus=name;
+      if(name)panel.dataset.focus=name;else delete panel.dataset.focus;
+      if(name)this.document.documentElement.dataset.driverFocus='true';else delete this.document.documentElement.dataset.driverFocus;
       for(const [type,id]of [['video','driverVideoExpand'],['map','driverMapExpand']]){
         const active=panel.dataset.focus===type;this.nodes[id].setAttribute('aria-pressed',String(active));
         this.text(id,active?'还原布局':type==='video'?'放大图传':'放大地图');
       }
       this.nodes.driverFocusTools.hidden=!panel.hasAttribute('data-focus');
+      this.updateOverlayInteraction();
       window.dispatchEvent(new CustomEvent('boat-driver-layout-change'));
     }
     setOverlayOpacity(value) {
       const opacity=Math.max(0,Math.min(100,Number(value)||0));
       this.nodes.driverOverlayOpacity.value=String(opacity);
       this.nodes['view-driving'].style.setProperty('--driver-overlay-opacity',(opacity/100).toFixed(2));
+      this.nodes['view-driving'].dataset.overlayHidden=String(opacity===0);
+      this.updateOverlayInteraction();
       this.text('driverOverlayOpacityValue',opacity+'%');
       try{window.localStorage?.setItem('boat-driver-overlay-opacity',String(opacity));}catch(_){}
+    }
+    updateOverlayInteraction() {
+      const panel=this.nodes['view-driving'];
+      // 普通布局恢复全部仪表的交互，隐藏的浮层不进入 Tab 焦点顺序。
+      const hidden=panel.hasAttribute('data-focus')&&panel.dataset.overlayHidden==='true';
+      for(const node of panel.querySelectorAll('.driver-instrument-grid,.driver-telemetry,.driver-notice'))node.inert=hidden;
     }
     render() {
       if(this.destroyed)return;
@@ -248,7 +260,7 @@
       this.text('driverNotice',message);this.nodes.driverNotice.dataset.tone=this.tone;
       this.renderKeys();
     }
-    destroy(){if(this.destroyed)return;this.stop('驾驶界面已关闭，已请求停船');this.destroyed=true;window.clearInterval(this.timer);for(const [target,event,handler]of this.handlers)target.removeEventListener(event,handler);this.handlers=[];}
+    destroy(){if(this.destroyed)return;this.stop('驾驶界面已关闭，已请求停船');this.setMediaFocus('');this.destroyed=true;window.clearInterval(this.timer);for(const [target,event,handler]of this.handlers)target.removeEventListener(event,handler);this.handlers=[];}
   }
   window.BoatDriverControl=BoatDriverControl;
 })();
