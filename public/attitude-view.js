@@ -84,7 +84,8 @@ class AttitudeView {
   }
   stop(){clearTimeout(this.timer);cancelAnimationFrame(this.raf);this.timer=null;this.raf=null;this.lastTick=null;}
   schedule(force=false) {
-    if(!this.renderer||document.hidden||!this.visible||(!force&&(!this.settings.animation||!this.fresh)))return;
+    // 驾驶页的三维预览收起时不绘制；details 内元素仍可能保留非零布局尺寸。
+    if(!this.renderer||document.hidden||!this.visible||this.canvas.closest('details:not([open])')||(!force&&(!this.settings.animation||!this.fresh)))return;
     if(force){clearTimeout(this.timer);this.timer=null;}
     if(this.timer!=null||this.raf!=null)return;
     const delay=force?0:this.transition?this.profile().interval:this.profile().water;

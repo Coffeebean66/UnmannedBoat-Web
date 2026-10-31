@@ -8,7 +8,7 @@
   class BoatDriverControl {
     constructor({document=window.document,fetch=window.fetch.bind(window),auth=window.BoatAuth,toast=()=>{}}={}) {
       this.document=document;this.fetch=fetch;this.auth=auth;this.toast=toast;
-      this.nodes=Object.fromEntries(['view-driving','driverBoatName','driverState','driverEnable','driverRelease','driverEmergency','driverTestMode','driverTestNotice','driverTestAck','driverNotice','driverActualSpeed','driverTargetSpeed','driverActualHeading','driverActualMode','driverInput','driverMode','driverLimit','driverLimitValue','driverHeading','driverHoldHeading','driverVideoExpand','driverMapExpand','driverOverlayOpacity','driverOverlayOpacityValue','driverFocusTools'].map(id=>[id,document.getElementById(id)]));
+      this.nodes=Object.fromEntries(['view-driving','driverBoatName','driverState','driverEnable','driverRelease','driverEmergency','driverTestMode','driverTestNotice','driverTestAck','driverNotice','driverActualSpeed','driverTargetSpeed','driverActualHeading','driverActualMode','driverInput','driverLatitude','driverLongitude','driverFixStatus','driverImuStatus','driverModelPreview','driverMode','driverLimit','driverLimitValue','driverHeading','driverHoldHeading','driverVideoExpand','driverMapExpand','driverOverlayOpacity','driverOverlayOpacityValue','driverFocusTools'].map(id=>[id,document.getElementById(id)]));
       const random=new Uint8Array(8);window.crypto.getRandomValues(random);
       this.clientId=Array.from(random,value=>value.toString(16).padStart(2,'0')).join('');
       this.context={deviceId:'',connected:false,authenticated:false,canManage:false,parameterBusy:false};
@@ -43,6 +43,7 @@
       });
       this.listen(this.nodes.driverVideoExpand,'click',()=>this.focusMedia('video'));
       this.listen(this.nodes.driverMapExpand,'click',()=>this.focusMedia('map'));
+      this.listen(this.nodes.driverModelPreview,'toggle',()=>window.dispatchEvent(new CustomEvent('boat-driver-layout-change')));
       this.listen(document,'keydown',event=>this.keyDown(event));
       this.listen(document,'keyup',event=>this.keyUp(event));
       // 输入框不接受运动快捷键，进入表单时先撤去键盘运动量。
@@ -94,6 +95,10 @@
     setTelemetry(value={}) {
       this.text('driverActualSpeed',value.actual);this.text('driverTargetSpeed',value.target);
       this.text('driverActualHeading',value.actualHeading);this.text('driverActualMode',value.modeText);
+      this.text('driverLatitude',value.latitude);this.text('driverLongitude',value.longitude);
+      this.text('driverFixStatus',value.fixStatus);this.text('driverImuStatus',value.imuStatus);
+      this.nodes.driverFixStatus.dataset.valid=String(value.fixValid===true);
+      this.nodes.driverImuStatus.dataset.valid=String(value.imuValid===true);
       this.actualHeading=typeof value.actualHeading==='string'&&value.actualHeading.trim()!==''&&value.actualHeading!=='--'?Number(value.actualHeading):Number.isFinite(value.actualHeading)?value.actualHeading:null;
     }
     async api(body,{timeout=1200,keepalive=false,controller=new AbortController()}={}) {
@@ -254,12 +259,14 @@
     setMediaFocus(name) {
       const panel=this.nodes['view-driving'];
       if(name)panel.dataset.focus=name;else delete panel.dataset.focus;
+      // 放大时保留另一媒体的小窗；还原后回到图传为主、地图在右上的驾驶台。
+      panel.dataset.primary=name||'video';
       if(name)this.document.documentElement.dataset.driverFocus='true';else delete this.document.documentElement.dataset.driverFocus;
       for(const [type,id]of [['video','driverVideoExpand'],['map','driverMapExpand']]){
         const active=panel.dataset.focus===type;this.nodes[id].setAttribute('aria-pressed',String(active));
-        this.text(id,active?'还原布局':type==='video'?'放大图传':'放大地图');
+        this.text(id,active?'还原布局':type==='video'?(name==='map'?'放大图传':'全屏图传'):'放大地图');
       }
-      this.nodes.driverFocusTools.hidden=!panel.hasAttribute('data-focus');
+      this.nodes.driverFocusTools.hidden=false;
       this.updateOverlayInteraction();
       window.dispatchEvent(new CustomEvent('boat-driver-layout-change'));
     }
@@ -274,9 +281,9 @@
     }
     updateOverlayInteraction() {
       const panel=this.nodes['view-driving'];
-      // 普通布局恢复全部仪表的交互，隐藏的浮层不进入 Tab 焦点顺序。
-      const hidden=panel.hasAttribute('data-focus')&&panel.dataset.overlayHidden==='true';
-      for(const node of panel.querySelectorAll('.driver-instrument-grid,.driver-telemetry,.driver-notice'))node.inert=hidden;
+      // 默认驾驶台也使用浮层，0% 时读数与三维预览均不进入 Tab 焦点顺序。
+      const hidden=panel.dataset.overlayHidden==='true';
+      for(const node of panel.querySelectorAll('[data-driver-overlay],.driver-notice'))node.inert=hidden;
     }
     render() {
       if(this.destroyed)return;

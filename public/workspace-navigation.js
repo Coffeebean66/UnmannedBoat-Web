@@ -23,7 +23,8 @@
     navigation:document.getElementById('navigation'),
     attitude:document.getElementById('attitude'),
     sensors:document.getElementById('sensorTelemetry'),
-    video:document.getElementById('videoCard')
+    video:document.getElementById('videoCard'),
+    motors:document.getElementById('motors')
   };
   const title = document.getElementById('viewTitle');
   let current = null, selectedBoatId = '';
@@ -65,11 +66,13 @@
       mount(shared.attitude,'attitude-model');
       mount(shared.sensors,'attitude-sensors');
     } else if (view === 'video') mount(shared.video,'video-playback');
+    else if (view === 'propulsion') mount(shared.motors,'propulsion-motors');
     else if (view === 'driving') {
       mount(shared.navigation,'driving-map');
       mount(shared.attitude,'driving-model');
       mount(shared.sensors,'driving-sensors');
       mount(shared.video,'driving-video');
+      mount(shared.motors,'driving-motors');
     }
   }
   function validView(id) { return Object.hasOwn(views,id) && panels.has(id) ? id : (panels.has('fleet') ? 'fleet' : 'overview'); }

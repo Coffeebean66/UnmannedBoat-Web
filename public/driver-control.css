@@ -1,4 +1,4 @@
-/* 驾驶台复用现有视频、地图和仪表，放大画面时保留上方停船入口。 */
+/* 驾驶画布复用同一视频、地图和仪表，只交换主画面与右上小窗的位置。 */
 html[data-workspace-view="driving"] #historyPanel,html[data-workspace-view="driving"] #connectionText,html[data-workspace-view="driving"] #sourceHint { display:none; }
 html[data-workspace-view="driving"] .hero { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); margin:0; padding:0; white-space:nowrap; }
 html[data-workspace-view="driving"] .page { padding-top:10px; }
@@ -6,249 +6,275 @@ html[data-workspace-view="driving"] .workspace-breadcrumb { display:none; }
 html[data-workspace-view="driving"] .source-panel { padding:5px 9px; gap:6px 10px; margin-bottom:10px; border-radius:6px; }
 html[data-workspace-view="driving"] .source-panel select { min-height:27px; padding:3px 6px; }
 html[data-workspace-view="driving"] .cloud-source-label,html[data-workspace-view="driving"] .source-panel .muted { font-size:9px; }
-.driving-workspace { --driver-live:#45c9a1; min-width:0; }
-.driver-console { position:relative; margin-bottom:10px; padding:10px 12px; border-top:2px solid var(--blue); }
-.driver-console-heading { display:flex; align-items:center; flex-wrap:wrap; gap:12px; }
-.driver-console-heading h2 { margin:3px 0 0; font-size:16px; }
-.driver-console-heading h2 span { margin-left:8px; color:var(--muted); font-size:11px; font-weight:400; overflow-wrap:anywhere; }
-.driver-eyebrow { display:none; color:var(--blue); font-size:8px; letter-spacing:.17em; }
-.driver-state { display:inline-flex; align-items:center; gap:6px; padding:5px 9px; color:var(--muted); background:var(--soft); border:1px solid var(--line); border-radius:20px; font-size:10px; }
+.driving-workspace {
+  --driver-live:#45c9a1; --driver-pip-width:clamp(246px,26%,360px); --driver-pip-height:clamp(218px,31%,310px); --driver-console-width:clamp(350px,37%,520px);
+  position:relative; isolation:isolate; min-width:0; width:100%; height:calc(100dvh - var(--header-height,64px) - 94px); min-height:640px;
+  overflow:hidden; border:1px solid var(--line-strong); border-radius:var(--radius); background:var(--panel);
+}
+.driver-panel-title { display:flex; align-items:center; justify-content:space-between; gap:8px; padding-bottom:9px; border-bottom:1px solid var(--line); font-size:11px; }
+.driver-panel-title>span,.driver-panel-title a { display:inline-flex; align-items:center; gap:6px; }
+.driver-panel-title svg { display:block; width:13px; height:13px; color:var(--blue); }
+.driver-panel-title>strong { min-width:0; max-width:44%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--muted); font-size:10px; font-weight:500; }
+.driver-panel-title a { color:var(--muted); font-size:9px; text-decoration:none; }
+
+/* 主媒体占满画布，次媒体始终显示在右上角，内部控件跟随原来的 DOM。 */
+.driver-media-grid { position:absolute; z-index:0; inset:0; }
+.driver-region { position:absolute; z-index:0; inset:0; min-width:0; display:flex; flex-direction:column; }
+.driver-region>.workspace-slot { position:absolute; inset:0; min-height:0; }
+.driver-region>.workspace-slot>.card { position:absolute; inset:0; height:auto; min-height:0; padding:0; overflow:hidden; border:0; border-radius:0; background:transparent; box-shadow:none; }
+.driver-region-toolbar { position:absolute; z-index:680; top:12px; left:50%; transform:translateX(-50%); display:flex; align-items:center; justify-content:space-between; gap:12px; width:max-content; max-width:calc(100% - 16px); margin:0; padding:6px 9px; border:1px solid var(--line-strong); border-radius:6px; background:var(--panel); }
+.driver-region-toolbar>span { display:flex; align-items:center; gap:6px; color:var(--text); font-size:10px; white-space:nowrap; }
+.driver-region-toolbar svg { display:block; width:13px; height:13px; color:var(--blue); }
+.driver-region-toolbar small { color:var(--faint); font-size:7px; letter-spacing:.08em; }
+.driver-region-toolbar .small-button { min-height:27px; padding:4px 7px; font-size:9px; white-space:nowrap; }
+.driving-workspace .video-heading,.driving-workspace .video-details,.driving-workspace .map-card .card-title,.driving-workspace .map-card .panel-caption,.driving-workspace .panel-page-link,.driving-workspace .map-track-info,.driving-workspace .map-footer,.driving-workspace .vector-info { display:none; }
+.driving-workspace .video-stage,.driving-workspace .map-stage { position:absolute; inset:0; width:100%; height:100%; min-height:0; max-height:none; aspect-ratio:auto; border:0; border-radius:0; }
+.driving-workspace #boatVideo { width:100%; height:100%; max-height:none; object-fit:contain; }
+.driving-workspace #map { min-height:0; height:100%; }
+.driving-workspace #videoFullscreen { display:none; }
+.driving-workspace .video-toolbar { position:absolute; z-index:12; left:12px; top:270px; bottom:auto; display:flex; flex-wrap:wrap; gap:5px; max-width:300px; margin:0; padding:6px 8px; border:1px solid var(--line-strong); border-radius:6px; background:var(--panel); }
+.driving-workspace .video-status { flex:1 1 100%; font-size:9px; }
+.driving-workspace .video-buttons { flex-wrap:wrap; gap:5px; }
+.driving-workspace .video-buttons button { min-height:25px; padding:4px 7px; font-size:9px; }
+.driving-workspace .map-controls { position:absolute; z-index:650; top:270px; left:12px; max-width:300px; margin:0; padding:6px; border:1px solid var(--line-strong); border-radius:6px; background:var(--panel); }
+.driving-workspace .map-controls>.button-row { display:flex; flex-wrap:wrap; gap:5px; }
+.driving-workspace .map-controls button { min-height:25px; padding:4px 6px; font-size:9px; }
+.driving-workspace[data-primary="video"] .driver-region-map,.driving-workspace[data-primary="map"] .driver-region-video { z-index:20; inset:12px 12px auto auto; width:var(--driver-pip-width); height:var(--driver-pip-height); overflow:hidden; border:1px solid var(--line-strong); border-radius:var(--radius); background:var(--panel); box-shadow:0 8px 28px #0003; }
+.driving-workspace[data-primary="video"] .driver-region-map>.workspace-slot,.driving-workspace[data-primary="map"] .driver-region-video>.workspace-slot { top:37px; }
+.driving-workspace[data-primary="video"] .driver-region-map .driver-region-toolbar,.driving-workspace[data-primary="map"] .driver-region-video .driver-region-toolbar { inset:0 0 auto; transform:none; width:auto; height:37px; max-width:none; padding:5px 8px; border:0; border-bottom:1px solid var(--line); border-radius:0; }
+.driving-workspace[data-primary="video"] .driver-region-map .driver-region-toolbar small,.driving-workspace[data-primary="map"] .driver-region-video .driver-region-toolbar small,.driving-workspace[data-primary="video"] .driver-region-map .map-controls { display:none; }
+.driving-workspace[data-primary="map"] .driver-region-video .video-toolbar { inset:auto 0 0; width:auto; max-width:none; padding:4px 6px; border:0; border-top:1px solid var(--line); border-radius:0; }
+.driving-workspace[data-primary="map"] .driver-region-video .video-status { flex:1 1 80px; font-size:8px; }
+.driving-workspace[data-primary="map"] .driver-region-video .video-buttons { margin-left:auto; }
+.driving-workspace[data-primary="map"] .driver-region-video #videoRetry { display:none; }
+.driving-workspace[data-primary="map"] .driver-region-video .video-stage { bottom:33px; height:auto; }
+/* 大地图的缩放、来源与指北标识避开四角的数据卡片。 */
+.driving-workspace[data-primary="map"] .driver-region-map .leaflet-top.leaflet-left { top:calc(var(--driver-pip-height) + 24px); left:auto; right:12px; }
+.driving-workspace[data-primary="map"] .driver-region-map .boat-map-zoom { top:calc(var(--driver-pip-height) + 24px); left:auto; right:12px; }
+.driving-workspace[data-primary="map"] .driver-region-map .map-north { top:calc(var(--driver-pip-height) + 24px); bottom:auto; right:58px; }
+.driving-workspace[data-primary="map"] .driver-region-map .map-layer-label { top:calc(var(--driver-pip-height) + 24px); left:auto; right:112px; }
+.driving-workspace[data-primary="video"] .driver-region-map .map-layer-label { left:48px; max-width:calc(100% - 56px); overflow:hidden; padding:4px 5px; gap:4px; font-size:7px; white-space:nowrap; }
+.driving-workspace[data-primary="video"] .driver-region-map .map-layer-divider,.driving-workspace[data-primary="video"] .driver-region-map #mapCoordinateSystem { display:none; }
+
+/* 左上航行读数、左下地平仪/罗盘、底部中间操控、右下双电机。 */
+.driver-navigation-data { position:absolute; z-index:30; top:12px; left:12px; width:clamp(248px,26%,340px); margin:0; padding:11px; }
+.driver-position { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:10px 0; }
+.driver-position span,.driver-telemetry span { display:block; margin-bottom:4px; color:var(--muted); font-size:8px; }
+.driver-position b { font-size:13px; font-weight:550; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.driver-telemetry { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:11px 8px; padding:10px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+.driver-telemetry>div { grid-column:span 2; min-width:0; }
+.driver-telemetry>div:nth-child(n+4) { grid-column:span 3; }
+.driver-telemetry strong { color:var(--text); font-size:20px; line-height:1.3; font-weight:600; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.driver-telemetry small { margin-left:3px; color:var(--faint); font-size:8px; }
+.driver-telemetry>div:nth-child(3) strong { color:var(--blue); }
+.driver-telemetry>div:nth-child(n+4) strong { font-size:11px; }
+.driver-source-status { display:flex; flex-wrap:wrap; gap:5px 12px; padding-top:9px; color:var(--muted); font-size:8px; }
+.driver-source-status>span::before { content:""; display:inline-block; width:4px; height:4px; margin-right:5px; border-radius:50%; background:var(--faint); vertical-align:1px; }
+.driver-source-status [data-valid="true"] { color:var(--driver-live); }
+.driver-source-status [data-valid="true"]::before { background:var(--driver-live); }
+
+.driver-console { position:absolute; z-index:40; bottom:12px; left:calc((100% - var(--driver-console-width)) / 2); width:var(--driver-console-width); margin:0; padding:10px 12px; border-top:2px solid var(--blue); }
+/* 急停的祖先不能添加 transform、filter、backdrop-filter 或透明度，保持 fixed 和鼠标命中。 */
+.driver-console-heading { display:flex; align-items:center; flex-wrap:wrap; gap:7px 10px; }
+.driver-console-heading h2 { margin:0; font-size:13px; }
+.driver-eyebrow { display:none; }
+.driver-state { display:inline-flex; align-items:center; gap:5px; margin-left:auto; padding:4px 7px; color:var(--muted); background:var(--soft); border:1px solid var(--line); border-radius:20px; font-size:9px; }
 .driver-state::before { content:""; width:5px; height:5px; border-radius:50%; background:var(--faint); }
 .driver-state[data-state="active"] { color:var(--driver-live); border-color:color-mix(in srgb,var(--driver-live) 35%,transparent); background:color-mix(in srgb,var(--driver-live) 9%,transparent); }
-.driver-state[data-state="active"]::before { background:var(--driver-live); box-shadow:0 0 8px #45c9a155; }
-.driver-state[data-state="pending"] { color:var(--warn); }
-.driver-state[data-state="test"] { color:var(--warn); border-color:var(--warn); }
+.driver-state[data-state="active"]::before { background:var(--driver-live); }
+.driver-state[data-state="pending"],.driver-state[data-state="test"] { color:var(--warn); border-color:var(--warn); }
 .driver-state[data-state="test"]::before { background:var(--warn); }
-.driver-actions { display:flex; flex-wrap:wrap; gap:7px; margin-left:auto; }
-.driver-actions button { min-height:33px; padding:7px 11px; font-size:11px; }
+.driver-actions { display:flex; flex-wrap:wrap; gap:5px; width:100%; }
+.driver-actions button { min-height:30px; padding:6px 8px; font-size:10px; }
 button.driver-test-mode { border:1px solid var(--line-strong); background:var(--soft); color:var(--muted); }
 button.driver-test-mode[aria-pressed="true"] { border-color:var(--warn); background:color-mix(in srgb,var(--warn) 12%,var(--panel)); color:var(--warn); }
-.driver-test-notice { margin:7px 0; padding:6px 9px; border-left:2px solid var(--warn); color:var(--warn); background:var(--panel); font-size:10px; line-height:1.6; overflow-wrap:anywhere; }
-.driver-test-notice span { margin-left:8px; font-variant-numeric:tabular-nums; }
-button.driver-emergency { border:1px solid #e26067; background:#e2606715; color:#ee8790; font-weight:600; }
-/* 放大或滚动地图时也始终保留鼠标急停入口。 */
-.driver-actions button.driver-emergency { position:fixed; z-index:800; right:22px; bottom:18px; min-width:134px; background:var(--panel); box-shadow:0 4px 18px #0005; }
+.driver-test-notice { margin:6px 0; padding:5px 7px; border-left:2px solid var(--warn); color:var(--warn); background:var(--soft); font-size:9px; line-height:1.5; overflow-wrap:anywhere; }
+.driver-test-notice span { margin-left:6px; font-variant-numeric:tabular-nums; }
+.driver-actions button.driver-emergency { position:fixed; z-index:800; right:22px; bottom:18px; min-width:134px; min-height:36px; border:1px solid #e26067; background:var(--panel); color:#ee8790; box-shadow:0 4px 18px #0005; font-weight:600; opacity:1; pointer-events:auto; }
 button.driver-emergency:not(:disabled):hover { background:#e2606730; border-color:#ff8c95; }
-.driver-notice { margin-top:5px; color:var(--muted); font-size:10px; line-height:1.6; overflow-wrap:anywhere; }
+.driver-notice { margin:7px 0; color:var(--muted); font-size:9px; line-height:1.6; overflow-wrap:anywhere; opacity:var(--driver-overlay-opacity,.9); }
 .driver-notice[data-tone="error"] { color:var(--danger,#ef7c88); }
-.driver-telemetry { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); margin-top:5px; padding:5px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
-.driver-telemetry>div { min-width:0; padding:0 12px; }
-.driver-telemetry>div:first-child { padding-left:0; }
-.driver-telemetry>div+div { border-left:1px solid var(--line); }
-.driver-telemetry span { display:block; margin-bottom:2px; color:var(--muted); font-size:8px; }
-.driver-telemetry strong { color:var(--text); font-size:19px; font-weight:600; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
-.driver-telemetry small { margin-left:4px; color:var(--faint); font-size:9px; }
-.driver-telemetry>div:nth-child(3) strong { color:var(--blue); }
-.driver-telemetry>div:nth-child(n+4) strong { font-size:12px; }
-.driver-inputs { display:flex; align-items:center; flex-wrap:wrap; gap:8px 14px; margin-top:5px; }
-.driver-inputs>label { display:flex; flex-wrap:wrap; align-items:center; gap:5px 8px; color:var(--muted); font-size:10px; }
-.driver-inputs select,.driver-inputs input[type="number"] { min-height:32px; padding:5px 8px; border:1px solid var(--line-strong); border-radius:4px; background:var(--soft); color:var(--text); font-size:11px; }
-.driver-inputs select { max-width:160px; }
-.driver-limit { width:164px; }
+.driver-inputs { display:flex; align-items:center; flex-wrap:wrap; gap:7px 10px; padding-top:8px; border-top:1px solid var(--line); }
+.driver-inputs>label { display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px; color:var(--muted); font-size:9px; }
+.driver-inputs select,.driver-inputs input[type="number"] { min-height:29px; padding:4px 6px; border:1px solid var(--line-strong); border-radius:4px; background:var(--soft); color:var(--text); font-size:10px; }
+.driver-inputs select { max-width:128px; }
+.driver-limit { flex:1 1 110px; max-width:180px; }
 .driver-limit output { margin-left:auto; color:var(--text); font-variant-numeric:tabular-nums; }
 .driver-limit input { display:block; width:100%; margin:0; accent-color:var(--blue); }
-.driver-heading input { width:82px; }
-.driver-heading[data-disabled="true"] { opacity:.45; }
-.driver-keyboard { margin-left:auto; display:flex; align-items:center; gap:3px; }
+.driver-heading input { width:70px; }
+.driver-heading[data-disabled="true"],#driverHoldHeading:disabled { display:none; }
+.driver-keyboard { display:flex; align-items:center; flex-wrap:wrap; gap:3px; width:100%; }
 .driver-key-row { display:flex; gap:3px; }
-.driver-keyboard kbd { display:inline-flex; justify-content:center; align-items:center; min-width:40px; padding:4px 5px; font:9px system-ui,sans-serif; color:var(--muted); background:var(--soft); border:1px solid var(--line-strong); border-bottom-width:2px; border-radius:4px; }
+.driver-keyboard kbd { display:inline-flex; justify-content:center; align-items:center; min-width:33px; padding:3px 4px; font:8px system-ui,sans-serif; color:var(--muted); background:var(--soft); border:1px solid var(--line-strong); border-bottom-width:2px; border-radius:4px; }
 .driver-keyboard kbd[data-pressed="true"] { color:var(--driver-live); border-color:var(--driver-live); background:#45c9a115; }
-.driver-keyboard>span { display:none; color:var(--faint); font-size:8px; }
-.driver-help { margin-top:6px; color:var(--faint); font-size:8px; line-height:1.7; }
-.driver-keyboard-hint { display:none; color:var(--warn); font-size:10px; margin-top:7px; }
-.driver-media-grid { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(0,1fr); gap:14px; align-items:stretch; }
-.driver-region { min-width:0; display:flex; flex-direction:column; }
-.driver-region-toolbar { display:flex; justify-content:space-between; align-items:center; gap:7px; margin-bottom:7px; }
-.driver-region-toolbar>span { display:flex; align-items:center; gap:6px; color:var(--text); font-size:11px; }
-.driver-region-toolbar svg { display:block; width:13px; height:13px; color:var(--blue); }
-.driver-region-toolbar small { color:var(--faint); font-size:7px; letter-spacing:.09em; }
-.driver-region>.workspace-slot { flex:1; }
-.driver-media-grid .card { height:100%; padding:10px 12px; }
-.driving-workspace .video-stage { min-height:130px; height:clamp(130px,15.5dvh,180px); aspect-ratio:auto; }
-.driving-workspace .video-stage video { object-fit:contain; }
-.driving-workspace .video-heading { display:none; }
-.driving-workspace .video-heading h2 { font-size:12px; }
-.driving-workspace .video-heading p { font-size:8px; }
-.driving-workspace .video-device { font-size:8px; max-width:100%; overflow-wrap:anywhere; }
-.driving-workspace .video-toolbar { gap:7px; flex-wrap:wrap; margin-top:7px; }
-.driving-workspace .video-status { flex:1 1 160px; font-size:9px; }
-.driving-workspace .video-buttons { flex-wrap:wrap; gap:5px; }
-.driving-workspace .video-buttons button { min-height:28px; font-size:9px; padding:5px 7px; }
-.driving-workspace .video-details { display:none; }
-.driving-workspace .map-stage { flex:none; height:clamp(130px,15.5dvh,180px); min-height:130px; }
-.driving-workspace #map { min-height:0; }
-.driving-workspace .map-controls { flex-wrap:wrap; margin-top:7px; }
-.driving-workspace .map-controls>.button-row { display:flex; flex-wrap:wrap; gap:5px; }
-.driving-workspace .map-controls button { padding:5px 7px; font-size:9px; }
-.driving-workspace .map-card .panel-caption,.driving-workspace .panel-page-link { display:none; }
-.driving-workspace .map-track-info { display:none; }
-.driving-workspace .map-card .card-title { display:none; }
-.driving-workspace .vector-info { margin-top:5px; }
-.driving-workspace .map-footer { margin-top:5px; padding-top:4px; }
-.driving-workspace .map-footer,.driving-workspace .map-vector-status { font-size:8px; }
-.driver-instrument-grid { display:grid; grid-template-columns:minmax(230px,.65fr) minmax(0,1.65fr); gap:12px; margin-top:10px; align-items:start; }
-.driving-workspace #boatCanvas { height:clamp(130px,16dvh,180px); }
-.driving-workspace .attitude-stage { min-height:0; }
-.driving-workspace .viewer-controls { flex-wrap:wrap; gap:8px; }
-.driving-workspace .viewer-controls .inline-controls { flex-wrap:wrap; gap:9px; }
-.driving-workspace .viewer-controls .button-row { display:flex; flex-wrap:wrap; gap:5px; }
-.driving-workspace .sensor-card { padding:9px 11px; }
-.driving-workspace .sensor-card .card-title { margin-bottom:5px; }
-.driving-workspace .sensor-sources,.driving-workspace .sensor-details { display:none; }
-.driving-workspace .sensor-status-strip>div { padding:3px 6px; }
-.driving-workspace .sensor-status-strip>div { font-size:8px; line-height:1.4; }
-.driving-workspace .sensor-status-strip>div>span { display:inline; margin-right:6px; font-size:7px; }
-.driving-workspace .sensor-status-strip strong { display:inline; font-size:9px; line-height:1.4; }
-.driving-workspace .sensor-attitude-layout { margin:6px 0; gap:8px; }
-.driving-workspace .sensor-compass-panel { padding:5px 7px; }
-.driving-workspace .sensor-compass-panel .compass-stage { max-width:150px; margin:2px auto 4px; }
-.driving-workspace .compass-reference { font-size:7px; }
-.driving-workspace .compass-reference-label { font-size:7px; }
-.driving-workspace .compass-panel-title { margin-bottom:1px; }
-.driving-workspace .compass-panel-title h3 { font-size:10px; }
-.driving-workspace .compass-heading { padding:2px 4px; min-width:67px; }
-.driving-workspace .compass-heading-value { font-size:18px; }
+.driver-keyboard>span { margin-left:auto; color:var(--faint); font-size:8px; }
+.driver-controls-help { margin-top:6px; color:var(--faint); font-size:8px; }
+.driver-controls-help summary { display:flex; align-items:center; justify-content:space-between; cursor:pointer; list-style:none; }
+.driver-controls-help svg { display:block; width:11px; height:11px; }
+.driver-help { position:absolute; bottom:calc(100% + 8px); left:0; width:100%; margin:0; padding:10px; border:1px solid var(--line-strong); border-radius:6px; background:var(--panel); color:var(--muted); font-size:10px; line-height:1.7; }
+.driver-keyboard-hint { display:none; margin-top:5px; color:var(--warn); font-size:8px; }
+
+.driver-instrument-grid { position:absolute; z-index:30; left:12px; bottom:12px; width:clamp(270px,29%,390px); display:grid; gap:6px; margin:0; }
+.driving-workspace .sensor-card { padding:9px; }
+.driving-workspace .sensor-card .card-title { margin-bottom:7px; }
+.driving-workspace .sensor-card .card-title h2 { font-size:11px; }
+.driving-workspace .sensor-card .card-title svg { width:12px; height:12px; }
+.driving-workspace .sensor-panel-actions .small-button { min-height:23px; padding:3px 5px; font-size:8px; }
+.driving-workspace .sensor-sources,.driving-workspace .sensor-status-strip,.driving-workspace .sensor-details,.driving-workspace .sensor-navigation,.driving-workspace .sensor-motion,.driving-workspace .sensor-card .panel-caption { display:none; }
+.driving-workspace .sensor-attitude-layout { grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; gap:7px; margin:0; }
+.driving-workspace .sensor-attitude-layout.compass-hidden { grid-template-columns:minmax(0,1fr); }
+.driving-workspace .sensor-attitude-layout>.sensor-instruments { display:contents; container-type:normal; }
+.driving-workspace .imu-euler-values { grid-column:1/-1; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; }
+.driving-workspace .imu-euler-values>div { padding:4px 5px; }
+.driving-workspace .imu-euler-values dt { font-size:7px; gap:3px; }
+.driving-workspace .imu-euler-values dt span { font-size:8px; }
+.driving-workspace .imu-euler-values dd { margin-top:2px; }
+.driving-workspace .imu-euler-values b { font-size:15px; }
+.driving-workspace .imu-euler-values small { font-size:8px; }
+.driving-workspace .imu-horizon-panel { grid-column:1; align-self:center; }
+.driving-workspace .ah-instrument { max-width:156px; margin:auto; }
+.driving-workspace .imu-horizon-caption { font-size:7px; }
+.driving-workspace .sensor-compass-panel { grid-column:2; grid-row:2; padding:5px; max-width:none; }
+.driving-workspace .compass-panel-title { gap:3px; margin-bottom:3px; }
+.driving-workspace .compass-panel-title h3 { font-size:9px; }
+.driving-workspace .compass-panel-title svg { width:10px; height:10px; }
+.driving-workspace .compass-panel-reference,.driving-workspace .compass-reference-label,.driving-workspace .compass-readouts,.driving-workspace .compass-footer { display:none; }
+.driving-workspace .compass-reference { justify-content:center; font-size:7px; }
+.driving-workspace .sensor-compass-panel .compass-stage { max-width:146px; margin:3px auto; }
+.driving-workspace .compass-heading { min-width:60px; padding:2px 3px; }
+.driving-workspace .compass-heading-value { font-size:17px; }
 .driving-workspace .compass-heading-name { font-size:6px; }
-.driving-workspace .compass-degree { font-size:13px; }
-.driving-workspace .compass-cardinal { font-size:22px; }
-.driving-workspace .compass-readouts { padding:4px 0; }
-.driving-workspace .compass-readout { padding:0 3px; }
-.driving-workspace .compass-readout dt { font-size:8px; gap:3px; }
-.driving-workspace .compass-readout dd { margin-top:2px; font-size:10px; }
-.driving-workspace .compass-footer { padding-top:3px; font-size:8px; }
-.driving-workspace .ah-instrument { max-width:160px; }
-.driving-workspace .sensor-navigation dl { padding:2px 7px; }
-.driving-workspace .sensor-navigation dl>div { padding:2px 0; }
-.driving-workspace .sensor-navigation dt { font-size:8px; }
-.driving-workspace .sensor-navigation dd { font-size:10px; }
-.driving-workspace .sensor-card .panel-caption { display:none; }
-/* 放大只改变现有媒体的布局，不重建视频、地图或接管会话。锁住背景滚动。 */
+.driver-model-preview { position:relative; border:1px solid var(--line); border-radius:6px; background:var(--panel); }
+.driver-model-preview summary { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:5px 9px; font-size:9px; color:var(--muted); cursor:pointer; list-style:none; }
+.driver-model-preview summary>span { display:flex; align-items:center; gap:6px; }
+.driver-model-preview summary svg { display:block; width:12px; height:12px; }
+.driver-model-preview[open] summary>svg { transform:rotate(180deg); }
+.driver-model-preview>.workspace-slot { position:absolute; bottom:calc(100% + 8px); left:0; width:100%; }
+.driving-workspace .attitude-card { padding:10px; }
+.driving-workspace .attitude-card .card-title { margin-bottom:7px; }
+.driving-workspace .attitude-card .card-title h2 { font-size:11px; }
+.driving-workspace #boatCanvas { height:180px; }
+.driving-workspace .attitude-stage { min-height:0; }
+.driving-workspace .viewer-controls,.driving-workspace .viewer-controls .inline-controls,.driving-workspace .viewer-controls .button-row { flex-wrap:wrap; gap:6px; }
+.driving-workspace .viewer-status { font-size:8px; }
+
+.driver-propulsion { position:absolute; z-index:30; right:12px; bottom:62px; width:clamp(220px,23%,320px); padding:9px; border:1px solid var(--line); border-radius:var(--radius); background:var(--panel); }
+.driver-propulsion .driver-panel-title { padding-bottom:8px; margin-bottom:8px; }
+.driving-workspace .motors { grid-template-columns:repeat(2,minmax(0,1fr)); height:auto; min-height:0; gap:7px; }
+.driving-workspace .motor { padding:7px; }
+.driving-workspace .motor .card-title { flex-wrap:wrap; gap:4px; margin-bottom:0; }
+.driving-workspace .motor .card-title h3 { font-size:9px; }
+.driving-workspace .motor .title-with-icon { gap:0; }
+.driving-workspace .motor .card-icon,.driving-workspace .motor-dial,.driving-workspace .motor-extra,.driving-workspace .motor-rpm p { display:none; }
+.driving-workspace .motor .state { font-size:7px; padding:2px 3px; }
+.driving-workspace .motor-main { display:grid; grid-template-columns:minmax(0,1fr); gap:5px; margin:8px 0; }
+.driving-workspace .motor-rpm strong { font-size:21px; }
+.driving-workspace .motor-rpm>span { font-size:7px; margin-left:3px; }
+.driving-workspace .motor-output { display:flex; align-items:baseline; gap:5px; text-align:left; }
+.driving-workspace .motor-output strong { font-size:14px; }
+.driving-workspace .motor-output strong small,.driving-workspace .motor-output p { font-size:8px; }
+.driving-workspace .motor-values { grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px 4px; padding:8px 0 0; border-bottom:0; }
+.driving-workspace .motor-values>div,.driving-workspace .motor-values>div:nth-child(3) { padding:0; border:0; }
+.driving-workspace .motor-values span { font-size:7px; }
+.driving-workspace .motor-values b { font-size:10px; }
+.driving-workspace .motor-values small { font-size:7px; margin-left:1px; }
+
+/* 透明度只作用于读数和仪表，隐藏时释放底图的鼠标和键盘焦点。 */
+.driving-workspace [data-driver-overlay] { opacity:var(--driver-overlay-opacity,.9); }
+.driving-workspace[data-overlay-hidden="true"] [data-driver-overlay],.driving-workspace[data-overlay-hidden="true"] .driver-notice { visibility:hidden; pointer-events:none; }
+.driver-focus-tools { position:absolute; z-index:50; top:59px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:7px; padding:6px 8px; border:1px solid var(--line-strong); border-radius:6px; background:var(--panel); color:var(--text); font-size:9px; }
+.driver-focus-tools label { display:flex; align-items:center; gap:5px; white-space:nowrap; }
+.driver-focus-tools output { min-width:29px; color:var(--blue); font-variant-numeric:tabular-nums; text-align:right; }
+.driver-focus-tools input { width:80px; margin:0; accent-color:var(--blue); }
 html[data-driver-focus="true"],html[data-driver-focus="true"] body { overflow:hidden; }
-.driving-workspace[data-focus] { position:fixed; z-index:900; inset:0; isolation:isolate; width:100%; height:100dvh; min-height:0; margin:0; overflow:hidden; background:var(--panel); }
-.driving-workspace[data-focus] .driver-media-grid { position:absolute; z-index:0; inset:0; display:block; }
-.driving-workspace[data-focus] .driver-region { position:absolute; inset:0; display:flex; }
-/* 此规则须位于通用 display:flex 后，防止另一个媒体覆盖当前放大画面。 */
-.driving-workspace[data-focus="video"] .driver-region-map,.driving-workspace[data-focus="map"] .driver-region-video { display:none; }
-.driving-workspace[data-focus] .driver-region>.workspace-slot { position:absolute; inset:0; min-height:0; }
-.driving-workspace[data-focus] .driver-region>.workspace-slot>.card { position:absolute; inset:0; height:auto; min-height:0; padding:0; overflow:hidden; border-color:transparent; background:transparent; box-shadow:none; }
-.driving-workspace[data-focus="video"] .driver-region-video .video-stage,
-.driving-workspace[data-focus="map"] .driver-region-map .map-stage { position:absolute; inset:0; width:100%; height:100%; min-height:0; max-height:none; aspect-ratio:auto; border:0; border-radius:0; }
-.driving-workspace[data-focus="video"] .driver-region-video #boatVideo { object-fit:contain; }
-.driving-workspace[data-focus="video"] .driver-region-video #boatVideo { max-height:none; }
-.driving-workspace[data-focus="video"] .driver-region-video .video-toolbar { position:absolute; z-index:12; left:12px; bottom:12px; max-width:calc(100% - 180px); padding:6px; border:1px solid var(--line-strong); border-radius:6px; background:color-mix(in srgb,var(--panel) 82%,transparent); backdrop-filter:blur(8px); }
-.driving-workspace[data-focus="video"] .driver-region-video .video-status { flex:0 1 auto; }
-.driving-workspace[data-focus="map"] .driver-region-map .map-controls,
-.driving-workspace[data-focus="map"] .driver-region-map .vector-info,
-.driving-workspace[data-focus="map"] .driver-region-map .map-footer { position:absolute; z-index:650; left:12px; bottom:40px; margin:0; padding:6px; border:1px solid var(--line-strong); border-radius:5px; background:color-mix(in srgb,var(--panel) 82%,transparent); backdrop-filter:blur(8px); }
-.driving-workspace[data-focus="map"] .driver-region-map .vector-info { bottom:82px; }
-.driving-workspace[data-focus="map"] .driver-region-map .map-footer { bottom:12px; }
-.driving-workspace[data-focus] .driver-region-toolbar { position:absolute; z-index:680; top:10px; left:10px; margin:0; padding:5px; border:1px solid var(--line-strong); border-radius:5px; background:color-mix(in srgb,var(--panel) 82%,transparent); backdrop-filter:blur(8px); }
-.driving-workspace[data-focus] .driver-region-toolbar .small-button { min-height:27px; }
-.driving-workspace[data-focus] .driver-console { position:absolute; z-index:700; top:56px; left:12px; width:min(600px,calc(100% - 24px)); margin:0; padding:0; border:0; background:transparent; box-shadow:none; pointer-events:none; }
-/* 急停的祖先不能添加 backdrop-filter/transform，否则 fixed 会被限制在控制台内。 */
-.driving-workspace[data-focus] .driver-console-heading,.driving-workspace[data-focus] .driver-inputs { padding:9px 11px; border:1px solid var(--line-strong); border-radius:6px; background:color-mix(in srgb,var(--panel) 94%,transparent); pointer-events:auto; }
-.driving-workspace[data-focus] .driver-console-heading { gap:7px; }
-.driving-workspace[data-focus] .driver-console-heading h2 { font-size:14px; }
-.driving-workspace[data-focus] .driver-actions { gap:5px; }
-.driving-workspace[data-focus] .driver-actions button { padding:6px 8px; }
-.driving-workspace[data-focus] .driver-telemetry,.driving-workspace[data-focus] .driver-notice { padding:8px 11px; margin-top:6px; border:1px solid var(--line-strong); border-radius:6px; background:var(--panel); opacity:var(--driver-overlay-opacity,.9); }
-.driving-workspace[data-focus] .driver-inputs { gap:5px 9px; margin-top:6px; }
-.driving-workspace[data-focus] .driver-keyboard,.driving-workspace[data-focus] .driver-help,.driving-workspace[data-focus] .driver-keyboard-hint { display:none; }
-.driving-workspace[data-focus] .driver-instrument-grid { position:absolute; z-index:660; right:12px; bottom:72px; width:min(880px,calc(100% - 24px)); grid-template-columns:minmax(180px,.7fr) minmax(0,1.8fr); gap:8px; margin:0; opacity:var(--driver-overlay-opacity,.9); }
-.driving-workspace[data-focus] .driver-instrument-grid .card { margin:0; padding:9px 11px; }
-.driving-workspace[data-focus] #boatCanvas { height:150px; }
-.driving-workspace[data-focus] .attitude-card .card-title { margin-bottom:5px; }
-.driving-workspace[data-focus] .sensor-attitude-layout { grid-template-columns:minmax(0,1.35fr) minmax(170px,.9fr); align-items:center; gap:8px; }
-.driving-workspace[data-focus] .sensor-attitude-layout.compass-hidden { grid-template-columns:minmax(0,1fr); }
-.driving-workspace[data-focus] .sensor-instruments { grid-template-columns:minmax(56px,.7fr) minmax(0,1.4fr); gap:8px; }
-.driving-workspace[data-focus] .sensor-motion { display:none; }
-.driving-workspace[data-focus] .ah-instrument { max-width:150px; }
-.driving-workspace[data-focus] .sensor-compass-panel { max-width:none; }
-.driving-workspace[data-focus] .sensor-compass-panel .compass-stage { max-width:130px; }
-.driving-workspace[data-focus] .compass-footer { font-size:7px; }
-/* 完全隐藏的仪表不拦截底图拖动、视频操作或键盘焦点。控制按钮始终保持可见。 */
-.driving-workspace[data-focus][data-overlay-hidden="true"] .driver-instrument-grid,
-.driving-workspace[data-focus][data-overlay-hidden="true"] .driver-telemetry,
-.driving-workspace[data-focus][data-overlay-hidden="true"] .driver-notice { visibility:hidden; pointer-events:none; }
-.driving-workspace[data-focus] .driver-focus-tools { position:absolute; z-index:720; top:10px; right:12px; display:flex; align-items:center; gap:8px; padding:6px 9px; border:1px solid var(--line-strong); border-radius:5px; background:color-mix(in srgb,var(--panel) 88%,transparent); color:var(--text); font-size:10px; backdrop-filter:blur(8px); }
-.driving-workspace[data-focus] .driver-focus-tools[hidden] { display:none; }
-.driving-workspace[data-focus] .driver-focus-tools label { display:flex; align-items:center; gap:7px; white-space:nowrap; }
-.driving-workspace[data-focus] .driver-focus-tools output { min-width:34px; color:var(--blue); font-variant-numeric:tabular-nums; text-align:right; }
-.driving-workspace[data-focus] .driver-focus-tools input { width:110px; margin:0; accent-color:var(--blue); }
-.driving-workspace[data-focus] .driver-emergency { right:16px; bottom:16px; opacity:1; pointer-events:auto; }
+.driving-workspace[data-focus] { position:fixed; z-index:900; inset:0; width:100%; height:100dvh; min-height:0; margin:0; border:0; border-radius:0; }
+.driving-workspace[data-focus] .driver-emergency { right:16px; bottom:16px; }
 [data-theme="light"] button.driver-emergency { color:#bd394b; }
-@media (min-width:1400px) { .driving-workspace .sensor-attitude-layout { margin-top:8px; } }
-@media (max-width:1100px) {
-  .driver-media-grid { grid-template-columns:minmax(0,1fr); }
-  .driver-instrument-grid { grid-template-columns:minmax(240px,.9fr) minmax(0,1.1fr); }
-  .driver-telemetry strong { font-size:16px; }
-  .driver-console-heading h2 { font-size:14px; }
-  .driving-workspace .sensor-compass-panel .compass-stage { max-width:180px; }
+
+@media (min-width:761px) and (max-width:1200px) {
+  .driving-workspace { --driver-pip-width:242px; --driver-pip-height:208px; --driver-console-width:calc(100% - 310px); min-height:760px; }
+  .driver-navigation-data { width:264px; }
+  .driver-instrument-grid { width:274px; }
+  .driver-console { left:auto; right:12px; }
+  .driver-propulsion { top:232px; bottom:auto; width:242px; }
+  .driver-propulsion .motor-main { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px; margin:6px 0; }
+  .driver-propulsion .motor-rpm strong { font-size:18px; }
+  .driver-propulsion .motor-output strong { font-size:12px; }
+  .driver-propulsion .motor-output p,.driver-propulsion .motor-values>div:nth-child(n+3) { display:none; }
+  .driver-region-toolbar small { display:none; }
+  .driver-focus-tools { top:64px; left:auto; right:calc(var(--driver-pip-width) + 24px); transform:none; flex-direction:column; gap:4px; }
+  .driver-focus-tools input { width:72px; }
+  .driving-workspace .video-toolbar { max-width:264px; }
 }
 @media (max-width:760px) {
-  .driver-instrument-grid { grid-template-columns:minmax(0,1fr); }
-  .driver-actions { margin-left:0; width:100%; }
-  .driver-keyboard { margin-left:0; }
-  .driver-telemetry { grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px 0; }
-  .driver-telemetry>div:nth-child(4) { padding-left:0; border-left:0; }
+  .driving-workspace { --driver-pip-width:calc(48% - 12px); --driver-pip-height:180px; --driver-console-width:calc(100% - 16px); min-height:960px; }
+  .driver-navigation-data { top:48px; left:8px; width:calc(52% - 12px); padding:8px; }
+  .driver-panel-title { gap:4px; padding-bottom:6px; font-size:9px; }
+  .driver-panel-title>strong { display:none; }
+  .driver-position { grid-template-columns:minmax(0,1fr); gap:5px; margin:7px 0; }
+  .driver-position span { font-size:7px; }
+  .driver-position b { font-size:11px; }
+  .driver-telemetry { grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px 5px; padding:7px 0; }
+  .driver-telemetry>div { grid-column:auto; }
+  .driver-telemetry>div:nth-child(3),.driver-telemetry>div:nth-child(n+4) { grid-column:1/-1; }
   .driver-telemetry strong { font-size:16px; }
-  .driver-keyboard-hint { display:block; }
-  .driver-inputs { gap:12px; }
-  .driving-workspace .video-stage,.driving-workspace .map-stage { min-height:220px; height:300px; }
+  .driver-telemetry>div:nth-child(3)>span { display:inline; margin-right:5px; }
+  .driver-telemetry>div:nth-child(3)>strong { font-size:13px; }
+  .driver-source-status { gap:4px; padding-top:6px; font-size:7px; }
+  .driver-region-toolbar { top:8px; left:8px; transform:none; gap:6px; padding:4px 6px; }
   .driver-region-toolbar small { display:none; }
-  .driver-region-toolbar .small-button { font-size:9px; }
-  .driving-workspace[data-focus] .driver-focus-tools { top:auto; left:8px; right:auto; bottom:12px; gap:5px; padding:6px; }
-  .driving-workspace[data-focus] .driver-focus-tools input { width:65px; }
-  .driving-workspace[data-focus] .driver-console { top:52px; left:8px; width:min(430px,calc(100% - 16px)); }
-  .driving-workspace[data-focus] .driver-console-heading { gap:6px; }
-  .driving-workspace[data-focus] .driver-console-heading h2 { font-size:12px; }
-  .driving-workspace[data-focus] .driver-actions { width:auto; margin-left:auto; }
-  .driving-workspace[data-focus] .driver-actions button { min-height:28px; padding:5px 7px; }
-  .driving-workspace[data-focus] .driver-instrument-grid { right:8px; bottom:114px; width:min(430px,calc(100% - 16px)); grid-template-columns:minmax(0,1fr); gap:5px; }
-  .driving-workspace[data-focus] .driver-instrument-grid .workspace-slot:first-child { display:none; }
-  .driving-workspace[data-focus] .sensor-attitude-layout { grid-template-columns:minmax(0,1.3fr) minmax(110px,1fr); gap:5px; }
-  .driving-workspace[data-focus] .sensor-instruments { grid-template-columns:50px minmax(0,1fr); gap:4px; }
-  .driving-workspace[data-focus] .imu-euler-values>div { padding:4px; }
-  .driving-workspace[data-focus] .imu-euler-values b { font-size:16px; }
-  .driving-workspace[data-focus] .sensor-compass-panel { padding:4px; }
-  .driving-workspace[data-focus] .compass-panel-reference,.driving-workspace[data-focus] .compass-reference-label { display:none; }
-  .driving-workspace[data-focus] .compass-heading-value { font-size:15px; }
-  .driving-workspace[data-focus] .compass-heading { min-width:55px; }
-  .driving-workspace[data-focus] .compass-readouts { grid-template-columns:repeat(2,minmax(0,1fr)); }
-  .driving-workspace[data-focus] .compass-readout-speed { display:none; }
-  .driving-workspace[data-focus] .sensor-navigation dl { padding:2px 5px; }
-  .driving-workspace[data-focus] .sensor-navigation dt { font-size:7px; }
-  .driving-workspace[data-focus] .sensor-navigation dd { font-size:9px; }
-  .driving-workspace[data-focus="map"] .driver-region-map .map-controls { bottom:51px; left:8px; max-width:calc(100% - 16px); }
-  .driving-workspace[data-focus="map"] .driver-region-map .map-controls>.button-row { display:flex; flex-wrap:wrap; }
-  .driving-workspace[data-focus="map"] .driver-region-map .map-footer,.driving-workspace[data-focus="map"] .driver-region-map .vector-info { display:none; }
-  .driving-workspace[data-focus="video"] .driver-region-video .video-toolbar { left:8px; bottom:51px; max-width:calc(100% - 16px); }
-  .driving-workspace[data-focus="video"] .driver-region-video .video-status { display:none; }
-  .driving-workspace[data-focus] .driver-emergency { right:8px; bottom:12px; min-width:108px; }
-}
-@media (min-width:761px) and (max-height:650px) {
-  .driving-workspace[data-focus] .driver-console { width:47%; }
-  .driving-workspace[data-focus] .driver-instrument-grid { width:48%; grid-template-columns:minmax(0,1fr); }
-  .driving-workspace[data-focus] .driver-instrument-grid .workspace-slot:first-child { display:none; }
-}
-/* 手机短屏保留船速、姿态和航向，收起重复定位读数，为主画面和控制留出空间。 */
-@media (max-width:760px) and (max-height:850px) {
-  .driving-workspace[data-focus] .driver-notice { padding:5px 8px; }
-  .driving-workspace[data-focus] .driver-telemetry>div:nth-child(n+4) { display:none; }
-  .driving-workspace[data-focus] .driver-heading[data-disabled="true"],
-  .driving-workspace[data-focus] #driverHoldHeading:disabled { display:none; }
-  .driving-workspace[data-focus] .driver-instrument-grid .sensor-navigation,
-  .driving-workspace[data-focus] .compass-reference,
-  .driving-workspace[data-focus] .compass-footer { display:none; }
-  .driving-workspace[data-focus] .ah-instrument { max-width:104px; }
-  .driving-workspace[data-focus] .sensor-compass-panel .compass-stage { max-width:100px; }
+  .driver-region-toolbar>span { font-size:9px; gap:4px; }
+  .driver-region-toolbar .small-button { min-height:24px; padding:3px 5px; font-size:8px; white-space:nowrap; }
+  .driving-workspace[data-primary="video"] .driver-region-map,.driving-workspace[data-primary="map"] .driver-region-video { top:48px; right:8px; }
+  .driving-workspace[data-primary="video"] .driver-region-map .driver-region-toolbar,.driving-workspace[data-primary="map"] .driver-region-video .driver-region-toolbar { height:32px; padding:4px 5px; }
+  .driving-workspace[data-primary="video"] .driver-region-map>.workspace-slot,.driving-workspace[data-primary="map"] .driver-region-video>.workspace-slot { top:32px; }
+  .driver-focus-tools { top:8px; left:auto; right:8px; transform:none; gap:4px; padding:5px; font-size:8px; }
+  .driver-focus-tools input { width:46px; }
+  .driver-focus-tools output { min-width:25px; }
+  .driver-console { bottom:58px; left:8px; padding:8px; }
+  .driver-console-heading h2 { font-size:11px; }
+  .driver-actions button { min-height:28px; padding:5px 6px; font-size:9px; }
+  .driver-notice { margin:5px 0; font-size:8px; }
+  .driver-inputs { gap:6px 8px; padding-top:6px; }
+  .driver-inputs>label { font-size:8px; }
+  .driver-inputs select { min-height:26px; }
+  .driver-heading input { width:62px; min-height:26px; }
+  .driver-keyboard { display:none; }
+  .driver-keyboard-hint { display:block; }
+  .driver-instrument-grid { left:8px; bottom:282px; width:calc(100% - 16px); }
+  .driving-workspace .sensor-card { padding:7px; }
+  .driving-workspace .sensor-attitude-layout { gap:5px; }
+  .driving-workspace .ah-instrument,.driving-workspace .sensor-compass-panel .compass-stage { max-width:112px; }
+  .driving-workspace .imu-euler-values b { font-size:13px; }
+  .driving-workspace .imu-euler-values>div { padding:3px 4px; }
+  .driving-workspace .compass-heading-value { font-size:15px; }
+  .driver-propulsion { display:none; }
+  .driver-actions button.driver-emergency { right:12px; bottom:12px; min-width:126px; }
+  .driving-workspace .video-toolbar { top:240px; left:auto; right:8px; bottom:auto; width:calc(48% - 12px); padding:5px; }
+  .driving-workspace .video-status { font-size:8px; }
+  .driving-workspace .video-buttons button { font-size:8px; padding:3px 5px; }
+  .driving-workspace .map-controls { left:auto; right:8px; top:240px; max-width:calc(48% - 12px); }
+  .driving-workspace[data-primary="map"] .driver-region-video .video-status { display:none; }
+  .driving-workspace[data-focus] .driver-navigation-data .driver-position,.driving-workspace[data-focus] .driver-telemetry>div:nth-child(n+4) { display:none; }
+  .driving-workspace[data-focus] .driver-navigation-data { top:48px; }
+  .driving-workspace[data-focus] .driver-instrument-grid { bottom:240px; }
+  .driving-workspace[data-focus] .sensor-card>.card-title,.driving-workspace[data-focus] .driver-model-preview { display:none; }
+  .driving-workspace[data-focus] .ah-instrument,.driving-workspace[data-focus] .sensor-compass-panel .compass-stage { max-width:90px; }
+  .driving-workspace[data-focus] .driver-source-status>span:last-child { display:none; }
+  .driving-workspace[data-focus][data-primary="video"] .driver-region-video .video-toolbar { top:188px; left:8px; right:auto; width:calc(52% - 12px); }
+  .driving-workspace[data-focus][data-primary="video"] .driver-region-video .video-status { display:none; }
+  .driving-workspace[data-focus] .map-controls { top:188px; left:8px; right:auto; max-width:calc(52% - 12px); padding:4px; gap:5px; flex-wrap:nowrap; overflow-x:auto; scrollbar-width:thin; }
+  .driving-workspace[data-focus] .map-controls>.button-row { flex:0 0 auto; width:max-content; flex-wrap:nowrap; }
+  .driving-workspace[data-focus] .map-controls button { flex:0 0 auto; white-space:nowrap; }
+  .driving-workspace[data-focus] .map-controls>.switch-label { flex-shrink:0; }
+  .driving-workspace[data-primary="map"] .driver-region-map .map-layer-label { display:none; }
+  .driving-workspace[data-primary="map"] .driver-region-map .map-north,.driving-workspace[data-primary="map"] .driver-region-map .leaflet-control-zoom,.driving-workspace[data-primary="map"] .driver-region-map .boat-map-zoom { display:none; }
 }
 @media (max-width:400px) {
-  .driver-actions button { font-size:9px; padding:6px 8px; }
-  .driver-telemetry>div { padding:0 7px; }
-  .driver-inputs select { max-width:130px; }
-  .driver-telemetry>div:nth-child(n+4) strong { font-size:11px; }
-  .driver-heading { flex-basis:100%; }
-  .driving-workspace .video-details { grid-template-columns:minmax(0,1fr); }
-  .driving-workspace #boatCanvas { height:auto; aspect-ratio:16/10; }
+  .driver-region-toolbar>span>svg { display:none; }
+  .driver-focus-tools input { width:36px; }
+  .driver-focus-tools { gap:3px; }
+  .driver-focus-tools label { gap:3px; }
+  .driver-region-toolbar { gap:4px; }
+  .driving-workspace .video-buttons { gap:3px; }
 }

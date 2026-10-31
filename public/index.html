@@ -99,7 +99,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.34.0</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.36.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -269,22 +269,28 @@
         <a href="#diagnostics" data-view-link><span class="card-icon neutral" data-icon="activity"></span><div><strong>通信诊断</strong><p>检查链路、数据帧和遥控状态</p></div><span data-icon="arrow"></span></a>
       </div>
       </section>
-      <section id="view-driving" class="workspace-view driving-workspace" data-workspace-view="driving" aria-labelledby="viewTitle" hidden>
+      <section id="view-driving" class="workspace-view driving-workspace" data-workspace-view="driving" data-primary="video" aria-labelledby="viewTitle" hidden>
+        <article class="card driver-navigation-data" aria-label="实时航行数据" data-driver-overlay>
+          <div class="driver-panel-title"><span><i data-icon="activity"></i>实时航行数据</span><strong id="driverBoatName">未选择无人船</strong></div>
+          <div class="driver-position"><div><span>纬度 · WGS84</span><b id="driverLatitude">--</b></div><div><span>经度 · WGS84</span><b id="driverLongitude">--</b></div></div>
+          <div class="driver-telemetry" aria-label="驾驶实时读数"><div><span>实际船速</span><strong id="driverActualSpeed">--</strong><small>m/s</small></div><div><span>目标船速</span><strong id="driverTargetSpeed">--</strong><small>m/s</small></div><div><span>船头航向</span><strong id="driverActualHeading">--</strong><small>°</small></div><div><span>实际控制模式</span><strong id="driverActualMode">--</strong></div><div><span>键盘推进 / 转向</span><strong id="driverInput">0% / 0%</strong></div></div>
+          <div class="driver-source-status"><span id="driverFixStatus">等待定位</span><span id="driverImuStatus">等待 IMU</span></div>
+        </article>
         <article class="card driver-console" aria-label="驾驶操控控制台">
-          <div class="driver-console-heading"><div><span class="driver-eyebrow">PILOT STATION</span><h2>驾驶操控 <span id="driverBoatName">未选择无人船</span></h2></div><span id="driverState" class="driver-state" data-state="idle">监测待机</span><div class="driver-actions"><button id="driverTestMode" type="button" class="driver-test-mode" aria-pressed="false" title="真实 PWM 开环，跳过电调反馈和停稳检查；先停止操控才能切换" hidden disabled>测试场景：关</button><button id="driverEnable" type="button" class="primary" disabled>启用操控</button><button id="driverRelease" type="button" class="ghost" disabled>停船并退出操控</button><button id="driverEmergency" type="button" class="driver-emergency" disabled><span data-icon="power"></span>急停 · SPACE</button></div></div>
+          <div class="driver-console-heading"><div><span class="driver-eyebrow">PILOT STATION</span><h2>驾驶操控</h2></div><span id="driverState" class="driver-state" data-state="idle">监测待机</span><div class="driver-actions"><button id="driverTestMode" type="button" class="driver-test-mode" aria-pressed="false" title="真实 PWM 开环，跳过电调反馈和停稳检查；先停止操控才能切换" hidden disabled>测试场景：关</button><button id="driverEnable" type="button" class="primary" disabled>启用操控</button><button id="driverRelease" type="button" class="ghost" disabled>停船并退出操控</button><button id="driverEmergency" type="button" class="driver-emergency" disabled><span data-icon="power"></span>急停 · SPACE</button></div></div>
           <p id="driverNotice" class="driver-notice" role="status" aria-live="polite">选择在线无人船，由管理员启用操控后使用键盘驾驶。</p>
           <p id="driverTestNotice" class="driver-test-notice" role="status" hidden>测试场景 · 真实 PWM 输出 · 电调反馈 / RTK / IMU 可离线。<span id="driverTestAck">尚未接管</span></p>
-          <div class="driver-telemetry" aria-label="驾驶实时读数"><div><span>实际船速</span><strong id="driverActualSpeed">--</strong><small>m/s</small></div><div><span>目标船速</span><strong id="driverTargetSpeed">--</strong><small>m/s</small></div><div><span>船头航向</span><strong id="driverActualHeading">--</strong><small>°</small></div><div><span>实际控制模式</span><strong id="driverActualMode">--</strong></div><div><span>键盘推进 / 转向</span><strong id="driverInput">0% / 0%</strong></div></div>
           <div class="driver-inputs"><label>控制模式<select id="driverMode"><option value="0">PWM 油门</option><option value="1" selected>船速闭环</option><option value="2">航向闭环</option></select></label><label class="driver-limit">运动幅度 <output id="driverLimitValue" for="driverLimit">20%</output><input id="driverLimit" type="range" min="5" max="100" step="5" value="20" aria-label="键盘运动幅度百分比"></label><label class="driver-heading">目标航向 · 真北<input id="driverHeading" type="number" min="0" max="359.99" step="1" value="0" inputmode="decimal"><span>°</span></label><button id="driverHoldHeading" type="button" class="small-button">取当前航向</button><div class="driver-keyboard" aria-label="键盘操作说明"><div class="driver-key-row"><kbd data-driver-key="KeyW">W / ↑</kbd></div><div class="driver-key-row"><kbd data-driver-key="KeyA">A / ←</kbd><kbd data-driver-key="KeyS">S / ↓</kbd><kbd data-driver-key="KeyD">D / →</kbd></div><span>按住运动，松开归零</span></div></div>
-          <p class="driver-help">W/S 前进后退，A/D 左右转向；启用航向模式时以当前船头为目标；A/D 调整目标航向，松键后仍可能自动转向，需急停或退出操控才能撤去全部输出。空格急停。切换模式先归零，失焦、离开驾驶页或断连会停船并退出操控，重新启用后才可继续。</p>
+          <details class="driver-controls-help"><summary>按键与保护说明 <i data-icon="help"></i></summary><p class="driver-help">W/S 前进后退，A/D 左右转向；启用航向模式时以当前船头为目标；A/D 调整目标航向，松键后仍可能自动转向，需急停或退出操控才能撤去全部输出。空格急停。切换模式先归零，失焦、离开驾驶页或断连会停船并退出操控，重新启用后才可继续。</p></details>
           <p class="driver-keyboard-hint">建议使用带实体键盘的电脑；手机端可查看驾驶画面。</p>
         </article>
         <div class="driver-media-grid">
-          <section class="driver-region driver-region-video" data-driver-region="video" aria-label="驾驶图传画面"><div class="driver-region-toolbar"><span><i data-icon="video"></i>前方视野 <small>LIVE VIDEO</small></span><button id="driverVideoExpand" type="button" class="small-button" aria-pressed="false">放大图传</button></div><div class="workspace-slot" data-workspace-slot="driving-video"></div></section>
+          <section class="driver-region driver-region-video" data-driver-region="video" aria-label="驾驶图传画面"><div class="driver-region-toolbar"><span><i data-icon="video"></i>前方视野 <small>LIVE VIDEO</small></span><button id="driverVideoExpand" type="button" class="small-button" aria-pressed="false">全屏图传</button></div><div class="workspace-slot" data-workspace-slot="driving-video"></div></section>
           <section class="driver-region driver-region-map" data-driver-region="map" aria-label="驾驶导航地图"><div class="driver-region-toolbar"><span><i data-icon="map"></i>船位与航迹 <small>NAVIGATION</small></span><button id="driverMapExpand" type="button" class="small-button" aria-pressed="false">放大地图</button></div><div class="workspace-slot" data-workspace-slot="driving-map"></div></section>
         </div>
-        <div class="driver-instrument-grid"><div class="workspace-slot" data-workspace-slot="driving-model"></div><div class="workspace-slot" data-workspace-slot="driving-sensors"></div></div>
-        <div id="driverFocusTools" class="driver-focus-tools" hidden>
+        <div class="driver-instrument-grid" data-driver-overlay><div class="workspace-slot" data-workspace-slot="driving-sensors"></div><details id="driverModelPreview" class="driver-model-preview"><summary><span><i data-icon="boat"></i>三维船体预览</span><i data-icon="chevron"></i></summary><div class="workspace-slot" data-workspace-slot="driving-model"></div></details></div>
+        <section class="driver-propulsion" aria-label="电控与动力系统" data-driver-overlay><div class="driver-panel-title"><span><i data-icon="motor"></i>电控与动力</span><a href="#propulsion" data-view-link>详情 <i data-icon="arrow"></i></a></div><div class="workspace-slot" data-workspace-slot="driving-motors"></div></section>
+        <div id="driverFocusTools" class="driver-focus-tools">
           <label for="driverOverlayOpacity" title="0% 隐藏数据，100% 完全显示；操控与急停保持可见">数据可见度 <output id="driverOverlayOpacityValue" for="driverOverlayOpacity">90%</output></label>
           <input id="driverOverlayOpacity" type="range" min="0" max="100" step="5" value="90" aria-label="驾驶数据浮层可见度，0为隐藏100为完全显示">
         </div>
@@ -309,7 +315,7 @@
       </section>
       <section id="view-propulsion" class="workspace-view propulsion-workspace" data-workspace-view="propulsion" aria-labelledby="viewTitle" hidden>
         <section id="propulsion">
-          <h2 class="sr-only">推进系统</h2><div id="motors" class="grid motors" aria-label="双电机遥测"></div>
+          <h2 class="sr-only">推进系统</h2><div class="workspace-slot" data-workspace-slot="propulsion-motors"><div id="motors" class="grid motors" aria-label="双电机遥测"></div></div>
         </section>
         <aside class="workspace-note"><span data-icon="motor"></span><p>两路电机独立显示输出与反馈。机械转速用于运行监测，船速闭环使用 RTK 对地速度反馈。</p></aside>
       </section>
