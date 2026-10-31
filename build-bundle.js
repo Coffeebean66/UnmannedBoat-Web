@@ -25,10 +25,11 @@ if (process.argv.includes('--sync')) {
   const monitor = path.join(__dirname, '..', 'UnmannedBoat_Monitor');
   const utils = path.join(__dirname, 'public', 'utils');
   fs.mkdirSync(utils, { recursive: true });
+  // 网页船模与水线适配独立维护，不能被小程序的旧模型实现覆盖。
+  const webModelUtils = new Set(['glbModel.js', 'boatRenderer.js']);
   for (const file of fs.readdirSync(path.join(monitor, 'utils'))) {
-    if (file.endsWith('.js')) fs.copyFileSync(path.join(monitor, 'utils', file), path.join(utils, file));
+    if (file.endsWith('.js') && !webModelUtils.has(file)) fs.copyFileSync(path.join(monitor, 'utils', file), path.join(utils, file));
   }
-  fs.copyFileSync(path.join(monitor, 'assets/models/boat_mobile.glb'), path.join(__dirname, 'public/assets/boat_mobile.glb'));
   const index = fs.readFileSync(path.join(monitor, 'pages/index/index.js'), 'utf8');
   const context = { ...require(path.join(utils, 'headingParameters.js')) };
   vm.createContext(context);

@@ -76,6 +76,7 @@ test('静态服务器404、路径穿越、非法URL、HEAD及healthz',async(t)=>
   assert.equal((await request('/.git/config')).status,403);
   assert.equal((await request('/%')).status,400);
   assert.equal((await request('/','POST')).status,405);
-  const head=await request('/assets/boat_mobile.glb','HEAD');assert.equal(head.status,200);assert.equal(head.body,'');assert.ok(Number(head.headers['content-length'])>1000000);
+  const head=await request('/assets/boat_jnu_motors_v6.glb','HEAD');assert.equal(head.status,200);assert.equal(head.body,'');
+  assert.equal(Number(head.headers['content-length']),require('node:fs').statSync(require('node:path').join(__dirname,'../public/assets/boat_jnu_motors_v6.glb')).size);
   assert.equal(JSON.parse((await request('/healthz')).body).app,'unmanned-boat-web');
 });

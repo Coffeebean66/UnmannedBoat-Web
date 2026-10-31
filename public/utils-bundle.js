@@ -428,10 +428,11 @@ class BoatRenderer {
       for (const name of ['viewProjection', 'eye', 'time'])
         this.waterLocations[name] = gl.getUniformLocation(this.waterProgram, `u_${name}`);
       this.waterPosition = gl.getAttribLocation(this.waterProgram, 'a_position');
-      // 水平面固定在场景中，不乘船体姿态矩阵；略低于船体中心以展示吃水效果。
+      // 水平面固定在场景中，不随姿态旋转；按船模水线适配水下推进器。
+      const waterY = Number.isFinite(model.waterLevel) ? model.waterLevel : -0.16;
       this.water = this.buffer(gl.ARRAY_BUFFER, new Float32Array([
-        -8, -0.16, -8, -8, -0.16, 8, 8, -0.16, -8,
-        8, -0.16, -8, -8, -0.16, 8, 8, -0.16, 8
+        -8, waterY, -8, -8, waterY, 8, 8, waterY, -8,
+        8, waterY, -8, -8, waterY, 8, 8, waterY, 8
       ]));
       gl.enable(gl.DEPTH_TEST);
       gl.disable(gl.CULL_FACE); // 船模含双面甲板和天线，背面也要可见。
@@ -890,10 +891,16 @@ function parseGlb(input) {
   if (!primitives.length || !Number.isFinite(span) || span < 1e-8) fail('模型没有可见几何');
   const center = min.map((value, axis) => (value + max[axis]) / 2);
   const scale = 2.7 / span;
+  // 模型的显示水线以 glTF 世界坐标米为单位，随几何一起归一化。
+  // 新船模包含水下推进器，不能再用旧船模中心下方的固定偏移。
+  const waterline = document.asset.extras?.waterlineY;
+  if (waterline !== undefined && (!Number.isFinite(waterline) || waterline < min[1] || waterline > max[1]))
+    fail('模型水线高度无效');
+  const waterLevel = waterline === undefined ? -0.16 : (waterline - center[1]) * scale;
   for (const primitive of primitives)
     for (let i = 0; i < primitive.positions.length; i += 1)
       primitive.positions[i] = (primitive.positions[i] - center[i % 3]) * scale;
-  return { primitives, bounds: { min, max, center, scale } };
+  return { primitives, bounds: { min, max, center, scale }, waterLevel };
 }
 
 function computeNormals(positions, indices) {

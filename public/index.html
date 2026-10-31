@@ -94,7 +94,7 @@
     </nav>
     <section id="deviceSummary" class="vessel-summary" aria-label="当前连接设备" data-state="offline">
       <div class="vessel-summary-heading">当前设备<span id="sourceChip" class="chip">MQTT</span></div>
-      <div class="vessel-emblem"><img src="assets/boat-preview.png" width="640" height="280" alt="双体无人船模型" decoding="async"></div>
+      <div class="vessel-emblem"><img src="assets/boat-jnu-preview.png" width="640" height="280" alt="暨南大学双推进器无人船模型" decoding="async"></div>
       <strong id="deviceName">未选择无人船</strong><p id="sourceDescription">MQTT 云端 · 只读监测</p>
       <div class="vessel-link-state"><span id="deviceConnectionState" role="status">未连接</span><span class="vessel-link-bars" aria-hidden="true" title="连接状态指示，不代表信号强度"><i></i><i></i><i></i><i></i></span></div>
       <dl><div><dt>有效数据帧</dt><dd id="frameCount">0</dd></div><div><dt>最近更新</dt><dd><time id="deviceLastUpdate">--</time></dd></div><div title="估计 STM32 发出遥测至服务器收到的耗时；双向校时后估算，不含传感器采样。"><dt>船→云延迟</dt><dd id="deviceUplinkLatency">--</dd></div><div title="估计服务器收到遥测到当前浏览器接收的转发耗时，不含船端上报耗时，也不是往返延迟；未校时或缺少时间戳时显示未知。"><dt>转发延迟</dt><dd id="deviceLatency">--</dd></div><div title="船→云估计值加服务器→浏览器转发耗时；两段均有效时显示，不含传感器采样或画面绘制。"><dt>合计延迟（估算）</dt><dd id="deviceTotalLatency">--</dd></div></dl>
@@ -102,7 +102,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.39.0</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.40.0</span></div>
     </div>
   </aside>
   <div class="app-shell">

@@ -31,7 +31,7 @@ class AttitudeView {
     const token=this.loadToken=(this.loadToken||0)+1;
     this.stop();this.renderer?.dispose();this.renderer=null;this.error='正在加载船体模型…';this.status();
     try {
-      const response=await fetch('assets/boat_mobile.glb');if(!response.ok)throw Error('模型文件 HTTP '+response.status);
+      const response=await fetch('assets/boat_jnu_motors_v6.glb');if(!response.ok)throw Error('模型文件 HTTP '+response.status);
       const data=await response.arrayBuffer();if(token!==this.loadToken)return;
       this.renderer=new BoatModules.boatRenderer.BoatRenderer(this.canvas,BoatModules.glbModel.parseGlb(data));
       this.error=null;this.resize();this.status();this.schedule(true);

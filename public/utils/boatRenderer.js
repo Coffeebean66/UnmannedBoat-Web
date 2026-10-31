@@ -127,10 +127,11 @@ class BoatRenderer {
       for (const name of ['viewProjection', 'eye', 'time'])
         this.waterLocations[name] = gl.getUniformLocation(this.waterProgram, `u_${name}`);
       this.waterPosition = gl.getAttribLocation(this.waterProgram, 'a_position');
-      // 水平面固定在场景中，不乘船体姿态矩阵；略低于船体中心以展示吃水效果。
+      // 水平面固定在场景中，不随姿态旋转；按船模水线适配水下推进器。
+      const waterY = Number.isFinite(model.waterLevel) ? model.waterLevel : -0.16;
       this.water = this.buffer(gl.ARRAY_BUFFER, new Float32Array([
-        -8, -0.16, -8, -8, -0.16, 8, 8, -0.16, -8,
-        8, -0.16, -8, -8, -0.16, 8, 8, -0.16, 8
+        -8, waterY, -8, -8, waterY, 8, 8, waterY, -8,
+        8, waterY, -8, -8, waterY, 8, 8, waterY, 8
       ]));
       gl.enable(gl.DEPTH_TEST);
       gl.disable(gl.CULL_FACE); // 船模含双面甲板和天线，背面也要可见。
