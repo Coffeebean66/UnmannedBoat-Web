@@ -458,6 +458,10 @@
     try{await params.command(kind);}finally{syncParameterAccess();}
   });
   on('fillTuning',()=>params.tune());
+  on('applyControlAlgorithm',async()=>{
+    if(!$('settingsDialog').open||$('settingsDialog').dataset.deviceId!==cloud.selectedId)throw Error('调参对象已变化，请从对应无人船重新进入');
+    try{await params.applyAlgorithm();}finally{syncParameterAccess();}
+  });
   on('helpToggle',()=>{$('parameterHelp').hidden=!$('parameterHelp').hidden;});
   on('exportParameters',()=>{
     const url=URL.createObjectURL(new Blob(['\uFEFF'+params.exportText()],{type:'text/plain;charset=utf-8'})),a=document.createElement('a');

@@ -4,7 +4,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
 const {createMissionFixture,ORIGIN}=require('./mission-fixture.cjs'),N=require('../public/utils/missionNavigation'),{MissionStore}=require('../server/mission-store');
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function main(){
-  const f=createMissionFixture({server:true,realClock:true}),server=f.server;
+  const f=createMissionFixture({server:true,realClock:true,algorithmControl:true}),server=f.server;
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const base='http://127.0.0.1:'+server.address().port;
   const output=path.resolve(__dirname,'../.test-output'),profile=fs.mkdtempSync(path.join(output,'chrome-missions-')),errors=[];
   const browser=spawn(process.env.CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':'google-chrome'),['--headless','--no-first-run','--no-default-browser-check','--disable-background-networking','--use-angle=swiftshader','--enable-unsafe-swiftshader','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{windowsHide:true,stdio:'ignore'});
@@ -30,6 +30,25 @@ async function main(){
     assert.equal(await evaluate('document.getElementById("view-missions").hidden'),true,'Task interface stays hidden before authentication');
     await evaluate('BoatAuth.login("operator","browser-admin-test-only")');await until('BoatMissions.deviceId==="boat-01"&&BoatMissions.map?.ready&&BoatWorkspace.current==="missions"');
     assert.equal(f.commands().length,0,'Entering planning never acquires or moves a boat');
+    await until('boatMonitor.link.connected&&boatMonitor.link.devices[0]?.controlAlgorithm?.id===0');
+    await evaluate('boatMonitor.openBoatSettings("boat-01")');
+    await until('document.getElementById("settingsDialog").open&&!document.getElementById("applyControlAlgorithm").disabled');
+    assert.equal(await evaluate('document.getElementById("controlAlgorithmSelect").value'),'0','Boot state uses original PID');
+    await evaluate('document.getElementById("controlAlgorithmSelect").value="1";document.getElementById("applyControlAlgorithm").click()');
+    await until('!boatMonitor.params.busy&&document.getElementById("parameterStatus").dataset.tone==="success"');
+    assert.equal(f.algorithms.get('boat-01'),1);assert.match(await evaluate('document.getElementById("controlAlgorithmCurrent").textContent'),/最优控制/);
+    f.algorithmStatus=3;
+    await until('!document.getElementById("applyControlAlgorithm").disabled');
+    await evaluate('document.getElementById("controlAlgorithmSelect").value="0";document.getElementById("applyControlAlgorithm").click()');
+    await until('!boatMonitor.params.busy&&document.getElementById("parameterStatus").dataset.tone==="danger"');
+    assert.equal(f.algorithms.get('boat-01'),1,'An MCU stopped-state rejection cannot pretend PID was selected');f.algorithmStatus=0;
+    for(const [width,height]of [[1440,1100],[375,812],[320,812]]){
+      await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});await wait(100);
+      assert.equal(await evaluate('(()=>{const d=document.getElementById("settingsDialog");return d.scrollWidth<=d.clientWidth+1&&d.querySelector(".dialog-scroll").scrollWidth<=d.querySelector(".dialog-scroll").clientWidth+1;})()'),true,'Algorithm settings fit '+width);
+      await shot('algorithm-settings-'+width);
+    }
+    await evaluate('document.getElementById("settingsClose").click()');
+    await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
     await evaluate('document.getElementById("missionMap").scrollIntoView({block:"center",behavior:"instant"});BoatMissions.map.setView('+JSON.stringify(ORIGIN)+',18,{animate:false});document.getElementById("missionEdit").click()');await wait(150);
     for(const p of [ORIGIN,N.destination(ORIGIN,0,30),N.destination(ORIGIN,90,45)])await clickPoint(p);
     assert.equal(await evaluate('BoatMissions.route.points.length'),3);assert.equal(await evaluate('BoatMissions.map.lastTrackLines[0].points.length'),3);
@@ -54,6 +73,8 @@ async function main(){
     await evaluate('window.scrollTo(0,0)');await shot('missions-desktop-dark');
     await evaluate('document.getElementById("missionGoto").click()');await until('BoatMissions.run()?.status==="completed"');assert.equal(f.mission.snapshot('boat-01').stopConfirmed,true);
     await evaluate('document.getElementById("missionStart").click()');await until('BoatMissions.run()?.status==="running"');
+    assert.equal(f.mission.snapshot('boat-01').algorithm,1);assert.ok(f.mission.jobs.get('boat-01').optimal);
+    assert.match(await evaluate('document.getElementById("missionAlgorithm").textContent'),/最优控制/);
     await evaluate('BoatWorkspace.navigate("navigation",{focus:false});document.getElementById("mapFollow").checked=false');
     await until('boatMonitor.mapMission.markers.length===3&&document.getElementById("mapMissionInfo").dataset.visible==="true"');
     assert.equal(await evaluate('boatMonitor.map._lineOverlays.get("mission").lines.length'),2,'Navigation shows the active route and its loop return leg');
@@ -127,6 +148,10 @@ async function main(){
     assert.equal(await evaluate('document.getElementById("missionLoopProgress").title'),'已完成 2 圈');
     assert.equal(await evaluate('document.getElementById("missionActiveBar").hidden'),true,'Final return completes the task and removes the active task banner');
     assert.equal(await evaluate('boatMonitor.mapMission.markers.length===0&&!boatMonitor.map._lineOverlays.has("mission")'),true,'Completion removes the navigation task route');
+    await evaluate('boatMonitor.openBoatSettings("boat-01")');await until('!document.getElementById("applyControlAlgorithm").disabled');
+    await evaluate('document.getElementById("controlAlgorithmSelect").value="0";document.getElementById("applyControlAlgorithm").click()');
+    await until('!boatMonitor.params.busy&&document.getElementById("parameterStatus").dataset.tone==="success"');
+    assert.equal(f.algorithms.get('boat-01'),0);await evaluate('document.getElementById("settingsClose").click()');
     await shot('missions-loops-completed');
     await evaluate('BoatWorkspace.navigate("missions",{focus:false});document.getElementById("themeToggle").click()');
     for(const [width,height]of [[1440,1100],[1024,900],[375,812],[320,812]]){
@@ -140,7 +165,7 @@ async function main(){
     assert.equal(await evaluate('document.getElementById("view-missions").hidden&&document.getElementById("view-driving").hidden&&document.getElementById("missionActiveBar").hidden'),true,'Guest cannot see task, driver or global task interface');
     assert.equal(await evaluate('BoatMissions.routes.length===0&&BoatMissions.runs.length===0'),true,'Role change clears private task UI state');
     await evaluate('BoatMissions.poll(true)');assert.equal(await evaluate('BoatMissions.routes.length'),0,'Guest does not poll or repopulate the task interface');
-    assert.deepEqual(errors,[]);console.log('PASS: mission planner in real Chrome; actual map clicks and return-leg preview; loop settings and server persistence/reload; goto; MCU ACK and two complete loops ending at start; refresh during return and live progress; page closure/reopen; driving Space stop; guest permissions; dark/light and 1440/1024/375/320 px layouts.');
+    assert.deepEqual(errors,[]);console.log('PASS: real Chrome algorithm selection/MCU rejection/PID return and 320/375/1440px settings; LQR missions; actual map clicks and return-leg preview; loop persistence/reload; goto; MCU ACK and two loops; page closure/reopen; driving Space stop; guest permissions; dark/light responsive layouts.');
   }finally{socket?.close();browser.kill();server.closeAllConnections?.();await f.close();}
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

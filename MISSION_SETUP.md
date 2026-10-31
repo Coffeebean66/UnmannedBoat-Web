@@ -6,6 +6,14 @@ Web `v1.39.0` 新增按航线保存的循环开关与圈数，终点直接连线
 
 Web `v1.41.0` 在“船位与轨迹”页增加当前任务路线显示开关，可与实际航迹对照查看。
 
+Web `v1.42.0` 支持按船选择原算法或 LQR/LQI；需要同时升级单片机，新算法选择不随航线保存。单片机每次上电恢复原算法，浏览器刷新不主动改变船端选择。
+
+## 选择控制算法
+
+管理员进入对应船的“调参设置 → 控制算法”，结束任务并释放驾驶接管，保持零指令及双电调新鲜低速满1秒后应用。原算法沿用船速 / 航向PID和前视航线；最优控制使用单片机船速LQI / 航向LQR及服务器航线LQR。无需遥控器在线，算法以单片机实际响应为准。
+
+任务启动时选择对应外环，任务页显示该次任务采用的算法；运行期间不能切换算法，检测到船端算法变化或LQR能力状态失效时请求停船。两套算法共用最大船速读取、到点确认、减速、循环、横偏 / 无进展及断网保护，关闭网页后继续执行。模型和权重目前在代码中设置，说明与升级顺序见[双算法控制教程](OPTIMAL_CONTROL_SETUP.md)。
+
 ## 规划与保存
 
 1. 管理员登录，在顶部选中无人船，进入侧栏“航线任务”。账户模式下，访客不显示驾驶、任务入口及界面，任务状态条也隐藏；直接打开 `#missions` 会返回船队总览。
@@ -102,7 +110,7 @@ Environment=BOAT_MISSION_FILE=/var/lib/unmanned-boat-web-missions/missions.json
 ## 本地验证
 
 ```powershell
-node --test tests/missions.test.cjs tests/web-control.test.cjs tests/map-view.test.cjs tests/map-mission-view.test.cjs tests/workspace-navigation.test.cjs
+node --test tests/missions.test.cjs tests/optimal-control.test.cjs tests/web-control.test.cjs tests/map-view.test.cjs tests/map-mission-view.test.cjs tests/workspace-navigation.test.cjs
 npm run build
 npm run test:missions:browser
 ```

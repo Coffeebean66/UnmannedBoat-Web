@@ -182,6 +182,8 @@
       $('missionCommandSpeed').textContent=run?run.commandSpeedMps.toFixed(2)+' m/s':'--';
       $('missionLoopProgress').textContent=run?.action==='start'?(run.loopEnabled?run.currentLoop+' / '+run.loopCount+' 圈':'单次'):'--';
       $('missionLoopProgress').title=run?'已完成 '+(run.completedLoops??0)+' 圈':'';
+      const algorithm=run?.active?run.algorithm:window.boatMonitor?.link?.devices?.find(d=>d.id===this.deviceId)?.controlAlgorithm?.id;
+      $('missionAlgorithm').textContent='任务算法：'+(algorithm===1?'最优控制 · LQR航线＋船速LQI/航向LQR':algorithm===0?'原算法 · 前视航线＋PID':'等待船端状态；旧固件沿用原算法');
       $('missionPhase').textContent=run?.status==='running'?({route:'沿线航行',returning:'返回起点',goto:'前往起点'}[run.phase]||'沿线航行'):(labels[run?.status]||'--');
       this.renderRunningBar();
       window.dispatchEvent(new CustomEvent('boat-mission-change',{detail:this.navigationState()}));

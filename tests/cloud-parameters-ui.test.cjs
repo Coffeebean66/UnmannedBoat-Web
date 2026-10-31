@@ -1,7 +1,7 @@
 /* 云端调参前端：只信原协议设备确认，能力、角色及异步取消分别验证。 */
 const { test } = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
-const P = require('../public/utils/uart4Protocol'), root = path.resolve(__dirname, '..');
+const P = require('../public/utils/uart4Protocol'), A = require('../public/utils/controlAlgorithm'), root = path.resolve(__dirname, '..');
 const configContext = { window: {} }; vm.runInNewContext(fs.readFileSync(path.join(root, 'public/parameter-data.js'), 'utf8'), configContext);
 const config = configContext.window.BoatParameters;
 const values = Object.fromEntries(Object.entries(config.ranges).map(([key, range]) => [key, range[0]])); values.kpX2PerMps = 42;
@@ -12,7 +12,7 @@ function frame(status = 0, parameters = values) {
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
 async function setup() {
-  let parametersReady = true, block, responseStatus = 200, result = { frame: frame(), serverTime: 1000000 };
+  let parametersReady = true, controlAlgorithm, block, responseStatus = 200, result = { frame: frame(), serverTime: 1000000 };
   const calls = [], timers = new Map(); let timerId = 0;
   class Auth extends EventTarget {
     constructor() { super(); this.enabled = true; this.ready = true; this.user = { username: 'operator', role: 'admin' }; this.generation = 1; }
@@ -29,12 +29,12 @@ async function setup() {
   const fetch = async (url, options = {}) => {
     calls.push({ url, ...options }); let body, status = 200;
     if (url.endsWith('/config')) body = { enabled: true, requiresLogin: true };
-    else if (url.endsWith('/devices')) body = { devices: [{ id: 'boat-1', online: true, parametersReady }], brokerConnected: true };
+    else if (url.endsWith('/devices')) body = { devices: [{ id: 'boat-1', online: true, parametersReady,...(controlAlgorithm?{controlAlgorithm}: {}) }], brokerConnected: true };
     else if (url.endsWith('/parameters')) { if (block) await block(); body = result; status = responseStatus; }
     else throw Error('Unexpected URL ' + url);
     return { ok: status >= 200 && status < 300, status, json: async () => body };
   };
-  const context = { window: { BoatAuth: auth }, fetch, BoatModules: { uart4Protocol: P }, EventTarget, CustomEvent,
+  const context = { window: { BoatAuth: auth }, fetch, BoatModules: { uart4Protocol: P, controlAlgorithm:A }, EventTarget, CustomEvent,
     Date, performance, Uint8Array, atob, AbortController, document: { hidden: false }, EventSource: Stream,
     setTimeout: (fn, delay) => { const id = ++timerId; timers.set(id, { fn, delay }); return id; }, clearTimeout: id => timers.delete(id),
     setInterval: () => 1, clearInterval() {} };
@@ -42,6 +42,7 @@ async function setup() {
   const cloud = new context.window.CloudBoatLink(); await cloud.initialize(); await cloud.connect('boat-1'); cloud.live = true;
   return { cloud, context, auth, calls, timers, frame,
     cap: value => { parametersReady = value; }, block: fn => { block = fn; },
+    algorithm: value => { controlAlgorithm=value; },
     respond: (body, status = 200) => { result = body; responseStatus = status; },
     pendingPost: () => calls.filter(call => call.url.endsWith('/parameters')) };
 }
@@ -120,15 +121,15 @@ test('HTTP504/网络失败及错误base64/CRC均不假成功，也不自动重�
 });
 
 function panel() {
-  const inputs = Object.entries(values).map(([key, value]) => ({ dataset: { key }, value: String(value) })), ids = {};
+  const inputs = Object.entries(values).map(([key, value]) => ({ dataset: { key }, value: String(value) })), ids = {controlAlgorithmSelect:{dataset:{},options:[{},{}]}};
   const context = { window: { BoatParameters: config, BoatAuth: { assertManage() {}, canManage:true } },
     document: { getElementById: id => ids[id] || (ids[id] = { dataset: {} }), querySelectorAll: selector => selector.startsWith('#parameterFields') ? inputs : [] },
-    BoatModules: { parameterExport: { formatParameterExport: () => '' } }, Date };
+    BoatModules: { controlAlgorithm:A,parameterExport: { formatParameterExport: () => '' } }, Date };
   vm.runInNewContext(fs.readFileSync(path.join(root, 'public/parameter-panel.js'), 'utf8'), context);
   const instance = Object.create(context.window.ParameterPanel.prototype);
   Object.assign(instance, { link: { source: 'cloud', readOnly: false, connected: true, generation: 1, request: async () => P.decodeParameterFrame(Buffer.from(frame(), 'base64')) },
     confirmed: { ...values }, localDraft: null, busy: false, keys: Object.keys(values), config, slots: [null, null, null] });
-  return { panel: instance, ids, inputs };
+  return { panel: instance, ids, inputs,auth:context.window.BoatAuth };
 }
 
 test('云端参数面板可读取/写入/保存Flash，只有设备status0才显示成功', async () => {
@@ -163,4 +164,34 @@ test('切船后旧请求的迟到取消结果不会恢复草稿或覆盖新船�
   assert.equal(h.panel.localDraft,null);
   assert.equal(h.panel.confirmed.kpX2PerMps,222);
   assert.equal(h.inputs.find(input=>input.dataset.key==='kpX2PerMps').value,'222');
+});
+
+function algorithmFrame(algorithm,status=0){const b=A.command(987,algorithm);b[3]=0x91;b[5]=status;new DataView(b.buffer).setUint16(54,P.crc16CcittFalse(b,2,52),true);return Buffer.from(b).toString('base64');}
+test('算法请求单独解码真实ACK并更新当前船，原参数响应不能冒充算法成功',async()=>{
+  const h=await setup();h.algorithm({id:0,lqrAvailable:true});await h.cloud.refreshDevices();
+  h.respond({frame:algorithmFrame(1)});const result=await h.cloud.request('algorithm',{algorithm:1});
+  assert.equal(result.algorithm,1);assert.equal(h.cloud.devices[0].controlAlgorithm.id,1);
+  assert.deepEqual(JSON.parse(h.pendingPost().at(-1).body),{deviceId:'boat-1',kind:'algorithm',values:{algorithm:1}});
+  h.respond({frame:frame()});await assert.rejects(h.cloud.request('algorithm',{algorithm:0}),error=>error.uncertain&&/算法状态刷新/.test(error.message));
+});
+test('算法面板保留选择草稿，实际成功后显示状态；忙碌/停稳拒绝/旧固件和访客不会误显示成功',async()=>{
+  const h=panel(),link=h.panel.link;link.selectedId='boat-1';link.devices=[{id:'boat-1',controlAlgorithm:{id:0,lqrAvailable:true}}];
+  h.panel.updateButtons();assert.equal(h.ids.controlAlgorithmSelect.value,'0');
+  h.ids.controlAlgorithmSelect.value='1';h.panel.updateButtons();assert.equal(h.ids.controlAlgorithmSelect.value,'1');
+  let release;link.request=()=>new Promise(resolve=>{release=resolve;});const pending=h.panel.applyAlgorithm();
+  assert.equal(h.ids.applyControlAlgorithm.disabled,true);await assert.rejects(h.panel.applyAlgorithm(),/等待/);
+  link.devices[0].controlAlgorithm.id=1;release({status:0,algorithm:1});await pending;
+  assert.match(h.ids.parameterStatus.textContent,/已切换.*最优控制/);assert.equal(h.ids.parameterStatus.dataset.tone,'success');
+  h.ids.controlAlgorithmSelect.value='0';link.request=async()=>({status:3,algorithm:1});await assert.rejects(h.panel.applyAlgorithm(),/停稳满1秒/);assert.equal(h.ids.parameterStatus.dataset.tone,'danger');
+  link.devices[0].controlAlgorithm=undefined;h.panel.updateButtons();assert.equal(h.ids.applyControlAlgorithm.disabled,true);
+  link.readOnly=true;await assert.rejects(h.panel.applyAlgorithm(),/不可操作/);
+});
+test('算法迟到响应不能在切船或降权后恢复旧界面成功状态',async()=>{
+  for(const cause of ['boat','role']){
+    const h=panel();h.panel.link.selectedId='boat-1';h.panel.link.devices=[{id:'boat-1',controlAlgorithm:{id:0,lqrAvailable:true}}];h.panel.updateButtons();h.ids.controlAlgorithmSelect.value='1';
+    let release;h.panel.link.request=()=>new Promise(resolve=>{release=resolve;});const pending=h.panel.applyAlgorithm();
+    if(cause==='boat'){h.panel.link.generation++;h.panel.link.selectedId='boat-2';}else h.auth.canManage=false;
+    h.ids.parameterStatus.textContent='新界面';release({status:0,algorithm:1});await assert.rejects(pending,/设备或账户已变化/);
+    assert.equal(h.ids.parameterStatus.textContent,'新界面');
+  }
 });

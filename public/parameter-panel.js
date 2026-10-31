@@ -90,6 +90,37 @@ class ParameterPanel {
     document.getElementById('readParameters').disabled=readOnly||this.busy||!this.link.connected;
     document.querySelectorAll('#presets button').forEach(el=>el.disabled=this.busy||
       (el.dataset.action==='save'?!hasDraft:readOnly||!this.link.connected||!this.slots[Number(el.dataset.slot)]));
+    this.updateAlgorithm();
+  }
+  updateAlgorithm(){
+    const select=document.getElementById('controlAlgorithmSelect'),current=document.getElementById('controlAlgorithmCurrent');
+    if(!select||!current)return;
+    const device=this.link.devices?.find(device=>device.id===this.link.selectedId),state=device?.controlAlgorithm;
+    const supported=state&&[0,1].includes(state.id),key=(this.link.selectedId||'')+':'+(supported?state.id:'unknown');
+    if(key!==this.algorithmStateKey){select.value=String(supported?state.id:0);this.algorithmStateKey=key;}
+    const text=supported?'当前使用：'+BoatModules.controlAlgorithm.names[state.id]:'等待支持算法切换的船端固件上线';
+    if(current.textContent!==text)current.textContent=text;
+    select.options[1].disabled=!state?.lqrAvailable;
+    select.disabled=!supported||this.busy||this.link.readOnly||!this.link.connected;
+    document.getElementById('applyControlAlgorithm').disabled=select.disabled;
+  }
+  async applyAlgorithm(){
+    window.BoatAuth?.assertManage();
+    if(this.busy||this.link.pending)throw Error('请等待当前参数操作完成');
+    if(this.link.readOnly)throw Error(this.link.parameterReadOnlyReason||'当前无人船不可操作');
+    const algorithm=Number(document.getElementById('controlAlgorithmSelect').value);
+    const generation=this.link.generation;
+    this.busy=true;this.updateButtons();this.status('正在切换算法，等待单片机确认…');
+    try{
+      const frame=await this.link.request('algorithm',{algorithm});
+      if(generation!==this.link.generation||!window.BoatAuth?.canManage)throw Error('设备或账户已变化，请重新确认算法');
+      if(frame.status!==0)throw Error(frame.status===3?'切换被拒绝：请结束任务/驾驶接管，保持零指令，两路电机反馈正常且停稳满1秒后重试':'固件拒绝该算法，请核对算法支持状态');
+      if(frame.algorithm!==algorithm)throw Error('单片机确认的算法与请求不同，请重新确认');
+      this.status('已切换为'+BoatModules.controlAlgorithm.names[algorithm]+'；本次上电有效，下次上电自动恢复原算法','success');
+    }catch(error){
+      if(generation===this.link.generation&&window.BoatAuth?.canManage)this.status(error.message,error.uncertain?'warning':'danger');
+      throw error;
+    }finally{this.busy=false;this.updateButtons();}
   }
   async command(kind, preset) {
     window.BoatAuth?.assertManage();

@@ -190,7 +190,7 @@ test('后台恢复使用新SSE，旧队列与缓存不会复活姿态；401会�
   assert.equal(h.cloud.connected,false);assert.equal(h.cloud.authenticated,false);assert.equal(next.closed,true);assert.equal(h.cloud.wanted,false);
 });
 function parameterPanel(){
-  const ids={},inputs=[{dataset:{key:'speed'},value:'12'}],buttons=[{dataset:{action:'save',slot:'0'}},{dataset:{action:'use',slot:'0'}}],storage=new Map();
+  const ids={controlAlgorithmSelect:{dataset:{},options:[{},{}]}},inputs=[{dataset:{key:'speed'},value:'12'}],buttons=[{dataset:{action:'save',slot:'0'}},{dataset:{action:'use',slot:'0'}}],storage=new Map();
   const context={window:{},document:{getElementById:id=>ids[id]||(ids[id]={dataset:{}}),querySelectorAll:selector=>selector.startsWith('#parameterFields')?inputs:buttons},
     localStorage:{setItem:(key,value)=>storage.set(key,value)},BoatModules:{parameterExport:{formatParameterExport:(values,confirmed)=>JSON.stringify({values,confirmed})}},Date};
   vm.runInNewContext(fs.readFileSync(path.join(root,'public/parameter-panel.js'),'utf8'),context);

@@ -1,7 +1,7 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict'),{EventEmitter}=require('node:events'),http=require('node:http');
 const {CloudBridge}=require('../server/cloud'),{createServer}=require('../server');
-const PP=require('../server/parameter-protocol'),P=require('../public/utils/uart4Protocol');
+const PP=require('../server/parameter-protocol'),P=require('../public/utils/uart4Protocol'),A=require('../public/utils/controlAlgorithm');
 const ENV={BOAT_CLOUD_ENABLED:'1',BOAT_CLOUD_PASSWORD:'legacy-test-password-fixture',BOAT_CLOUD_ORIGIN:'https://boat.test',BOAT_MQTT_URL:'mqtt://broker.test:1883'};
 const ACCOUNT_ENV={...ENV,BOAT_ACCOUNTS_ENABLED:'1',BOAT_ADMIN_USERNAME:'test-admin',BOAT_ADMIN_PASSWORD:'test admin password',BOAT_GUEST_USERNAME:'test-guest',BOAT_GUEST_PASSWORD:'654321'};
 const TOKEN='0123456789abcdef',NEXT='fedcba9876543210';
@@ -9,8 +9,9 @@ const VALUES=Object.fromEntries(Object.entries(PP.RANGES).map(([key,[min]])=>[ke
 function telemetry(){const result=Buffer.alloc(176);for(const [offset,length,version,type]of [[0,64,1,1],[64,40,2,2],[104,36,2,3],[140,36,1,4]]){const frame=result.subarray(offset,offset+length);frame.set([0xa5,0x5a,version,type,length]);frame.writeUInt16LE(P.crc16CcittFalse(frame,2,length-4),length-2);}return result;}
 class FakeMQTT extends EventEmitter{constructor(){super();this.sent=[];this.connected=true;}subscribe(topics,options,callback){this.topics=topics;callback(null);}publish(topic,payload,options,callback){this.sent.push({topic,payload:Buffer.from(payload),options});if(this.onPublish)this.onPublish(this.sent.at(-1));callback?.(this.publishError);}end(){}}
 function bridgeFixture(t,options={}){let time=10000;const client=new FakeMQTT(),bridge=new CloudBridge({env:ENV,now:()=>time,connect:()=>client,tickMs:60000,...options});bridge.start();client.emit('connect');t.after(()=>bridge.stop());
-  return {bridge,client,now:()=>time,setTime:value=>{time=value;},cap(token=TOKEN,uptimeMs=5000,id='boat-01',packet={}){return bridge.acceptMessage('boats/'+id+'/parameter-capability',Buffer.from(JSON.stringify({version:1,token,uptimeMs})),packet);},live(id='boat-01'){bridge.acceptMessage('boats/'+id+'/telemetry',telemetry());},response(command=client.sent.at(-1),{status=0,sequence,token,uptimeMs,values=VALUES}={}){
-    const result=Buffer.from(command.payload);const frame=Buffer.from(P.encodeParameterWriteRequest(sequence??command.payload.readUInt32LE(22),values));frame[3]=0x90;frame[5]=status;frame.writeUInt16LE(P.crc16CcittFalse(frame,2,52),54);frame.copy(result,16);if(token)Buffer.from(token,'hex').copy(result,4);if(uptimeMs!==undefined)result.writeUInt32LE(uptimeMs,12);return result;
+  return {bridge,client,now:()=>time,setTime:value=>{time=value;},cap(token=TOKEN,uptimeMs=5000,id='boat-01',packet={},extra={}){return bridge.acceptMessage('boats/'+id+'/parameter-capability',Buffer.from(JSON.stringify({version:1,token,uptimeMs,...extra})),packet);},live(id='boat-01'){bridge.acceptMessage('boats/'+id+'/telemetry',telemetry());},response(command=client.sent.at(-1),{status=0,sequence,token,uptimeMs,values=VALUES,kind,algorithm=1}={}){
+    const result=Buffer.from(command.payload),isAlgorithm=kind?kind==='algorithm':command.payload[19]===0x13;
+    const frame=Buffer.from(isAlgorithm?A.command(sequence??command.payload.readUInt32LE(22),algorithm):P.encodeParameterWriteRequest(sequence??command.payload.readUInt32LE(22),values));frame[3]=isAlgorithm?0x91:0x90;frame[5]=status;frame.writeUInt16LE(P.crc16CcittFalse(frame,2,52),54);frame.copy(result,16);if(token)Buffer.from(token,'hex').copy(result,4);if(uptimeMs!==undefined)result.writeUInt32LE(uptimeMs,12);return result;
   }};
 }
 function request(port,route,{method='GET',cookie,origin='https://boat.test',body,raw,headers={}}={}){const data=raw!==undefined?raw:body===undefined?undefined:JSON.stringify(body);return new Promise((resolve,reject)=>{const req=http.request({host:'127.0.0.1',port,path:route,method,agent:false,headers:{...(data!==undefined?{'content-type':'application/json','content-length':Buffer.byteLength(data)}:{}),...(cookie?{cookie}:{}),...(origin?{origin}:{}),...headers}},res=>{const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>{const raw=Buffer.concat(chunks).toString();let json;try{json=JSON.parse(raw);}catch(_){}resolve({status:res.statusCode,json,raw,headers:res.headers});});});req.on('error',reject);req.end(data);});}
@@ -104,4 +105,51 @@ test('session expiry while a body is arriving cannot publish a parameter command
   const f=await apiFixture(t,{accountOptions:{sessionMs:100}}),cookie=await f.login();f.live();f.cap();
   const result=await new Promise((resolve,reject)=>{const data=JSON.stringify({deviceId:'boat-01',kind:'read'}),req=http.request({host:'127.0.0.1',port:f.port,path:'/api/cloud/parameters',method:'POST',agent:false,headers:{origin:'https://boat.test',cookie,'content-type':'application/json','content-length':Buffer.byteLength(data)}},res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});req.on('error',reject);req.write(data.slice(0,1));setTimeout(()=>{f.setTime(f.now()+101);req.end(data.slice(1));},20);});
   assert.equal(result,401);assert.equal(f.client.sent.length,0);
+});
+
+test('algorithm capability and dedicated frames validate exact types, IDs, padding and CRC; legacy caps remain compatible',()=>{
+  for(const algorithm of [0,1]){
+    const cap={version:1,token:TOKEN,uptimeMs:42,algorithm,lqr:true};assert.deepEqual(PP.capability(Buffer.from(JSON.stringify(cap))),{token:TOKEN,uptimeMs:42,algorithm,lqr:true});
+    const request=PP.commandFrame('algorithm',0x12345678,{algorithm});assert.equal(request[3],0x13);assert.equal(request.readUInt16LE(14),algorithm);assert.ok(request.subarray(16,54).every(x=>x===0));
+    request[3]=0x91;request.writeUInt16LE(P.crc16CcittFalse(request,2,52),54);const decoded=A.response(request);assert.equal(decoded.requestSequence,0x12345678);assert.equal(decoded.algorithm,algorithm);
+    request[16]=1;request.writeUInt16LE(P.crc16CcittFalse(request,2,52),54);assert.equal(A.response(request),null);
+  }
+  for(const extra of [{algorithm:2,lqr:true},{algorithm:'1',lqr:true},{algorithm:0},{lqr:true},{algorithm:1,lqr:false},{algorithm:0,lqr:1}])assert.equal(PP.capability(Buffer.from(JSON.stringify({version:1,token:TOKEN,uptimeMs:1,...extra}))),null);
+  for(const values of [undefined,{},[],{algorithm:'1'},{algorithm:2},{algorithm:1,padding:0}])assert.throws(()=>PP.commandFrame('algorithm',1,values));
+});
+
+test('algorithm selection needs new firmware; exact ACK updates only the selected boat and preserves real rejection',async t=>{
+  const f=bridgeFixture(t);f.live();f.cap();await assert.rejects(f.bridge.requestParameters('boat-01','algorithm',{algorithm:1}),{status:409});assert.equal(f.bridge.get('boat-01').parametersReady,true);
+  f.cap(TOKEN,5000,'boat-01',{}, {algorithm:0,lqr:false});await assert.rejects(f.bridge.requestParameters('boat-01','algorithm',{algorithm:1}),{status:409});assert.equal(f.client.sent.length,0);
+  f.cap(TOKEN,5000,'boat-01',{}, {algorithm:0,lqr:true});f.live('boat-02');f.cap(NEXT,5000,'boat-02',{}, {algorithm:0,lqr:true});
+  const pending=f.bridge.requestParameters('boat-01','algorithm',{algorithm:1}),command=f.client.sent.at(-1);
+  assert.equal(f.bridge.get('boat-01').controlAlgorithm.id,0);assert.equal(f.bridge.acceptMessage('boats/boat-01/parameter-response',f.response(command,{kind:'read'})),false);
+  assert.equal(f.bridge.acceptMessage('boats/boat-02/parameter-response',f.response(command)),false);
+  assert.equal(f.bridge.acceptMessage('boats/boat-01/parameter-response',f.response(command)),true);assert.equal(A.response(await pending).algorithm,1);
+  assert.equal(f.bridge.get('boat-01').controlAlgorithm.id,1);assert.equal(f.bridge.get('boat-02').controlAlgorithm.id,0);
+  f.cap(NEXT,5100,'boat-01',{}, {algorithm:1,lqr:true});const denied=f.bridge.requestParameters('boat-01','algorithm',{algorithm:0});
+  f.bridge.acceptMessage('boats/boat-01/parameter-response',f.response(undefined,{status:3,algorithm:1}));assert.equal(A.response(await denied).status,3);assert.equal(f.bridge.get('boat-01').controlAlgorithm.id,1);
+});
+
+test('algorithm mismatched success, timeout and late ACK cannot pretend a change succeeded; control/OTA locks block sending',async t=>{
+  const f=bridgeFixture(t,{parameterTimeoutMs:20});f.live();f.cap(TOKEN,5000,'boat-01',{}, {algorithm:0,lqr:true});
+  for(const locks of [f.bridge.controlLocks,f.bridge.firmwareLocks]){locks.add('boat-01');await assert.rejects(f.bridge.requestParameters('boat-01','algorithm',{algorithm:1}),{status:409});locks.delete('boat-01');}
+  assert.equal(f.client.sent.length,0);
+  const mismatch=f.bridge.requestParameters('boat-01','algorithm',{algorithm:1});const failure=assert.rejects(mismatch,{status:503});
+  assert.equal(f.bridge.acceptMessage('boats/boat-01/parameter-response',f.response(undefined,{algorithm:0})),false);await failure;
+  f.cap(NEXT,5100,'boat-01',{}, {algorithm:0,lqr:true});const timed=f.bridge.requestParameters('boat-01','algorithm',{algorithm:1}),old=f.client.sent.at(-1);await assert.rejects(timed,{status:504});
+  f.cap('0000000000000001',5200,'boat-01',{}, {algorithm:0,lqr:true});const current=f.bridge.requestParameters('boat-01','algorithm',{algorithm:0});
+  assert.equal(f.bridge.acceptMessage('boats/boat-01/parameter-response',f.response(old)),false);assert.equal(f.bridge.get('boat-01').controlAlgorithm.id,0);
+  f.bridge.acceptMessage('boats/boat-01/parameter-response',f.response(undefined,{algorithm:0}));await current;
+});
+
+test('algorithm HTTP is admin-only and same-origin, validates body and requires a matching MCU response',async t=>{
+  const f=await apiFixture(t),admin=await f.login(),guest=await f.login('guest'),body={deviceId:'boat-01',kind:'algorithm',values:{algorithm:1}};
+  f.live();f.cap(TOKEN,5000,'boat-01',{}, {algorithm:0,lqr:true});
+  assert.equal((await f.operate(undefined,body)).status,401);assert.equal((await f.operate(guest,body)).status,403);
+  assert.equal((await f.operate(admin,body,{origin:'https://evil.test'})).status,403);
+  assert.equal((await f.operate(admin,{...body,values:{algorithm:2}})).status,400);assert.equal(f.client.sent.length,0);
+  const waiting=f.operate(admin,body);await until(()=>f.client.sent.length===1);
+  const ack=f.response();f.bridge.acceptMessage('boats/boat-01/parameter-response',ack);const result=await waiting;
+  assert.equal(result.status,200);assert.equal(A.response(Buffer.from(result.json.frame,'base64')).algorithm,1);
 });

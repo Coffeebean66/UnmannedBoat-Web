@@ -2,7 +2,7 @@
 'use strict';
 const {EventEmitter}=require('node:events'),fs=require('node:fs'),path=require('node:path');
 const {CloudBridge}=require('../server/cloud'),{ControlService}=require('../server/control-service'),{MissionStore}=require('../server/mission-store'),{MissionService}=require('../server/mission-service');
-const U=require('../public/utils/uart4Protocol'),P=require('../server/parameter-protocol');
+const U=require('../public/utils/uart4Protocol'),P=require('../server/parameter-protocol'),A=require('../public/utils/controlAlgorithm');
 const {createServer}=require('../server');
 const NAV=require('../public/utils/missionNavigation');
 const TOKEN='0123456789abcdef',CLIENT='1122334455667788';
@@ -21,7 +21,7 @@ function createMissionFixture(options={}){
   const client=new MQTT(),bridge=new CloudBridge({env,connect:()=>client,now,tickMs:options.realClock?1000:60000});
   const control=new ControlService({bridge,now,pollMs:options.realClock?50:60000}),store=new MissionStore({env,now});
   const mission=new MissionService({bridge,control,store,now,pollMs:options.realClock?100:60000,...options.missionOptions});
-  const states=new Map(),positions=new Map(),flags=new Map();let autoAck=options.autoAck!==false,paramReply=true,parameterDelay=0;
+  const states=new Map(),positions=new Map(),flags=new Map(),algorithms=new Map();let autoAck=options.autoAck!==false,paramReply=true,parameterDelay=0,algorithmStatus=0;
   const values=Object.fromEntries(Object.entries(P.RANGES).map(([key,[min]])=>[key,min]));values.maxTargetMmS=2500;
   function state(id){if(!states.has(id))states.set(id,{version:1,token:TOKEN,uptimeMs:now()>>>0,state:0,leaseId:'0000000000000000',sequence:0,mode:2,reason:0,enabled:true,timeoutMs:500,testMode:false});return states.get(id);}
   function publish(id,kind,payload){return bridge.acceptMessage('boats/'+id+'/'+kind,Buffer.isBuffer(payload)?payload:Buffer.from(JSON.stringify(payload)));}
@@ -32,7 +32,12 @@ function createMissionFixture(options={}){
   function onPublish(packet){
     if(packet.topic.endsWith('/control-command')&&autoAck){queueMicrotask(()=>ack(packet));}
     if(packet.topic.endsWith('/parameter-command')&&packet.payload.toString('ascii',0,4)==='BPC1'&&paramReply){
-      const respond=()=>{const b=packet.payload,id=packet.topic.split('/')[1],seq=b.readUInt32LE(22);const frame=Buffer.from(U.encodeParameterWriteRequest(seq,values));frame[3]=0x90;frame[5]=0;frame.writeUInt16LE(U.crc16CcittFalse(frame,2,52),54);publish(id,'parameter-response',P.envelope(b.subarray(4,12).toString('hex'),b.readUInt32LE(12),frame));};
+      const respond=()=>{const b=packet.payload,id=packet.topic.split('/')[1],seq=b.readUInt32LE(22),isAlgorithm=b[19]===0x13;
+        if(isAlgorithm&&!options.algorithmControl)return;
+        const status=isAlgorithm?algorithmStatus:0;
+        if(isAlgorithm&&!status)algorithms.set(id,b.readUInt16LE(30));
+        const frame=Buffer.from(isAlgorithm?A.command(seq,algorithms.get(id)??0):U.encodeParameterWriteRequest(seq,values));
+        frame[3]=isAlgorithm?0x91:0x90;frame[5]=status;frame.writeUInt16LE(U.crc16CcittFalse(frame,2,52),54);publish(id,'parameter-response',P.envelope(b.subarray(4,12).toString('hex'),b.readUInt32LE(12),frame));};
       if(parameterDelay)setTimeout(respond,parameterDelay);else queueMicrotask(respond);
     }
   }
@@ -46,13 +51,14 @@ function createMissionFixture(options={}){
       b.writeUInt16LE(U.crc16CcittFalse(b,2,size-4),size-2);frames.push(b);
     }
     publish(id,'telemetry',Buffer.concat(frames));const s=state(id);s.uptimeMs=now()>>>0;publish(id,'control-state',s);
-    publish(id,'parameter-capability',{version:1,token:(++capSequence).toString(16).padStart(16,'0'),uptimeMs:now()>>>0});
+    publish(id,'parameter-capability',{version:1,token:(++capSequence).toString(16).padStart(16,'0'),uptimeMs:now()>>>0,...(options.algorithmControl?{algorithm:algorithms.get(id)??0,lqr:true}:{})});
   }
   bridge.start();client.emit('connect');feed();
   let server;
   if(options.server)server=createServer({cloud:bridge,env,accountOptions:{storeFile:path.join(dir,'accounts.json')},controlOptions:{service:control},missionOptions:{store,service:mission}});
   if(options.realClock)feedTimer=setInterval(()=>{for(const id of positions.keys())feed(id);},100);
-  return {bridge,client,control,mission,store,server,env,dir,now,positions,flags,values,feed,ack,publish,
+  return {bridge,client,control,mission,store,server,env,dir,now,positions,flags,values,algorithms,feed,ack,publish,
+    get algorithmStatus(){return algorithmStatus;},set algorithmStatus(value){algorithmStatus=value;},
     get autoAck(){return autoAck;},set autoAck(v){autoAck=v;},get parameterDelay(){return parameterDelay;},set parameterDelay(v){parameterDelay=v;},set paramReply(v){paramReply=v;},
     advance(ms=100,id='boat-01',p={}){time+=ms;feed(id,p);control.refresh();mission.refresh();},
     route(id='boat-01',overrides={}){return store.save(id,{name:'湖区巡航',speedMps:1,arrivalRadiusM:3,points:[ORIGIN,NAV.destination(ORIGIN,0,30),NAV.destination(ORIGIN,90,45)],...overrides});},

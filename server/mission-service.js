@@ -2,6 +2,7 @@
 'use strict';
 const crypto=require('node:crypto');
 const nav=require('../public/utils/missionNavigation');
+const optimal=require('./optimal-guidance');
 const {decodeParameterFrame}=require('../public/utils/uart4Protocol');
 const {fault}=require('./mission-store');
 const ACTIVE=new Set(['preparing','acquiring','running','stopping']);
@@ -31,7 +32,7 @@ class MissionService{
       loopEnabled:job.loopEnabled,loopCount:job.loopCount,completedLoops:job.completedLoops,
       currentLoop:job.action==='start'?Math.min(job.completedLoops+1,job.loopCount):null,phase:job.phase,
       distanceM:job.distanceM??null,crossTrackM:job.crossTrackM??null,targetHeading:job.heading??null,commandSpeedMps:job.commandSpeedMps??0,
-      position:job.position||null,startedAt:job.startedAt,finishedAt:job.finishedAt||null,stopConfirmed:job.stopConfirmed===true};
+      algorithm:job.algorithm,position:job.position||null,startedAt:job.startedAt,finishedAt:job.finishedAt||null,stopConfirmed:job.stopConfirmed===true};
   }
   list(){return [...this.jobs.values()].map(job=>this.snapshot(job,false));}
   start(id,routeId,action,revision){
@@ -45,7 +46,9 @@ class MissionService{
     if(!this.control.snapshot(id).ready)throw fault(409,'船端尚未就绪或正被手动驾驶、调参、OTA 占用');
     const runId=crypto.randomBytes(8).toString('hex'),job={id,route,action,runId,owner:'mission:'+runId,clientId:crypto.randomBytes(8).toString('hex'),
       status:'preparing',message:'正在读取船端最大速度参数',startedAt:this.now(),index:0,sequence:0,arrivalCount:0,controller:new AbortController(),
+      algorithm:this.bridge.get(id).controlAlgorithm?.id??0,origin:{latitude:position.latitude,longitude:position.longitude},
       loopEnabled:action==='start'&&route.loopEnabled,loopCount:action==='start'&&route.loopEnabled?route.loopCount:1,completedLoops:0,phase:action==='goto'?'goto':'route'};
+    if(job.algorithm===1)job.optimal=optimal.create(route.speedMps);
     this.jobs.set(id,job);
     // 限制仅在内存保留最近 128 艘船的结束状态，活动任务不会被驱逐。
     if(this.jobs.size>128)for(const [key,value]of this.jobs)if(!this.active(key)){this.jobs.delete(key);break;}
@@ -61,6 +64,7 @@ class MissionService{
     if(frame?.status!==0||!Number.isInteger(maximum)||maximum<100||maximum>20000)throw fault(503,'读取船端最大速度失败，未接管');
     if(job.route.speedMps*1000>maximum)throw fault(409,'任务航速超过船端最大目标速度，请降低任务航速或先调参');
     const position=feedback(this.bridge,job.id,this.now());
+    if((this.bridge.get(job.id).controlAlgorithm?.id??0)!==job.algorithm)throw fault(409,'船端算法已变化，请重新开始任务');
     if(job.action==='start'&&nav.distance(position,job.route.points[0])>job.route.arrivalRadiusM)throw fault(409,'船位已离开开始点范围，请重新前往开始点');
     job.maximum=maximum;job.input={mode:2,throttle:0,turn:0,targetHeading:Math.round(position.heading*100)%36000,testMode:false};
     job.status='acquiring';job.message='等待单片机确认任务接管';
@@ -97,6 +101,7 @@ class MissionService{
   }
   step(job){
     const now=this.now(),p=feedback(this.bridge,job.id,now),cj=job.controlJob,cap=this.control.cap(job.id);
+    if((this.bridge.get(job.id).controlAlgorithm?.id??0)!==job.algorithm)throw fault(409,'船端算法状态已变化或失效，任务停止');
     if(this.control.jobs.get(job.id)!==cj||cj.status!=='active'||!cap||cap.mode!==2||cap.testMode)throw fault(409,cj?.lastError?.message||'任务控制租约已失效');
     if(now-job.armedAt>1000&&(p.mode!==2||p.enabled===false))throw fault(409,'船端未保持航向闭环控制，任务停止');
     const isNew=job.lastSourceTick!==p.sourceTick;
@@ -114,7 +119,7 @@ class MissionService{
     const target=job.route.points[job.index];
     // 返回航段沿“终点 → 起点”引导，也接受原有横向偏差/进度保护。
     const from=job.phase==='returning'?job.route.points[job.route.points.length-1]:job.index>0?job.route.points[job.index-1]:null;
-    const g=from?nav.guide(p,from,target,Math.max(5,radius*2,job.route.speedMps*4)):{heading:nav.bearing(p,target),distanceM:nav.distance(p,target),crossM:0};
+    const g=job.optimal?job.optimal.guide(p,from||job.origin,target,radius):from?nav.guide(p,from,target,Math.max(5,radius*2,job.route.speedMps*4)):{heading:nav.bearing(p,target),distanceM:nav.distance(p,target),crossM:0};
     job.distanceM=g.distanceM;job.crossTrackM=g.crossM;job.heading=g.distanceM<0.2?p.heading:g.heading;
     if(Math.abs(g.crossM)>Math.max(30,radius*5))throw fault(409,'船位偏离航线过远，任务停止');
     if(g.distanceM<job.bestDistance-0.5){job.bestDistance=g.distanceM;job.lastProgressAt=now;}

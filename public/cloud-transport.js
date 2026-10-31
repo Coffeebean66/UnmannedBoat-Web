@@ -46,7 +46,7 @@
       return '';
     }
     uncertain(kind,message){
-      return Object.assign(Error(message+(kind==='read'?'；请确认连接后重新读取参数。':'；写入可能已生效，请先读取确认后再重试。')),{uncertain:true});
+      return Object.assign(Error(message+(kind==='algorithm'?'；切换可能已生效，请等待船端算法状态刷新，确认后再试。':kind==='read'?'；请确认连接后重新读取参数。':'；写入可能已生效，请先读取确认后再重试。')),{uncertain:true});
     }
     finishParameter(pending,error,frame){
       if(this.pending!==pending)return;
@@ -58,7 +58,7 @@
       if(this.pending)this.finishParameter(this.pending,this.uncertain(this.pending.kind,message));
     }
     async request(kind,values){
-      if(!['read','write','flash'].includes(kind))throw Error('不支持的参数命令');
+      if(!['read','write','flash','algorithm'].includes(kind))throw Error('不支持的参数命令');
       if(this.pending)throw Error('请等待当前云端参数操作完成');
       if(this.readOnly)throw Error(this.parameterReadOnlyReason);
       if(!this.connected||!this.wanted)throw Error('请先连接云端无人船并等待实时数据');
@@ -86,8 +86,12 @@
           current();
           if(typeof result.frame!=='string'||result.frame.length!==76||!/^[A-Za-z0-9+/]*={0,2}$/.test(result.frame))throw Error('参数响应格式错误，尚未收到有效设备确认');
           const raw=atob(result.frame),bytes=Uint8Array.from(raw,char=>char.charCodeAt(0));
-          const frame=decodeParameterFrame(bytes);
+          const frame=kind==='algorithm'?BoatModules.controlAlgorithm.response(bytes):decodeParameterFrame(bytes);
           if(!frame)throw Error('参数响应校验失败，尚未收到有效设备确认');
+          if(kind==='algorithm'){
+            const device=this.devices.find(device=>device.id===deviceId);
+            if(device?.controlAlgorithm)device.controlAlgorithm={...device.controlAlgorithm,id:frame.algorithm};
+          }
           return frame;
         })().then(frame=>this.finishParameter(pending,null,frame)).catch(error=>{
           if(error.status===401){this.authenticated=false;window.BoatAuth?.expire();}
