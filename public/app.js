@@ -169,15 +169,16 @@
   }
   function updateMapLabels() {
     const amap=map?.provider==='amap';
-    set('mapLayerName',amap?'高德地图':map?.provider==='osm'?'OpenStreetMap':'地图加载中');
+    set('mapLayerName',map?.providerLabel||'地图加载中');
     set('mapCoordinateSystem',amap?'GCJ-02':'WGS84');
     const button=$('mapProviderToggle');
     const nextOsm=amap||!map?.ready;
+    const satellite=map?.mode==='satellite';
     button.disabled=!map||map.switching;
     button.setAttribute('aria-busy',String(!!map?.switching));
-    set('mapProviderToggle',map?.switching?'正在切换…':nextOsm?'切换至 OSM':'切换至高德');
-    button.title=nextOsm?'切换为 OpenStreetMap，保留轨迹和船位':'切换为高德地图；需管理员先配置 Key 与安全密钥';
-    set('heroSourceLabel','MQTT 云端监测 / '+(amap?'高德地图':map?.provider==='osm'?'OpenStreetMap':'地图加载中'));
+    set('mapProviderToggle',map?.switching?'正在切换…':satellite?'切换至平面':nextOsm?'切换至 OSM':'切换至高德');
+    button.title=satellite?'恢复此前使用的平面地图':nextOsm?'切换为 OpenStreetMap，保留轨迹和船位':'切换为高德平面地图；卫星视角及来源可在地图内选择';
+    set('heroSourceLabel','MQTT 云端监测 / '+(map?.providerLabel||'地图加载中'));
   }
   function position(frame,at,now,preserveView=false) {
     const view=M.velocityDisplay.prepareVelocityDisplay(frame,at,now,link.connected),v=frame?.velocity;
@@ -398,8 +399,8 @@
   on('mapVectorsToggle',()=>mapVectors.toggle());
   on('compassToggle',()=>{setCompassVisibility(!compassVisible,true);renderCompass(performance.now());});
   on('mapProviderToggle',async()=>{
-    const switched=await map.switchProvider(map.provider==='amap'||!map.ready?'osm':'amap');
-    if(switched)toast('已切换至'+(map.provider==='amap'?'高德地图':' OpenStreetMap'));
+    const switched=await (map.mode==='satellite'?map.switchMode('planar'):map.switchProvider(map.provider==='amap'||!map.ready?'osm':'amap'));
+    if(switched)toast('已切换至 '+map.providerLabel);
   });
   on('mapCenter',()=>{if(!map?.ready)toast('地图尚未就绪，请查看地图底部提示');else if(lastLocation)map.setView(lastLocation,16);else toast('尚无有效定位');});
   $('mapFollow').onchange=()=>{if($('mapFollow').checked&&lastLocation&&map?.ready)map.setView(lastLocation,16);};

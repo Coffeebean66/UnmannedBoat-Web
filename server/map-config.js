@@ -1,4 +1,4 @@
-/* 高德 JS API 配置：公开浏览器配置，管理员可将设置原子保存到源码目录外。 */
+/* 地图浏览器凭据：高德平面图与天地图影像独立配置，原子保存到源码目录外。 */
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto');
 
@@ -11,6 +11,7 @@ const STYLE_HOSTS=['https://o4.amap.com','https://custyle.amap.com'];
 const JSAPI_DATA_HOSTS=[1,2,3,4,5].map(shard=>'https://jsapi-data'+shard+'.amap.com');
 const TILE_HOSTS=['webrd','webst'].flatMap(prefix=>Array.from({length:4},(_,i)=>'https://'+prefix+'0'+(i+1)+'.is.autonavi.com'));
 const MAP_IMAGES=['https://webapi.amap.com','https://a.amap.com','https://o4.amap.com',...VECTOR_HOSTS,...TILE_HOSTS].join(' ');
+const SATELLITE_IMAGES=['https://server.arcgisonline.com',...Array.from({length:8},(_,i)=>'https://t'+i+'.tianditu.gov.cn')].join(' ');
 
 // 官方 JS API 2.0 会执行动态 JS / WebAssembly 及内联尺寸检测脚本，
 // 也会通过 restapi 的 JSONP 脚本和 jsapi 的 XHR 初始化地图，缺项会使底图空白。
@@ -22,7 +23,7 @@ const MAP_CONTENT_SECURITY_POLICY=[
   "script-src-attr 'none'",
   "style-src 'self' 'unsafe-inline' https://webapi.amap.com",
   // 未配置高德时前端保留 OSM 底图回退，仅允许其明确的瓦片域名。
-  "img-src 'self' data: blob: https://tile.openstreetmap.org "+MAP_IMAGES,
+  "img-src 'self' data: blob: https://tile.openstreetmap.org "+MAP_IMAGES+' '+SATELLITE_IMAGES,
   "connect-src 'self' https://webapi.amap.com https://restapi.amap.com https://jsapi.amap.com https://a.amap.com https://mapplugin.amap.com "+[...VECTOR_HOSTS,...TILE_HOSTS,...STYLE_HOSTS,...JSAPI_DATA_HOSTS].join(' '),
   "font-src 'self' https://webapi.amap.com",
   "worker-src 'self' blob:",
@@ -33,13 +34,16 @@ const MAP_CONTENT_SECURITY_POLICY=[
 
 function readMapConfig(env=process.env){
   const key=String(env.BOAT_AMAP_KEY||'').trim(),securityJsCode=String(env.BOAT_AMAP_SECURITY_CODE||'').trim();
+  const tiandituKey=String(env.BOAT_TIANDITU_KEY||'').trim(),tiandituConfigured=CREDENTIAL.test(tiandituKey);
   const missing=[];
   if(!CREDENTIAL.test(key))missing.push('BOAT_AMAP_KEY');
   if(!CREDENTIAL.test(securityJsCode))missing.push('BOAT_AMAP_SECURITY_CODE');
   const configured=missing.length===0;
   return {provider:'amap',version:'2.0',enabled:configured,configured,
     key:configured?key:'',securityJsCode:configured?securityJsCode:'',
-    reason:configured?'':'高德地图尚未配置：请在服务器设置 '+missing.join('、')+'（高德 Web 端 JS API 的 32 位 Key / 安全密钥）'};
+    reason:configured?'':'高德地图尚未配置：请在服务器设置 '+missing.join('、')+'（高德 Web 端 JS API 的 32 位 Key / 安全密钥）',
+    tianditu:{configured:tiandituConfigured,key:tiandituConfigured?tiandituKey:'',
+      reason:tiandituConfigured?'':'天地图影像尚未配置：请管理员填写天地图浏览器端 Key，或设置 BOAT_TIANDITU_KEY'}};
 }
 
 function resolveMapConfigFile(env=process.env,file){
@@ -55,11 +59,17 @@ function resolveMapConfigFile(env=process.env,file){
 }
 
 function normalizeSettings(input){
-  if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length!==2||
-    Object.keys(input).some(key=>!['key','securityJsCode'].includes(key))||typeof input.key!=='string'||typeof input.securityJsCode!=='string')return null;
+  if(!input||typeof input!=='object'||Array.isArray(input)||
+    Object.keys(input).some(key=>!['key','securityJsCode','tiandituKey'].includes(key))||typeof input.key!=='string'||typeof input.securityJsCode!=='string')return null;
   const key=input.key.trim(),securityJsCode=input.securityJsCode.trim();
-  if((key===''&&securityJsCode==='')||(CREDENTIAL.test(key)&&CREDENTIAL.test(securityJsCode)))return {key,securityJsCode};
-  return null;
+  if(!((key===''&&securityJsCode==='')||(CREDENTIAL.test(key)&&CREDENTIAL.test(securityJsCode))))return null;
+  if(Object.hasOwn(input,'tiandituKey')){
+    if(typeof input.tiandituKey!=='string')return null;
+    const tiandituKey=input.tiandituKey.trim();
+    if(tiandituKey!==''&&!CREDENTIAL.test(tiandituKey))return null;
+    return {key,securityJsCode,tiandituKey};
+  }
+  return {key,securityJsCode};
 }
 
 function readJsonBody(req,timeoutMs){
@@ -85,19 +95,22 @@ function createMapConfigApi({env=process.env,accounts,file,bodyTimeoutMs=5000}={
       const stat=fs.lstatSync(configFile);
       if(!stat.isFile()||stat.isSymbolicLink()||stat.size>2048)throw Error('Invalid settings file');
       const stored=JSON.parse(fs.readFileSync(configFile,'utf8'));
-      if(!stored||stored.version!==1||Object.keys(stored).some(key=>!['version','key','securityJsCode'].includes(key)))throw Error('Invalid settings version');
-      settings=normalizeSettings({key:stored.key,securityJsCode:stored.securityJsCode});
+      if(!stored||stored.version!==1)throw Error('Invalid settings version');
+      const {version,...credentials}=stored;
+      settings=normalizeSettings(credentials);
       if(!settings)throw Error('Invalid settings values');
     }catch(error){if(error.code!=='ENOENT')loadError='地图配置文件读取失败，请管理员重新保存配置';}
   }catch(_){loadError='地图配置文件路径无效，请管理员设置绝对路径 BOAT_MAP_CONFIG_FILE';}
   function config(){
     if(loadError)return {...readMapConfig({}),reason:loadError};
     if(!settings)return readMapConfig(env);
-    const value=readMapConfig({BOAT_AMAP_KEY:settings.key,BOAT_AMAP_SECURITY_CODE:settings.securityJsCode});
+    // 旧配置文件没有天地图字段时，仍允许单独从环境变量启用影像。
+    const value=readMapConfig({BOAT_AMAP_KEY:settings.key,BOAT_AMAP_SECURITY_CODE:settings.securityJsCode,
+      BOAT_TIANDITU_KEY:Object.hasOwn(settings,'tiandituKey')?settings.tiandituKey:env.BOAT_TIANDITU_KEY});
     if(!value.configured)value.reason='高德地图已停用，当前使用 OpenStreetMap';
     return value;
   }
-  const snapshot=()=>({...config(),source:settings||loadError?'saved':config().configured?'environment':'none'});
+  const snapshot=()=>{const value=config();return {...value,source:settings||loadError?'saved':value.configured||value.tianditu.configured?'environment':'none'};};
   const json=(res,status,value)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
   const active=session=>!closed&&accounts.isActive(session)&&session.value.role==='admin';
   async function save(input,session,res){
@@ -142,8 +155,10 @@ function createMapConfigApi({env=process.env,accounts,file,bodyTimeoutMs=5000}={
       if(!res.destroyed){res.setHeader('Connection','close');json(res,error.status||400,{error:error.status===408?'地图设置请求超时':'地图设置请求格式不正确'});req.resume();}
       return true;
     }
-    if(!input){json(res,400,{error:'Key 和安全密钥必须同时为 32 位十六进制，或同时留空停用高德；不允许额外字段'});return true;}
+    if(!input){json(res,400,{error:'高德 Key 和安全密钥须同时为 32 位十六进制或同时留空；天地图 Key 须为 32 位十六进制或留空；不允许额外字段'});return true;}
     if(!active(session)){json(res,401,{error:'登录会话已失效，请重新登录'});return true;}
+    // 兼容旧页面的两字段请求，不能意外清除管理员已经保存的天地图 Key。
+    if(!Object.hasOwn(input,'tiandituKey')&&settings&&Object.hasOwn(settings,'tiandituKey'))input.tiandituKey=settings.tiandituKey;
     try{await save(input,session,res);if(!res.destroyed)json(res,200,snapshot());}
     catch(error){if(!res.destroyed)json(res,error.status||503,{error:error.message&&error.status?error.message:'地图设置保存失败，当前配置未更改，请检查配置目录写入权限'});}
     return true;

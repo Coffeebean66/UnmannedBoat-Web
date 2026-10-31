@@ -53,8 +53,14 @@ html[data-workspace-view="driving"] .cloud-source-label,html[data-workspace-view
 .driving-workspace[data-primary="map"] .driver-region-map .boat-map-zoom { top:calc(var(--driver-pip-height) + 24px); left:auto; right:12px; }
 .driving-workspace[data-primary="map"] .driver-region-map .map-north { top:calc(var(--driver-pip-height) + 24px); bottom:auto; right:58px; }
 .driving-workspace[data-primary="map"] .driver-region-map .map-layer-label { top:calc(var(--driver-pip-height) + 24px); left:auto; right:112px; }
-.driving-workspace[data-primary="video"] .driver-region-map .map-layer-label { left:48px; max-width:calc(100% - 56px); overflow:hidden; padding:4px 5px; gap:4px; font-size:7px; white-space:nowrap; }
+.driving-workspace[data-primary="video"] .driver-region-map .map-layer-label { left:8px; max-width:calc(100% - 16px); overflow:hidden; padding:4px 5px; gap:4px; font-size:7px; white-space:nowrap; }
 .driving-workspace[data-primary="video"] .driver-region-map .map-layer-divider,.driving-workspace[data-primary="video"] .driver-region-map #mapCoordinateSystem { display:none; }
+.driving-workspace[data-primary="video"] .driver-region-map .boat-map-layers { top:44px; left:8px; max-width:calc(100% - 16px); }
+.driving-workspace[data-primary="video"] .driver-region-map .boat-map-layers button { min-height:24px; padding:3px 6px; font-size:10px; }
+.driving-workspace[data-primary="video"] .driver-region-map .boat-map-layers select { min-height:24px; width:122px; font-size:10px; }
+/* 小窗保留滚轮/双指缩放，隐藏会压住图层菜单的缩放按钮；放大地图后恢复。 */
+.driving-workspace[data-primary="video"] .driver-region-map .leaflet-control-zoom,.driving-workspace[data-primary="video"] .driver-region-map .boat-map-zoom { display:none; }
+.driving-workspace[data-primary="map"] .driver-region-map .boat-map-layers { top:calc(var(--driver-pip-height) + 64px); left:auto; right:112px; max-width:calc(100% - 136px); }
 
 /* 左上航行读数、左下地平仪/罗盘、底部中间操控、右下双电机。 */
 .driver-navigation-data { position:absolute; z-index:30; top:12px; left:12px; width:clamp(248px,26%,340px); margin:0; padding:11px; }

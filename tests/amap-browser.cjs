@@ -73,8 +73,8 @@ const fakeSdk='('+function(){
 }.toString()+')();';
 
 async function browserSession(server,mode,run){
-  const profile=fs.mkdtempSync(path.join(output,'amap-chrome-')),errors=[],sdkRequests=[],configRequests=[],settingsRequests=[];
-  const failures={settingsRead:false,settingsWrite:false,sdk:false};
+  const profile=fs.mkdtempSync(path.join(output,'amap-chrome-')),errors=[],sdkRequests=[],configRequests=[],settingsRequests=[],tileRequests=[];
+  const failures={settingsRead:false,settingsWrite:false,sdk:false,tiles:false};
   const browser=spawn(process.env.CHROME_PATH||'C:/Program Files/Google/Chrome/Application/chrome.exe',[
     '--headless','--no-first-run','--no-default-browser-check','--use-angle=swiftshader','--enable-unsafe-swiftshader',
     '--remote-debugging-port=0','--user-data-dir='+profile
@@ -103,6 +103,12 @@ async function browserSession(server,mode,run){
           void (mode==='sdk-failed'||failures.sdk
             ?send('Fetch.failRequest',{requestId:request.requestId,errorReason:'Failed'})
             :send('Fetch.fulfillRequest',{requestId:request.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'text/javascript; charset=utf-8'}],body:Buffer.from('window.amapTestMode='+JSON.stringify(mode)+';'+fakeSdk).toString('base64')}))
+            .catch(error=>errors.push(error.message));
+        }else if(url.hostname==='server.arcgisonline.com'||/^t[0-7]\.tianditu\.gov\.cn$/.test(url.hostname)){
+          tileRequests.push(url.href);
+          const tile='<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"><rect width="256" height="256" fill="#224039"/><path d="M0 50 256 200M20 256 220 0" stroke="#4a6860" stroke-width="30"/><text x="12" y="24" fill="#d7e8df" font-size="12">Satellite test tile</text></svg>';
+          void (failures.tiles?send('Fetch.failRequest',{requestId:request.requestId,errorReason:'Failed'}):
+            send('Fetch.fulfillRequest',{requestId:request.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'image/svg+xml'}],body:Buffer.from(tile).toString('base64')}))
             .catch(error=>errors.push(error.message));
         }else if(url.pathname==='/api/map/settings'){
           settingsRequests.push({method:request.request.method,body:request.request.postData});
@@ -144,13 +150,15 @@ async function browserSession(server,mode,run){
     };
     await send('Runtime.enable');await send('Page.enable');
     await send('Network.enable');await send('Network.setBlockedURLs',{urls:['https://tile.openstreetmap.org/*']});
-    await send('Fetch.enable',{patterns:[{urlPattern:'https://webapi.amap.com/*'},{urlPattern:'*/api/map/config'},{urlPattern:'*/api/map/settings'}]});
+    await send('Fetch.enable',{patterns:[{urlPattern:'https://webapi.amap.com/*'},{urlPattern:'*/api/map/config'},{urlPattern:'*/api/map/settings'},
+      ...(mode==='satellite'?[{urlPattern:'https://server.arcgisonline.com/*'},{urlPattern:'https://t*.tianditu.gov.cn/*'}]:[])]});
     await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
     await send('Page.addScriptToEvaluateOnNewDocument',{source:mock});
+    if(mode==='satellite')await send('Page.addScriptToEvaluateOnNewDocument',{source:"window.satellitePolicies=[];document.addEventListener('securitypolicyviolation',e=>satellitePolicies.push(e.blockedURI))"});
     // 单船地图测试显式打开概览；自动选船不再替用户从船队页切换页面。
     await send('Page.navigate',{url:'http://127.0.0.1:'+server.address().port+'/#overview'});
     await until('!!window.boatMonitor && !!window.boatMonitor.viewer.renderer');
-    await run({send,evaluate,until,shot,viewportShot,errors,sdkRequests,configRequests,settingsRequests,failures});
+    await run({send,evaluate,until,shot,viewportShot,errors,sdkRequests,configRequests,settingsRequests,tileRequests,failures});
     assert.deepEqual(errors,[],'Page has no unhandled JavaScript errors in '+mode);
   }finally{socket?.close();browser.kill();}
 }
@@ -178,7 +186,7 @@ async function login({evaluate,until},username,password){
 async function settingsBrowser(){
   const base=fs.mkdtempSync(path.join(output,'amap-settings-persist-')),file=path.join(base,'map-settings.json');
   const accounts={BOAT_ACCOUNTS_ENABLED:'1',BOAT_ADMIN_USERNAME:'operator',BOAT_ADMIN_PASSWORD:'browser-admin-test-only',BOAT_GUEST_USERNAME:'visitor',BOAT_GUEST_PASSWORD:'browser-guest-test-only'};
-  const newKey='c'.repeat(32),newCode='d'.repeat(32),options={mapOptions:{file}};
+  const newKey='c'.repeat(32),newCode='d'.repeat(32),tiandituKey='e'.repeat(32),options={mapOptions:{file}};
   const api="fetch('/api/map/config').then(response=>response.json())";
   const fill=(key,code)=>"document.getElementById('amapKey').value="+JSON.stringify(key)+";document.getElementById('amapSecurityCode').value="+JSON.stringify(code)+";for(const id of ['amapKey','amapSecurityCode'])document.getElementById(id).dispatchEvent(new Event('input',{bubbles:true}))";
   const open=async({evaluate,until})=>{
@@ -198,7 +206,9 @@ async function settingsBrowser(){
     await evaluate("document.getElementById('mapSettingsForm').requestSubmit()");
     await until("document.getElementById('mapSettingsStatus').dataset.tone==='error'");
     assert.equal(settingsRequests.filter(request=>request.method==='PUT').length,writesBefore,'Invalid fields do not send a settings write');
-    await evaluate(fill(testKey,testCode));failures.settingsWrite=true;
+    await evaluate(fill(testKey,testCode));
+    await evaluate("document.getElementById('tiandituKey').value="+JSON.stringify(tiandituKey)+";document.getElementById('tiandituKey').dispatchEvent(new Event('input',{bubbles:true}))");
+    failures.settingsWrite=true;
     await evaluate("document.getElementById('mapSettingsForm').requestSubmit()");
     await until("/失败/.test(document.getElementById('mapSettingsStatus').textContent) && !document.getElementById('mapSettingsSave').disabled");
     assert.notEqual(await evaluate("document.getElementById('mapSettingsStatus').dataset.tone"),'success','A failed save never displays success');
@@ -207,12 +217,14 @@ async function settingsBrowser(){
     await evaluate("document.getElementById('mapSettingsForm').requestSubmit()");
     await until("/刷新/.test(document.getElementById('mapSettingsStatus').textContent) && document.getElementById('mapSettingsStatus').dataset.tone==='success'");
     assert.equal((await evaluate(api)).key,testKey);assert.equal((await evaluate(api)).securityJsCode,testCode);
+    assert.equal((await evaluate(api)).tianditu.key,tiandituKey,'Administrator saves Tianditu independently of AMap');
     assert.equal(await evaluate('boatMonitor.map.provider'),'osm','Saving does not replace the running map before an explicit refresh');
     assert.equal(sdkRequests.length,0,'Saving does not automatically load a new SDK');
     await send('Page.reload');await until("window.boatMonitor?.map?.ready && boatMonitor.map.provider==='amap' && window.BoatAuth?.canManage");
     assert.equal(sdkRequests.length,1,'Explicit page refresh applies the saved configuration');
     await startTelemetry(context);await open(context);
     assert.equal(await evaluate("document.getElementById('amapKey').value"),testKey,'Saved configuration is read back into the form');
+    assert.equal(await evaluate("document.getElementById('tiandituKey').value"),tiandituKey);
     assert.match(await evaluate("document.getElementById('mapSettingsSource').textContent"),/保存|文件/);
     await evaluate(fill(newKey,newCode));
     await evaluate("document.getElementById('mapSettingsForm').requestSubmit()");
@@ -224,13 +236,14 @@ async function settingsBrowser(){
       await send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:width<600});
       await evaluate("document.getElementById('mapSettings').scrollIntoView({block:'center',behavior:'instant'})");await wait(200);
       assert.equal(await evaluate("document.documentElement.scrollWidth<=innerWidth && document.getElementById('platformSettingsDialog').scrollWidth<=document.getElementById('platformSettingsDialog').clientWidth && document.querySelector('#platformSettingsDialog .dialog-scroll').scrollWidth<=document.querySelector('#platformSettingsDialog .dialog-scroll').clientWidth"),true,'Map settings do not overflow at '+width);
-      assert.equal(await evaluate("['amapKey','amapSecurityCode'].every(id=>{const input=document.getElementById(id),parent=input.closest('label').getBoundingClientRect(),r=input.getBoundingClientRect();return r.left>=parent.left-1&&r.right<=parent.right+1;})"),true,'Map inputs fit their labels at '+width);
+      assert.equal(await evaluate("['amapKey','amapSecurityCode','tiandituKey'].every(id=>{const input=document.getElementById(id),parent=input.closest('label').getBoundingClientRect(),r=input.getBoundingClientRect();return r.left>=parent.left-1&&r.right<=parent.right+1;})"),true,'Map inputs fit their labels at '+width);
       await viewportShot('amap-settings-admin-'+width);
     }
     await evaluate("document.getElementById('platformSettingsClose').click();document.getElementById('accountLogout').click()");await until('!BoatAuth.user && !BoatAuth.busy');
     await login(context,'visitor',accounts.BOAT_GUEST_PASSWORD);
     assert.equal(await evaluate("document.getElementById('mapSettings').hidden"),true,'Guest cannot see map administration');
     assert.equal(await evaluate("document.getElementById('amapKey').value"),'','Account downgrade clears the administrator key field');
+    assert.equal(await evaluate("document.getElementById('tiandituKey').value"),'','Account downgrade clears Tianditu key');
     assert.equal(await evaluate("fetch('/api/map/settings').then(response=>response.status)"),403,'Server refuses guest settings reads');
     assert.equal(await evaluate("fetch('/api/map/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:'',securityJsCode:''})}).then(response=>response.status)"),403,'Server refuses guest settings writes');
     assert.equal((await evaluate(api)).key,newKey,'Guest attempts cannot change the persisted configuration');
@@ -241,6 +254,7 @@ async function settingsBrowser(){
     const {evaluate,until}=context;
     await until("boatMonitor.map?.ready && boatMonitor.map.provider==='amap'");
     const config=await evaluate(api);assert.equal(config.key,newKey);assert.equal(config.securityJsCode,newCode);
+    assert.equal(config.tianditu.key,tiandituKey);
     assert.equal(await evaluate("fetch('/api/map/settings').then(response=>response.status)"),401,'Anonymous visitors cannot read management settings');
     await login(context,'operator',accounts.BOAT_ADMIN_PASSWORD);await open(context);
     assert.equal(await evaluate("document.getElementById('amapKey').value"),newKey);
@@ -475,4 +489,5 @@ async function main(){
   if(!process.argv.includes('--map-only'))await settingsBrowser();
   console.log('Screenshots: '+output+' (AMap images use an explicitly labelled simulated SDK).');
 }
-(process.argv.includes('--settings-only')?settingsBrowser():process.argv.includes('--switch-only')?providerSwitchBrowser():main()).catch(error=>{console.error(error);process.exitCode=1;});
+module.exports={withServer,startTelemetry,login};
+if(require.main===module)(process.argv.includes('--settings-only')?settingsBrowser():process.argv.includes('--switch-only')?providerSwitchBrowser():main()).catch(error=>{console.error(error);process.exitCode=1;});

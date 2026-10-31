@@ -6,6 +6,12 @@
   const MAP_READY_TIMEOUT_MS = 15000;
   const CONFIG_TIMEOUT_MS = 5000;
   const PROVIDER_PREFERENCE = 'boat.map.provider';
+  const PROVIDERS = {
+    osm: { label: 'OpenStreetMap', option: 'OpenStreetMap', mode: 'planar', maxZoom: 19 },
+    amap: { label: '高德地图', option: '高德地图', mode: 'planar', maxZoom: 20 },
+    arcgis: { label: 'ArcGIS World Imagery', option: 'ArcGIS 影像', mode: 'satellite', maxZoom: 19 },
+    tianditu: { label: '天地图影像', option: '天地图影像', mode: 'satellite', maxZoom: 19 }
+  };
   const POLICY_WARNING = '高德地图资源被 CSP 安全策略拦截，底图可能不完整；可切换至 OSM';
   let callbackSequence = 0;
 
@@ -30,6 +36,7 @@
       this._markers = new Set();
       this._trackLayers = [];
       this._mapEvents = [];
+      this._tileLayers = [];
       this._destroyed = false;
       this._amapPolicyBlocked = false;
       this._policyViolation = event => {
@@ -67,11 +74,29 @@
 
     _setSwitching(value) {
       this.switching = value;
+      this._renderLayerControls();
       this._emit('switching', value);
     }
 
-    _readPreference() {
-      try { return scope.localStorage?.getItem(PROVIDER_PREFERENCE); } catch (_) { return null; }
+    _readPreference(key = PROVIDER_PREFERENCE) {
+      try { return scope.localStorage?.getItem(key); } catch (_) { return null; }
+    }
+
+    get mode() { return PROVIDERS[this.provider].mode; }
+    get providerLabel() { return PROVIDERS[this.provider].label; }
+    get maxZoom() { return PROVIDERS[this.provider].maxZoom; }
+
+    _preferredProvider(mode) {
+      const saved = this._readPreference('boat.map.' + mode);
+      if (Object.hasOwn(PROVIDERS, saved) && PROVIDERS[saved].mode === mode) {
+        return saved === 'amap' && this.config?.configured !== true ? 'osm' : saved;
+      }
+      return mode === 'satellite' ? 'arcgis' : this.config?.configured ? 'amap' : 'osm';
+    }
+
+    switchMode(mode) {
+      if (mode !== 'planar' && mode !== 'satellite') return Promise.reject(new Error('不支持的地图视角'));
+      return this.switchProvider(this.mode === mode && this.ready ? this.provider : this._preferredProvider(mode));
     }
 
     _osmStatus() {
@@ -83,7 +108,8 @@
         this._setStatus(POLICY_WARNING, 'warning');
         return;
       }
-      this._setStatus(this.provider === 'amap' ? '高德地图 · GCJ-02（RTK 原始 WGS84）' : this._osmStatus(),
+      this._setStatus(this.provider === 'amap' ? '高德地图 · GCJ-02（RTK 原始 WGS84）' :
+        this.provider === 'osm' ? this._osmStatus() : this.providerLabel + ' · 卫星影像 · WGS84',
         this.provider === 'amap' ? 'success' : 'neutral');
     }
 
@@ -92,6 +118,12 @@
           typeof config.key !== 'string' || !config.key.trim() ||
           typeof config.securityJsCode !== 'string' || !config.securityJsCode.trim()) {
         throw new Error('高德地图尚未配置，请管理员在“设置 → 平台地图设置”填写 Key 与安全密钥');
+      }
+    }
+
+    _requireTianditu(config) {
+      if (config.tianditu?.configured !== true || !/^[a-f\d]{32}$/i.test(config.tianditu.key || '')) {
+        throw new Error('天地图影像尚未配置，请管理员在“设置 → 平台地图设置”填写天地图浏览器端 Key');
       }
     }
 
@@ -109,8 +141,10 @@
         const config = await this._loadConfig();
         if (this._destroyed) return this;
         this.config = config;
-        if (config.enabled === true && config.configured === true && this._readPreference() !== 'osm') {
-          this.provider = 'amap';
+        const preferred = this._readPreference();
+        this.provider = preferred === 'amap' && config.configured !== true ? 'osm' : Object.hasOwn(PROVIDERS, preferred) ? preferred :
+          config.enabled === true && config.configured === true ? 'amap' : 'osm';
+        if (this.provider === 'amap') {
           this._requireAmap(config);
           this._setStatus('正在加载高德地图', 'loading');
           await this._loadSdk(config);
@@ -119,7 +153,7 @@
           if (this._destroyed) return this;
           this.ready = true;
         } else {
-          this.provider = 'osm';
+          if (this.provider === 'tianditu') this._requireTianditu(config);
           this.configurationReason = config.reason || '尚未填写高德 Key 与安全密钥';
           this._createOsm();
           this.ready = true;
@@ -132,12 +166,12 @@
           this._setStatus((this.provider === 'amap' ? '高德地图加载失败：' : '地图不可用：') +
             (error?.message || '未知错误') + '；RTK 原始经纬度仍可查看', 'error');
         }
-      } finally { this._setSwitching(false); }
+      } finally { this._createLayerControls(); this._setSwitching(false); }
       return this;
     }
 
     async switchProvider(provider) {
-      if (provider !== 'amap' && provider !== 'osm') throw new Error('不支持的地图类型');
+      if (!Object.hasOwn(PROVIDERS, provider)) throw new Error('不支持的地图类型');
       if (this._destroyed || this.switching) return false;
       if (this.ready && provider === this.provider) return true;
       this._setSwitching(true);
@@ -145,13 +179,13 @@
       let viewport, tracks, rebuilding = false;
       try {
         // 高德鉴权及 SDK 在旧地图仍可用时准备，失败不会清空现有船位和轨迹。
-        this._setStatus('正在切换至' + (provider === 'amap' ? '高德地图' : ' OpenStreetMap'), 'loading');
-        if (provider === 'amap') {
+        this._setStatus('正在切换至 ' + PROVIDERS[provider].label, 'loading');
+        if (provider === 'amap' || provider === 'tianditu') {
           const config = await this._loadConfig();
           if (this._destroyed) return false;
-          this._requireAmap(config);
+          if (provider === 'amap') this._requireAmap(config); else this._requireTianditu(config);
           this.config = config;
-          await this._loadSdk(config);
+          if (provider === 'amap') await this._loadSdk(config);
         }
         if (this._destroyed) return false;
         viewport = { center: this.getCenter(), zoom: this.getZoom() };
@@ -161,7 +195,12 @@
         this.provider = provider;
         await this._restoreMap(viewport, tracks);
         if (this._destroyed) return false;
-        try { scope.localStorage?.setItem(PROVIDER_PREFERENCE, provider); } catch (_) {}
+        try {
+          // 分别记住平面/卫星来源；切回平面时保留此前所选的高德或 OSM。
+          scope.localStorage?.setItem('boat.map.' + PROVIDERS[previous].mode, previous);
+          scope.localStorage?.setItem('boat.map.' + this.mode, provider);
+          scope.localStorage?.setItem(PROVIDER_PREFERENCE, provider);
+        } catch (_) {}
         this._mapReadyStatus();
         this._emit('providerchange', { provider });
         this._emit('resize');
@@ -175,17 +214,17 @@
           if (this._destroyed) return false;
         }
         this._setStatus('地图切换失败：' + (error?.message || '未知错误') +
-          (this.ready ? '；继续使用' + (this.provider === 'amap' ? '高德地图' : ' OpenStreetMap') : ''),
+          (this.ready ? '；继续使用 ' + this.providerLabel : ''),
           this.ready ? 'warning' : 'error');
         throw error;
-      } finally { this._setSwitching(false); }
+      } finally { this._createLayerControls(); this._setSwitching(false); }
     }
 
     async _restoreMap(viewport, tracks) {
       if (this.provider === 'amap') await this._createAmap(); else this._createOsm();
       if (this._destroyed) return;
       this.ready = true;
-      if (viewport.center) this.setView(viewport.center, Math.max(3, Math.min(this.provider === 'amap' ? 20 : 19, viewport.zoom)), { animate: false });
+      if (viewport.center) this.setView(viewport.center, Math.max(3, Math.min(this.maxZoom, viewport.zoom)), { animate: false });
       for (const marker of this._markers) marker._mount();
       this.setTrackLines(tracks);
     }
@@ -320,23 +359,97 @@
       this._zoomControls = controls;
     }
 
+    _createLayerControls() {
+      if (this._destroyed || !this.container || this._layerControls) return;
+      const controls = scope.document.createElement('div');
+      controls.className = 'boat-map-layers';
+      controls.setAttribute('role', 'group');
+      controls.setAttribute('aria-label', '地图视角与底图来源');
+      this._modeButtons = [];
+      for (const [mode, text] of [['planar', '平面'], ['satellite', '卫星']]) {
+        const button = scope.document.createElement('button');
+        button.type = 'button'; button.textContent = text;
+        button.setAttribute('aria-label', text + '地图');
+        button.addEventListener('click', () => { this.switchMode(mode).catch(() => {}); });
+        controls.appendChild(button); this._modeButtons.push({ mode, button });
+      }
+      const source = scope.document.createElement('select');
+      source.addEventListener('change', () => { this.switchProvider(source.value).catch(() => {}); });
+      controls.appendChild(source);
+      // 菜单操作不能冒泡成地图点击（任务编辑时会错误添加航点）或拖动手势。
+      for (const event of ['click', 'dblclick', 'pointerdown', 'mousedown', 'touchstart', 'wheel', 'keydown']) {
+        controls.addEventListener(event, e => e.stopPropagation());
+      }
+      // 单船页的失败提示是地图外层浮层；菜单也放到该层，失败时仍可改选来源恢复。
+      const parent = this.container.parentElement;
+      const host = parent?.classList?.contains('map-stage') ? parent : this.container;
+      host.appendChild(controls);
+      this._layerControls = controls; this._sourceSelect = source;
+      this._renderLayerControls();
+    }
+
+    _renderLayerControls() {
+      if (!this._layerControls) return;
+      this._layerControls.setAttribute('aria-busy', String(this.switching));
+      for (const { mode, button } of this._modeButtons) {
+        button.disabled = this.switching;
+        button.setAttribute('aria-pressed', String(mode === this.mode));
+      }
+      const source = this._sourceSelect;
+      if (this._controlMode !== this.mode) {
+        source.innerHTML = '';
+        for (const [provider, info] of Object.entries(PROVIDERS)) {
+          if (info.mode !== this.mode) continue;
+          const option = scope.document.createElement('option');
+          option.value = provider; option.textContent = info.option; source.appendChild(option);
+        }
+        this._controlMode = this.mode;
+      }
+      source.value = this.provider;
+      source.disabled = this.switching;
+      source.title = this.providerLabel;
+      source.setAttribute('aria-label', this.mode === 'satellite' ? '卫星地图来源' : '平面地图来源');
+    }
+
     _createOsm() {
       if (!scope.L?.map) throw new Error('本地地图组件未加载');
-      this.map = scope.L.map(this.container, { zoomControl: true }).setView([31.23, 121.47], 5);
+      this.map = scope.L.map(this.container, { zoomControl: true, minZoom: 3, maxZoom: this.maxZoom }).setView([31.23, 121.47], 5);
       this._bindMap('dragstart', event => this._emit('dragstart', event));
       this._bindMap('resize', event => this._emit('resize', event));
       this._bindMap('click', event => {const location=fix(event.latlng);if(location)this._emit('click',location);});
       const currentMap = this.map;
-      this._tiles = scope.L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>'
+      let layers;
+      if (this.provider === 'arcgis') {
+        layers = [{ url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+          attribution: 'Tiles &copy; <a href="https://www.esri.com/" target="_blank" rel="noopener">Esri</a> &mdash; Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community' }];
+      } else if (this.provider === 'tianditu') {
+        const suffix = '/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=' + encodeURIComponent(this.config.tianditu.key);
+        layers = ['img', 'cia'].map(layer => ({
+          url: 'https://t{s}.tianditu.gov.cn/' + layer + '_w' + suffix + '&LAYER=' + layer,
+          subdomains: '01234567', maxNativeZoom: 18,
+          attribution: layer === 'img' ? '&copy; <a href="https://www.tianditu.gov.cn/" target="_blank" rel="noopener">天地图</a>' : '',
+          ...(layer === 'cia' ? { zIndex: 2 } : {})
+        }));
+      } else {
+        layers = [{ url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+          attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>' }];
+      }
+      const failed = new Set();
+      layers.forEach(({url, ...options}, index) => {
+        const layer = scope.L.tileLayer(url, { maxZoom: this.maxZoom, ...options });
+        this._tileLayers.push(layer);
+        if (!index) this._tiles = layer;
+        layer.on('loading', () => { failed.delete(index); })
+          .on('tileerror', () => {
+            failed.add(index);
+            if (!this._destroyed && this.map === currentMap) this._setStatus(
+              (this.provider === 'osm' ? (this.config?.configured ? '' : '高德未配置 · ') + 'OSM' : this.providerLabel) +
+              (this.provider === 'tianditu' && index ? '注记' : '底图') + '网络不可用，请检查网络' +
+              (this.provider === 'tianditu' ? '及 Key / 域名权限' : '') + '；坐标与轨迹仍有效', 'warning');
+          }).on('load', () => {
+            if (!this._destroyed && this.map === currentMap && !failed.size) this._mapReadyStatus();
+          }).addTo(this.map);
       });
-      this._tiles.on('loading', () => { this._tileFailed = false; })
-        .on('tileerror', () => {
-          this._tileFailed = true;
-          if (!this._destroyed && this.map === currentMap) this._setStatus((this.config?.configured ? '' : '高德未配置 · ') + 'OSM 底图网络不可用，坐标与轨迹仍有效', 'warning');
-        }).on('load', () => {
-          if (!this._destroyed && this.map === currentMap && !this._tileFailed) this._setStatus(this._osmStatus(), 'neutral');
-        }).addTo(this.map);
     }
 
     project(value) {
@@ -501,7 +614,7 @@
       }
       if (!locations.length) return false;
 
-      const maxZoom = Math.max(3, Math.min(this.provider === 'amap' ? 20 : 19,
+      const maxZoom = Math.max(3, Math.min(this.maxZoom,
         Number.isFinite(options.maxZoom) ? options.maxZoom : 16));
       const singleZoom = Math.max(3, Math.min(maxZoom,
         Number.isFinite(options.singleZoom) ? options.singleZoom : 15));
@@ -511,7 +624,7 @@
         return true;
       }
 
-      if (this.provider === 'osm') {
+      if (this.provider !== 'amap') {
         if (typeof this.map.fitBounds !== 'function') return false;
         this.map.fitBounds(locations.map(({ projected }) => [projected.latitude, projected.longitude]), {
           padding: options.padding || [32, 32], maxZoom, animate
@@ -571,7 +684,7 @@
       if (!this.ready) return null;
       const point = this.project(value);
       if (!point) return null;
-      if (this.provider === 'osm') return this.map.latLngToContainerPoint([point.latitude, point.longitude]);
+      if (this.provider !== 'amap') return this.map.latLngToContainerPoint([point.latitude, point.longitude]);
       const pixel = this.map.lngLatToContainer([point.longitude, point.latitude]);
       return { x: pixel.x ?? pixel.getX(), y: pixel.y ?? pixel.getY() };
     }
@@ -600,7 +713,10 @@
       this._mapEvents = [];
       this._zoomControls?.remove();
       this._zoomControls = null;
-      this._tiles?.off?.();
+      this._layerControls?.remove();
+      this._layerControls = null; this._sourceSelect = null; this._controlMode = null;
+      for (const layer of this._tileLayers) layer.off?.();
+      this._tileLayers = [];
       if (this.provider === 'amap') this.map?.destroy?.(); else this.map?.remove?.();
       this.map = null;
       this._tiles = null;

@@ -68,6 +68,34 @@ test('写入必须同源，拒绝无Origin、跨站Origin与伪造Sec-Fetch-Site
   assert.equal(fs.existsSync(f.file),false);
 });
 
+test('天地图可独立保存、重启保留与清空；旧页面写入不抹除影像凭据',async t=>{
+  const f=await fixture(t),cookie=await f.login(),tiandituKey='3'.repeat(32);
+  const save=body=>f.call('/api/map/settings',{method:'PUT',cookie,body});
+  const saved=await save({key:'',securityJsCode:'',tiandituKey});
+  assert.equal(saved.status,200);assert.equal(saved.json.configured,false);assert.equal(saved.json.tianditu.key,tiandituKey);
+  const legacy=await save({key:KEY,securityJsCode:CODE});
+  assert.equal(legacy.json.tianditu.key,tiandituKey);assert.equal(legacy.json.key,KEY);
+  await f.restart();assert.equal((await f.call('/api/map/config')).json.tianditu.key,tiandituKey);
+  const again=await f.login();
+  const cleared=await f.call('/api/map/settings',{method:'PUT',cookie:again,body:{key:KEY,securityJsCode:CODE,tiandituKey:''}});
+  assert.equal(cleared.json.tianditu.configured,false);assert.equal(cleared.json.configured,true);
+  await f.restart();assert.equal((await f.call('/api/map/config')).json.tianditu.key,'');
+});
+
+test('旧版磁盘配置可配合天地图环境变量；新界面保存可明确停用',async t=>{
+  const f=await fixture(t,{env:{BOAT_TIANDITU_KEY:KEY},beforeBoot({file}){
+    fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,JSON.stringify({version:1,key:KEY,securityJsCode:CODE}));
+  }});
+  assert.equal((await f.call('/api/map/config')).json.tianditu.key,KEY);
+  const cookie=await f.login();
+  for(const tiandituKey of ['short','x'.repeat(32),null,114]){
+    assert.equal((await f.call('/api/map/settings',{method:'PUT',cookie,body:{key:KEY,securityJsCode:CODE,tiandituKey}})).status,400);
+    assert.equal((await f.call('/api/map/config')).json.tianditu.key,KEY);
+  }
+  await f.call('/api/map/settings',{method:'PUT',cookie,body:{key:KEY,securityJsCode:CODE,tiandituKey:''}});
+  await f.restart();assert.equal((await f.call('/api/map/config')).json.tianditu.configured,false);
+});
+
 test('请求限制JSON类型、大小、字段与成对Key；错误不能创建持久化设置',async t=>{
   const f=await fixture(t),cookie=await f.login();
   for(const body of [{key:KEY},{key:KEY,securityJsCode:''},{key:'https://evil.test',securityJsCode:CODE},

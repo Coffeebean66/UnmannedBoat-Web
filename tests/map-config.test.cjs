@@ -22,7 +22,9 @@ test('高德配置缺失时明确说明缺项，同时服务和其他仪表资�
   const request=await fixture(t);
   const response=await request('/api/map/config');
   assert.equal(response.status,200);assert.equal(response.headers['cache-control'],'no-store');
-  assert.deepEqual({...response.json,reason:''},{provider:'amap',version:'2.0',enabled:false,configured:false,key:'',securityJsCode:'',reason:''});
+  const {tianditu,...amap}=response.json;
+  assert.deepEqual({...amap,reason:''},{provider:'amap',version:'2.0',enabled:false,configured:false,key:'',securityJsCode:'',reason:''});
+  assert.equal(tianditu.configured,false);assert.equal(tianditu.key,'');assert.match(tianditu.reason,/BOAT_TIANDITU_KEY/);
   assert.match(response.json.reason,/BOAT_AMAP_KEY/);assert.match(response.json.reason,/BOAT_AMAP_SECURITY_CODE/);
   assert.equal((await request('/healthz')).json.ok,true);assert.equal((await request('/app.js')).status,200);
   const partial=readMapConfig({BOAT_AMAP_KEY:KEY});assert.equal(partial.key,'');assert.match(partial.reason,/BOAT_AMAP_SECURITY_CODE/);
@@ -31,7 +33,9 @@ test('高德配置缺失时明确说明缺项，同时服务和其他仪表资�
 test('高德浏览器配置仅来自对应环境变量，不暴露账户或 MQTT 密码',async t=>{
   const request=await fixture(t,{BOAT_AMAP_KEY:KEY,BOAT_AMAP_SECURITY_CODE:CODE,BOAT_MQTT_PASSWORD:'fixture-private-password',BOAT_ADMIN_PASSWORD:'fixture-admin-password'});
   const response=await request('/api/map/config');
-  assert.deepEqual(response.json,{provider:'amap',version:'2.0',enabled:true,configured:true,key:KEY,securityJsCode:CODE,reason:''});
+  const {tianditu,...amap}=response.json;
+  assert.deepEqual(amap,{provider:'amap',version:'2.0',enabled:true,configured:true,key:KEY,securityJsCode:CODE,reason:''});
+  assert.equal(tianditu.configured,false);
   assert.doesNotMatch(response.body,/fixture-private|fixture-admin|PASSWORD/);
   const head=await request('/api/map/config','HEAD');assert.equal(head.status,200);assert.equal(head.body,'');
 });
@@ -44,6 +48,16 @@ test('非法配置不能启用地图或将任意内容注入 SDK 地址',()=>{
     }
   }
   assert.equal(readMapConfig({BOAT_AMAP_KEY:' '+KEY+' ',BOAT_AMAP_SECURITY_CODE:' '+CODE+' '}).configured,true);
+});
+
+test('天地图凭据独立于高德配置，非法 Key 不返回原值',()=>{
+  const config=readMapConfig({BOAT_TIANDITU_KEY:' '+KEY+' '});
+  assert.equal(config.configured,false);assert.deepEqual(config.tianditu,{configured:true,key:KEY,reason:''});
+  for(const key of ['<script>secret','https://evil.test','g'.repeat(32),'a'.repeat(33)]){
+    const invalid=readMapConfig({BOAT_AMAP_KEY:KEY,BOAT_AMAP_SECURITY_CODE:CODE,BOAT_TIANDITU_KEY:key});
+    assert.equal(invalid.configured,true);assert.equal(invalid.tianditu.key,'');assert.equal(invalid.tianditu.configured,false);
+    assert.equal(invalid.tianditu.reason.includes(key),false);
+  }
 });
 
 test('地图 API 是只读配置入口，没有任意 URL 转发或修改接口',async t=>{
@@ -69,6 +83,10 @@ test('CSP 兼容真实高德 SDK 初始化，同时限制外部资源、内联�
   assert.ok(directives.get('connect-src').includes('https://vdata.amap.com'));
   assert.ok(directives.get('img-src').includes('https://webrd01.is.autonavi.com'));
   assert.ok(directives.get('img-src').includes('https://tile.openstreetmap.org'));
+  for(const source of ['https://server.arcgisonline.com',...Array.from({length:8},(_,i)=>'https://t'+i+'.tianditu.gov.cn')]){
+    assert.ok(directives.get('img-src').includes(source),source);
+    assert.equal(scripts.includes(source),false,'satellite tiles do not require external scripts');
+  }
   assert.ok(directives.get('img-src').includes('https://o4.amap.com'),'the SDK loads its sprite sheets as images as well as its style over XHR');
   assert.deepEqual(directives.get('worker-src'),["'self'",'blob:']);
   assert.deepEqual(directives.get('frame-ancestors'),["'none'"]);

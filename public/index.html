@@ -102,7 +102,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.37.0</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.38.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -474,14 +474,15 @@
         <p id="recordingSettingsStatus" class="recording-settings-status" role="status" aria-live="polite">尚未读取录像保存设置。</p>
       </section>
       <section id="mapSettings" class="map-settings" aria-labelledby="mapSettingsTitle" hidden>
-        <div class="map-settings-heading"><div class="map-settings-title"><span class="card-icon blue" data-icon="map"></span><div><h3 id="mapSettingsTitle">平台地图设置</h3><p>AMAP · 仅保存在服务器</p></div></div><a class="map-settings-guide" href="https://github.com/Coffeebean66/UnmannedBoat-Web/blob/main/AMAP_SETUP.md" target="_blank" rel="noopener noreferrer">申请与配置教程 ↗</a></div>
-        <p class="map-settings-description">使用高德“Web端（JS API）”的 Key 与安全密钥 securityJsCode。两项一起清空并保存可停用高德，继续使用 OpenStreetMap。此设置无需连接无人船。</p>
+        <div class="map-settings-heading"><div class="map-settings-title"><span class="card-icon blue" data-icon="map"></span><div><h3 id="mapSettingsTitle">平台地图设置</h3><p>高德 / 天地图 · 仅保存在服务器</p></div></div><a class="map-settings-guide" href="https://github.com/Coffeebean66/UnmannedBoat-Web/blob/main/MAP_SETUP.md" target="_blank" rel="noopener noreferrer">申请与配置教程 ↗</a></div>
+        <p class="map-settings-description">平面图支持高德 / OpenStreetMap；卫星图支持天地图 / ArcGIS World Imagery。高德两项一起清空可停用高德；天地图 Key 可独立配置或清空。ArcGIS 无需填写 Key。此设置无需连接无人船。</p>
         <p id="mapSettingsAccess" class="map-settings-access" hidden></p>
         <form id="mapSettingsForm" autocomplete="off" hidden>
           <div class="map-settings-source"><span>当前配置来源</span><b id="mapSettingsSource">尚未读取</b></div>
           <div class="map-settings-fields">
             <label for="amapKey">Web端 JS API Key<input id="amapKey" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="32" placeholder="32 位 Key" aria-describedby="amapKeyHint" disabled><small id="amapKeyHint">请勿使用 Web服务、Android 或小程序 Key。</small></label>
             <label for="amapSecurityCode">安全密钥 securityJsCode<input id="amapSecurityCode" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="32" placeholder="32 位安全密钥" aria-describedby="amapCodeHint" disabled><small id="amapCodeHint">与上方 Key 属于同一个高德应用。</small></label>
+            <label for="tiandituKey">天地图浏览器端 Key<input id="tiandituKey" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="32" placeholder="32 位天地图 Key（可选）" aria-describedby="tiandituKeyHint" disabled><small id="tiandituKeyHint">从天地图控制台申请浏览器端 Key；仅用于天地图影像和地名注记。</small></label>
           </div>
           <div class="map-settings-actions"><button id="mapSettingsRead" type="button" class="subtle" title="重新读取会替换尚未保存的输入">重新读取配置</button><button id="mapSettingsSave" type="submit" class="primary" disabled>保存地图配置</button><button id="mapSettingsReload" type="button" hidden>刷新页面应用</button></div>
           <p id="mapSettingsRefreshNote" class="map-settings-refresh-note" hidden>刷新会中断当前页面的云端监测连接，并清空本次页面轨迹；刷新后请重新连接。保存本身不会断开连接。</p>

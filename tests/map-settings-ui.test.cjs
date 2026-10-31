@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { BoatMapSettingsPanel, validateMapCredentials } = require('../public/map-settings');
+const { BoatMapSettingsPanel, validateMapCredentials, validateTiandituKey } = require('../public/map-settings');
 
 const key = 'a'.repeat(32), code = 'b'.repeat(32);
 const response = (status, data) => ({ ok: status >= 200 && status < 300, status, json: async () => data });
@@ -46,7 +46,7 @@ function setup({ role = 'admin', enabled = true, ready = true } = {}) {
       if (next) return next(url, options);
       if (options.method === 'GET') return response(200, settings());
       const data = JSON.parse(options.body);
-      return response(200, { ...data, configured: !!data.key, source: 'saved' });
+      return response(200, { ...data, configured: !!data.key, source: 'saved',tianditu:{configured:!!data.tiandituKey,key:data.tiandituKey||''} });
     },
     setTimeout(fn, duration) { const id = ++sequence; timers.set(id, { fn, duration }); return id; },
     clearTimeout(id) { timers.delete(id); },
@@ -81,6 +81,22 @@ test('地图凭据只接受成对32hex或双空；空格会修剪，错误不含
   for (const invalid of ['x'.repeat(32), 'short', 'a'.repeat(33), '<script>secret']) {
     assert.throws(() => validateMapCredentials(invalid, code), error => /32 位/.test(error.message) && !error.message.includes(invalid));
   }
+});
+
+test('天地图单独校验与保存，降权后清空该字段，非法值保留草稿',async()=>{
+  const h=setup(),token='e'.repeat(32);
+  assert.equal(validateTiandituKey(' '+token+' '),token);assert.equal(validateTiandituKey(''),'');
+  assert.throws(()=>validateTiandituKey('not-a-token'),/天地图/);
+  h.next(async()=>response(200,{...settings(),tianditu:{configured:true,key:token}}));
+  await h.panel.open();assert.equal(h.node('tiandituKey').value,token);
+  h.next(null);h.edit('','');
+  h.node('tiandituKey').value='bad';h.node('tiandituKey').emit('input');
+  assert.equal(await h.panel.save(),false);assert.equal(h.calls.length,1);assert.equal(h.node('tiandituKey').value,'bad');
+  h.node('tiandituKey').value=token;assert.equal(await h.panel.save(),true);
+  assert.deepEqual(JSON.parse(h.calls[1].body),{key:'',securityJsCode:'',tiandituKey:token});
+  assert.equal(h.node('tiandituKey').value,token);assert.match(h.node('mapSettingsSource').textContent,/天地图已配置/);
+  h.auth.change({role:'guest'});assert.equal(h.node('tiandituKey').value,'');assert.equal(h.node('tiandituKey').disabled,true);
+  h.panel.destroy();
 });
 
 test('只有已启用账户的管理员可读取或保存，legacy说明环境配置仍可用', async () => {
@@ -137,7 +153,7 @@ test('保存只调用平台设置接口，成功提供刷新按钮但不会自�
   assert.equal(await h.panel.save(), true);
   assert.equal(h.calls.length, 2);
   assert.equal(h.calls[1].method, 'PUT');
-  assert.deepEqual(JSON.parse(h.calls[1].body), { key: 'c'.repeat(32), securityJsCode: 'd'.repeat(32) });
+  assert.deepEqual(JSON.parse(h.calls[1].body), { key: 'c'.repeat(32), securityJsCode: 'd'.repeat(32),tiandituKey:'' });
   assert.equal(h.calls[1].headers['Content-Type'], 'application/json');
   assert.equal(h.auth.verifications, 2);
   assert.equal(h.node('mapSettingsStatus').dataset.tone, 'success');
@@ -166,7 +182,7 @@ test('双空保存停用高德，单空和格式错误不发请求也不丢输�
   }
   h.edit('', '');
   assert.equal(await h.panel.save(), true);
-  assert.deepEqual(JSON.parse(h.calls[1].body), { key: '', securityJsCode: '' });
+  assert.deepEqual(JSON.parse(h.calls[1].body), { key: '', securityJsCode: '',tiandituKey:'' });
   assert.match(h.node('mapSettingsStatus').textContent, /停用.*OpenStreetMap/);
   assert.equal(h.node('mapSettingsReload').hidden, false);
   h.panel.destroy();

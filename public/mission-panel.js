@@ -11,7 +11,7 @@
       $('missionNew').onclick=()=>{this.route=this.blank();this.dirty=false;this.drafts.set(this.deviceId,{route:clone(this.route),dirty:false});this.fillForm();this.renderPoints();this.render();this.draw();};
       $('missionEdit').onclick=()=>{this.editing=!this.editing;this.render();};
       $('missionFit').onclick=()=>this.fit();$('missionCenter').onclick=()=>{if(this.position)this.map?.setView(this.position,18);else this.notice('当前没有有效实时船位',true);};
-      $('missionProvider').onclick=()=>this.action(async()=>{if(this.map)await this.map.switchProvider(this.map.provider==='amap'||!this.map.ready?'osm':'amap');this.draw();});
+      $('missionProvider').onclick=()=>this.action(async()=>{if(this.map){if(this.map.mode==='satellite')await this.map.switchMode('planar');else await this.map.switchProvider(this.map.provider==='amap'||!this.map.ready?'osm':'amap');}this.draw();});
       $('missionRefresh').onclick=()=>this.poll(true);
       $('missionAddPosition').onclick=()=>{if(this.position)this.addPoint(this.position);else this.notice('当前没有有效实时船位',true);};
       $('missionAddCenter').onclick=()=>{const p=this.map?.getCenter();if(p)this.addPoint(p);};

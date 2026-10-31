@@ -1,4 +1,10 @@
-/* 高德使用自己的图层和版权标识，只为平台的覆盖物与缩放按钮添加样式。 */
+/* 地图控件沿用平台主题，来源署名保留在地图引擎的版权栏中。 */
+.boat-map-layers { position:absolute; top:12px; left:52px; z-index:600; display:flex; align-items:center; gap:3px; max-width:calc(100% - 64px); padding:4px; border:1px solid var(--line-strong); border-radius:6px; background:var(--panel); color:var(--text); box-shadow:0 2px 10px #0003; }
+.map-stage .boat-map-layers { top:50px; }
+.boat-map-layers button { flex:none; min-height:28px; padding:4px 8px; border:0; border-radius:4px; background:transparent; color:var(--muted); font-size:11px; white-space:nowrap; }
+.boat-map-layers button[aria-pressed="true"] { background:var(--blue); color:#fff; }
+.boat-map-layers select { flex:1 1 auto; width:136px; min-width:0; min-height:28px; padding:3px 20px 3px 6px; border:0; border-left:1px solid var(--line); border-radius:0; background-color:var(--panel); color:var(--text); font-size:11px; }
+.boat-map-layers [disabled] { opacity:.6; cursor:wait; }
 .boat-map-zoom { position:absolute; top:12px; left:12px; z-index:500; display:grid; border:1px solid var(--line-strong); border-radius:5px; overflow:hidden; box-shadow:0 2px 10px #0003; }
 .boat-map-zoom button { width:30px; height:30px; min-height:30px; padding:0; border:0; border-radius:0; background:var(--panel); color:var(--text); font-size:21px; font-weight:400; }
 .boat-map-zoom button+button { border-top:1px solid var(--line-strong); }

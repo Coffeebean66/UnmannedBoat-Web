@@ -16,6 +16,12 @@
     return { key, securityJsCode };
   }
 
+  function validateTiandituKey(value) {
+    const key = String(value || '').trim();
+    if (key && !KEY_PATTERN.test(key)) throw Error('天地图浏览器端 Key 应为 32 位十六进制字符；不使用天地图时可留空。');
+    return key;
+  }
+
   function cancelled() { return Object.assign(Error('地图设置请求已取消'), { cancelled: true }); }
 
   class BoatMapSettingsPanel {
@@ -28,7 +34,7 @@
       this.reload = options.reload || (() => scope.location.reload());
       this.AbortController = options.AbortController || scope.AbortController;
       this.nodes = Object.fromEntries(['mapSettings', 'mapSettingsAccess', 'mapSettingsForm', 'amapKey',
-        'amapSecurityCode', 'mapSettingsSource', 'mapSettingsRead', 'mapSettingsSave', 'mapSettingsReload',
+        'amapSecurityCode', 'tiandituKey', 'mapSettingsSource', 'mapSettingsRead', 'mapSettingsSave', 'mapSettingsReload',
         'mapSettingsStatus', 'mapSettingsRefreshNote'].map(id => [id, this.document.getElementById(id)]));
       this.busy = false;
       this.loaded = false;
@@ -42,10 +48,11 @@
       this.auth?.addEventListener('change', this._authChange);
       this._input = () => {
         this.dirty = true;
-        this._notice(this.needsRefresh ? '有未保存的修改；刷新只会应用服务器已经保存的配置。' : '配置尚未保存。两项同时留空并保存可停用高德。');
+        this._notice(this.needsRefresh ? '有未保存的修改；刷新只会应用服务器已经保存的配置。' : '配置尚未保存。高德两项可一起清空，天地图 Key 可独立清空；ArcGIS 无需填写 Key。');
       };
       this.nodes.amapKey.addEventListener('input', this._input);
       this.nodes.amapSecurityCode.addEventListener('input', this._input);
+      this.nodes.tiandituKey.addEventListener('input', this._input);
       this.nodes.mapSettingsForm.addEventListener('submit', event => { event.preventDefault(); this.save(); });
       this.nodes.mapSettingsRead.addEventListener('click', () => this.read());
       this.nodes.mapSettingsReload.addEventListener('click', () => {
@@ -85,6 +92,7 @@
       this.needsRefresh = false;
       this.nodes.amapKey.value = '';
       this.nodes.amapSecurityCode.value = '';
+      this.nodes.tiandituKey.value = '';
       this.nodes.mapSettingsSource.textContent = '尚未读取';
       this._notice('尚未读取平台地图配置。');
     }
@@ -103,7 +111,7 @@
       n.mapSettingsAccess.textContent = legacy
         ? '当前未启用平台账户，网页中不能保存地图配置。服务器环境变量配置仍然可用；启用平台账户并以管理员登录后，可在这里管理。'
         : this.denied ? '服务器未授权此管理员操作，请重新登录后再试。已清除本页中的地图凭据。' : '平台地图设置仅供已登录的管理员使用。';
-      for (const input of [n.amapKey, n.amapSecurityCode]) input.disabled = !admin || this.busy;
+      for (const input of [n.amapKey, n.amapSecurityCode, n.tiandituKey]) input.disabled = !admin || this.busy;
       n.mapSettingsRead.disabled = !admin || this.busy;
       n.mapSettingsSave.disabled = !admin || this.busy || !this.loaded;
       n.mapSettingsSave.textContent = this.busy ? '正在处理…' : '保存地图配置';
@@ -129,7 +137,8 @@
     save() {
       if (!this._canManage() || this.busy || !this.loaded) return Promise.resolve(false);
       let credentials;
-      try { credentials = validateMapCredentials(this.nodes.amapKey.value, this.nodes.amapSecurityCode.value); }
+      try { credentials = { ...validateMapCredentials(this.nodes.amapKey.value, this.nodes.amapSecurityCode.value),
+        tiandituKey: validateTiandituKey(this.nodes.tiandituKey.value) }; }
       catch (error) { this._notice(error.message, 'error'); return Promise.resolve(false); }
       return this._run('PUT', credentials);
     }
@@ -179,9 +188,14 @@
         throw Error('地图设置响应格式错误，请重新读取。');
       }
       if (data.configured && (!data.key || !data.securityJsCode)) throw Error('服务器返回的地图配置不完整，请重新读取。');
+      const tiandituKey = data.tianditu?.key ?? '';
+      if (typeof tiandituKey !== 'string' || (tiandituKey && !KEY_PATTERN.test(tiandituKey)) ||
+          (data.tianditu?.configured === true && !tiandituKey)) throw Error('服务器返回的天地图配置不完整，请重新读取。');
       this.nodes.amapKey.value = data.key;
       this.nodes.amapSecurityCode.value = data.securityJsCode;
-      this.nodes.mapSettingsSource.textContent = sources[data.source] + (data.configured ? ' · 高德已配置' : ' · 当前使用 OSM');
+      this.nodes.tiandituKey.value = tiandituKey;
+      this.nodes.mapSettingsSource.textContent = sources[data.source] + (data.configured ? ' · 高德已配置' : ' · 平面图使用 OSM') +
+        (tiandituKey ? ' · 天地图已配置' : ' · 天地图未配置') + ' · ArcGIS 可用';
       this.loaded = true;
       this.dirty = false;
     }
@@ -198,8 +212,9 @@
         this._applyData(data);
         if (method === 'PUT') {
           this.needsRefresh = true;
-          this._notice(data.configured ? '地图配置已保存。点击“刷新页面应用”加载新配置；可在地图下方切换高德 / OSM。' : '已保存停用配置。点击“刷新页面应用”后使用 OpenStreetMap。', 'success');
-        } else this._notice(data.configured ? '已读取地图配置。修改后保存，再刷新页面应用。' : '已读取配置。填写 Web端（JS API）Key 与安全密钥后保存；未配置时继续使用 OpenStreetMap。');
+          this._notice((data.configured ? '地图配置已保存。' : '已停用高德，平面图使用 OpenStreetMap。') +
+            '点击“刷新页面应用”加载新配置；地图内可切换平面 / 卫星以及影像来源。', 'success');
+        } else this._notice('已读取地图配置。高德与天地图可分别配置；ArcGIS 卫星图无需 Key。修改后保存，再刷新页面应用。');
         return true;
       } catch (error) {
         if (error.cancelled || operation !== this.operation || this.destroyed) return false;
@@ -226,10 +241,11 @@
       this.auth?.removeEventListener('change', this._authChange);
       this.nodes.amapKey.removeEventListener('input', this._input);
       this.nodes.amapSecurityCode.removeEventListener('input', this._input);
+      this.nodes.tiandituKey.removeEventListener('input', this._input);
       this._renderAccess();
     }
   }
 
   scope.BoatMapSettingsPanel = BoatMapSettingsPanel;
-  if (typeof module === 'object' && module.exports) module.exports = { BoatMapSettingsPanel, validateMapCredentials };
+  if (typeof module === 'object' && module.exports) module.exports = { BoatMapSettingsPanel, validateMapCredentials, validateTiandituKey };
 })(typeof window === 'object' ? window : globalThis);

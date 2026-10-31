@@ -11,7 +11,7 @@ const configured = { provider: 'amap', version: '2.0', enabled: true, configured
 function fixture(config = configured, preferences = {}, behavior = {}) {
   const listeners = new Map(), timers = new Map();
   const documentListeners = new Map();
-  const scripts = [], maps = [], markers = [], lines = [], conversions = [], fetches = [];
+  const scripts = [], maps = [], markers = [], lines = [], conversions = [], fetches = [],tiles=[];
   const storage = new Map(Object.entries(preferences));
   let timerSequence = 0;
   const node = tag => ({ tag, style: {}, children: [], className: '', events: {}, attributes: {},
@@ -118,8 +118,9 @@ function fixture(config = configured, preferences = {}, behavior = {}) {
     tileLayer(url, options) {
       const layer = { url, options, events: {},
         on(name, fn) { this.events[name] = fn; return this; },
+        off() { this.events={};this.detached=true;return this; },
         addTo(map) { this.map = map; return this; } };
-      window.tiles = layer;
+      window.tiles = layer;tiles.push(layer);
       return layer;
     },
     divIcon(options) { return options; },
@@ -144,7 +145,7 @@ function fixture(config = configured, preferences = {}, behavior = {}) {
   };
   vm.runInNewContext(source, { window, Map, Set, Date, Promise, module: { exports: {} } });
   const view = new window.BoatMapView('map');
-  return { window, view, scripts, maps, markers, lines, conversions, timers, fetches, listeners, documentListeners, AMap, storage,
+  return { window, view, scripts, maps, markers, lines, conversions, fetches, tiles, timers, listeners, documentListeners, AMap, storage,
     emitDocument(name, event) {
       for (const fn of [...(documentListeners.get(name) || [])]) fn(event);
     },
@@ -174,6 +175,92 @@ async function readyAmap(f) {
   await pending;
   assert.equal(f.view.ready, true);
 }
+
+test('卫星来源切换保持 WGS84 船位、轨迹、视野、点击坐标和像素锚点，切回原平面图',async()=>{
+  const f=fixture({...configured,tianditu:{configured:true,key:'a'.repeat(32)}});
+  await readyAmap(f);
+  const raw={latitude:31.1234567,longitude:121.7654321},points=[raw,{latitude:31.2,longitude:121.8}];
+  const marker=f.view.createMarker(raw);
+  f.view.setTrackLines([{points,color:'#123456',width:5}]);f.view.setView(raw,17,{animate:false});
+  for(const provider of ['arcgis','tianditu','arcgis']){
+    assert.equal(await f.view.switchProvider(provider),true);
+    assert.equal(f.view.mode,'satellite');assert.equal(f.view.ready,true);
+    assert.deepEqual(plain(marker.position),raw);assert.deepEqual(plain(marker.native.position),[raw.latitude,raw.longitude]);
+    assert.deepEqual(plain(f.view.getCenter()),raw);assert.equal(f.view.getZoom(),17);
+    assert.deepEqual(plain(f.view.lastTrackLines),[{points,color:'#123456',width:5}]);
+    assert.deepEqual(plain(f.lines.at(-1).path),points.map(p=>[p.latitude,p.longitude]));
+    assert.deepEqual(plain(f.view.latLngToContainerPoint(raw)),{x:raw.longitude*10,y:raw.latitude*10});
+    const clicks=[];const click=p=>clicks.push(p);f.view.on('click',click);
+    f.view.map.emit('click',{latlng:{lat:raw.latitude,lng:raw.longitude}});
+    assert.deepEqual(plain(clicks),[raw]);f.view.off('click',click);
+    let fitted;f.view.map.fitBounds=(bounds)=>{fitted=bounds;};
+    assert.equal(f.view.fitLocations(points),true);assert.deepEqual(plain(fitted),points.map(p=>[p.latitude,p.longitude]));
+  }
+  assert.equal(f.storage.get('boat.map.planar'),'amap');assert.equal(f.storage.get('boat.map.satellite'),'arcgis');
+  await f.view.switchMode('planar');assert.equal(f.view.provider,'amap');
+  assert.deepEqual(plain(marker.getLatLng()),{lat:raw.latitude,lng:raw.longitude});
+  await f.view.switchMode('satellite');assert.equal(f.view.provider,'arcgis');
+  f.view.destroy();assert.ok(f.tiles.every(layer=>layer.detached));
+});
+
+test('卫星瓦片使用官方 HTTPS 地址与正确 XY 顺序，天地图影像与注记独立清理',async()=>{
+  const token='1'.repeat(32),f=fixture({configured:false,tianditu:{configured:true,key:token}},{'boat.map.provider':'arcgis'});
+  await f.view.initialize();assert.equal(f.view.provider,'arcgis');assert.equal(f.scripts.length,0);
+  assert.equal(f.tiles[0].url,'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}');
+  assert.match(f.tiles[0].options.attribution,/Esri/);
+  await f.view.switchProvider('tianditu');assert.equal(f.tiles[0].detached,true);
+  const [image,labels]=f.tiles.slice(-2);
+  for(const [layer,kind] of [[image,'img'],[labels,'cia']]){
+    const url=new URL(layer.url.replace('{s}','0').replace('{z}','12').replace('{x}','3456').replace('{y}','789'));
+    assert.equal(url.origin,'https://t0.tianditu.gov.cn');assert.equal(url.pathname,'/'+kind+'_w/wmts');
+    for(const [key,value] of Object.entries({TILEMATRIX:'12',TILEROW:'789',TILECOL:'3456',LAYER:kind,tk:token,TILEMATRIXSET:'w'}))assert.equal(url.searchParams.get(key),value);
+    assert.equal(layer.options.maxNativeZoom,18);assert.equal(layer.options.maxZoom,19);
+  }
+  labels.events.tileerror();image.events.load();assert.match(f.view.status.message,/天地图.*注记.*Key/);
+  labels.events.loading();labels.events.load();assert.match(f.view.status.message,/天地图.*卫星.*WGS84/);
+  const late=image.events.tileerror;
+  await f.view.switchProvider('osm');assert.ok(image.detached&&labels.detached);
+  const status=f.view.status.message;late();assert.equal(f.view.status.message,status);
+  f.view.destroy();
+});
+
+test('天地图缺失或非法凭据保留旧地图与偏好，ArcGIS 无需 Key 可用',async()=>{
+  for(const tianditu of [undefined,{configured:false,key:''},{configured:true,key:'https://evil.test'}]){
+    const f=fixture({configured:false,tianditu},{'boat.map.provider':'osm'});
+    await f.view.initialize();const previous=f.view.map;
+    await assert.rejects(f.view.switchProvider('tianditu'),/天地图.*平台地图设置/);
+    assert.equal(f.view.map,previous);assert.equal(f.view.ready,true);assert.equal(f.storage.get('boat.map.provider'),'osm');
+    assert.match(f.view.status.message,/切换失败.*天地图.*继续使用/);
+    await f.view.switchMode('satellite');assert.equal(f.view.provider,'arcgis');assert.equal(f.scripts.length,0);
+    f.view.destroy();
+  }
+});
+
+test('地图菜单隔离航点点击，记忆卫星来源且刷新恢复，无定位也能显示',async()=>{
+  const f=fixture({configured:false,tianditu:{configured:true,key:'2'.repeat(32)}},
+    {'boat.map.provider':'tianditu','boat.map.satellite':'tianditu','boat.map.planar':'osm'});
+  await f.view.initialize();assert.equal(f.view.ready,true);assert.equal(f.view.provider,'tianditu');
+  assert.match(f.view.status.message,/天地图.*WGS84/);
+  let stopped=0;for(const event of ['click','dblclick','pointerdown','mousedown','touchstart','wheel','keydown']){
+    f.view._layerControls.events[event]({stopPropagation(){stopped++;}});
+  }
+  assert.equal(stopped,7);assert.equal(f.view._sourceSelect.attributes['aria-label'],'卫星地图来源');
+  f.view._setSwitching(true);assert.ok(f.view._sourceSelect.disabled&&f.view._modeButtons.every(({button})=>button.disabled));
+  f.view._setSwitching(false);
+  await f.view.switchMode('planar');assert.equal(f.view.provider,'osm');
+  await f.view.switchMode('satellite');assert.equal(f.view.provider,'tianditu');
+  assert.equal(f.view._modeButtons[1].button.attributes['aria-pressed'],'true');
+  assert.equal(f.view._sourceSelect.value,'tianditu');f.view.destroy();
+});
+
+test('停用高德后旧平面偏好回退 OSM，失效天地图偏好显示错误且菜单允许恢复 ArcGIS',async()=>{
+  const stopped=fixture({configured:false,enabled:false},{'boat.map.provider':'amap'});
+  await stopped.view.initialize();assert.equal(stopped.view.provider,'osm');stopped.view.destroy();
+  const f=fixture({configured:false},{'boat.map.provider':'tianditu'});
+  await f.view.initialize();assert.equal(f.view.ready,false);assert.match(f.view.status.message,/天地图.*尚未配置/);
+  assert.equal(f.view._sourceSelect.disabled,false);
+  await f.view.switchProvider('arcgis');assert.equal(f.view.ready,true);f.view.destroy();
+});
 
 test('unconfigured AMap retains explicit OSM status and raw WGS84 throughout', async () => {
   const f = fixture({ enabled: false, configured: false, reason: '尚未配置 Key' });
