@@ -6,7 +6,7 @@
   class BoatMissionPanel {
     constructor(){
       this.deviceId='';this.routes=[];this.runs=[];this.route=this.blank();this.dirty=false;this.editing=false;this.busy=false;this.drafts=new Map();this.stops=new Set();this.activeRows=new Map();this.markers=[];this.position=null;this.generation=0;
-      for(const id of ['missionName','missionSpeed','missionRadius'])$(id).addEventListener('input',()=>{this.readForm();this.dirty=true;this.render();});
+      for(const id of ['missionName','missionSpeed','missionRadius','missionLoopEnabled','missionLoopCount'])$(id).addEventListener('input',()=>{this.readForm();this.dirty=true;this.render();this.draw();});
       $('missionRouteSelect').addEventListener('change',()=>this.load($('missionRouteSelect').value));
       $('missionNew').onclick=()=>{this.route=this.blank();this.dirty=false;this.drafts.set(this.deviceId,{route:clone(this.route),dirty:false});this.fillForm();this.renderPoints();this.render();this.draw();};
       $('missionEdit').onclick=()=>{this.editing=!this.editing;this.render();};
@@ -38,11 +38,15 @@
       this.fillForm();this.renderPoints();this.render();
       if(window.BoatWorkspace?.current==='missions')this.initializeMap();
     }
-    blank(){return {name:'新航线',speedMps:1,arrivalRadiusM:3,points:[]};}
+    blank(){return {name:'新航线',speedMps:1,arrivalRadiusM:3,loopEnabled:false,loopCount:1,points:[]};}
     get admin(){return window.BoatAuth?.enabled===true&&BoatAuth.ready&&BoatAuth.user?.role==='admin';}
     run(){return this.runs.find(r=>r.deviceId===this.deviceId);}
-    readForm(){this.route.name=$('missionName').value;this.route.speedMps=Number($('missionSpeed').value);this.route.arrivalRadiusM=Number($('missionRadius').value);}
-    fillForm(){ $('missionName').value=this.route.name;$('missionSpeed').value=this.route.speedMps;$('missionRadius').value=this.route.arrivalRadiusM;$('missionRouteSelect').value=this.route.id||''; }
+    readForm(){
+      this.route.name=$('missionName').value;this.route.speedMps=Number($('missionSpeed').value);this.route.arrivalRadiusM=Number($('missionRadius').value);
+      this.route.loopEnabled=$('missionLoopEnabled').checked;this.route.loopCount=Number($('missionLoopCount').value);
+      if(!this.route.loopEnabled&&(!Number.isSafeInteger(this.route.loopCount)||this.route.loopCount<1||this.route.loopCount>999)){this.route.loopCount=1;$('missionLoopCount').value=1;}
+    }
+    fillForm(){ $('missionName').value=this.route.name;$('missionSpeed').value=this.route.speedMps;$('missionRadius').value=this.route.arrivalRadiusM;$('missionLoopEnabled').checked=this.route.loopEnabled===true;$('missionLoopCount').value=this.route.loopCount??1;$('missionRouteSelect').value=this.route.id||''; }
     select(id){
       if(id===this.deviceId)return;
       if(this.deviceId){this.readForm();this.drafts.set(this.deviceId,{route:clone(this.route),dirty:this.dirty});}
@@ -82,8 +86,8 @@
     notice(text,error=false){$('missionNotice').textContent=text;$('missionNotice').dataset.error=String(error);}
     async save(){
       const id=this.deviceId,generation=this.generation;this.readForm();
-      const {name,speedMps,arrivalRadiusM,points}=this.route;
-      const data=await this.request('/route',{method:'POST',body:JSON.stringify({deviceId:id,route:{name,speedMps,arrivalRadiusM,points},...(this.route.id?{id:this.route.id,revision:this.route.revision}:{})})});
+      const {name,speedMps,arrivalRadiusM,loopEnabled,loopCount,points}=this.route;
+      const data=await this.request('/route',{method:'POST',body:JSON.stringify({deviceId:id,route:{name,speedMps,arrivalRadiusM,loopEnabled,loopCount,points},...(this.route.id?{id:this.route.id,revision:this.route.revision}:{})})});
       if(generation!==this.generation)return;
       this.route=data.route;this.dirty=false;this.drafts.set(id,{route:clone(this.route),dirty:false});this.fillForm();this.notice('航线已保存到服务器，下次可直接调用。');
     }
@@ -147,10 +151,15 @@
       if(signature!==this.routeSignature){this.routeSignature=signature;select.replaceChildren(new Option('新航线',''),...this.routes.map(r=>new Option(r.name,r.id)));}
       select.value=this.route.id||'';
       const N=BoatModules.missionNavigation;let length=0;for(let i=1;i<this.route.points.length;i++)length+=N.distance(this.route.points[i-1],this.route.points[i]);
-      $('missionRouteSummary').textContent=this.route.points.length+' 个航点 · '+(length>=1000?(length/1000).toFixed(2)+' km':length.toFixed(1)+' m')+' · '+(this.dirty?'有未保存修改':this.route.id?'已保存 v'+this.route.revision:'尚未保存');
+      if(this.route.loopEnabled&&this.route.points.length>1)length+=N.distance(this.route.points.at(-1),this.route.points[0]);
+      const validCount=Number.isSafeInteger(this.route.loopCount)&&this.route.loopCount>=1&&this.route.loopCount<=999;
+      $('missionRouteSummary').textContent=this.route.points.length+' 个航点 · '+(length>=1000?(length/1000).toFixed(2)+' km':length.toFixed(1)+' m')+(this.route.loopEnabled?' / 圈 · '+(validCount?this.route.loopCount+' 圈':'次数待填写'):' · 单次')+' · '+(this.dirty?'有未保存修改':this.route.id?'已保存 v'+this.route.revision:'尚未保存');
+      $('missionLoopHelp').textContent=this.route.loopEnabled?'起点 → 沿途航点 → 终点 → 直线返回起点算一圈；完成设定圈数后停在起点。':'关闭循环：执行一次，到终点后停船。';
+      $('missionLoopLegend').hidden=!this.route.loopEnabled;
       for(const id of ['missionNew','missionRouteSelect'])$(id).disabled=locked;
-      for(const id of ['missionName','missionSpeed','missionRadius','missionEdit','missionClear','missionAddCenter'])$(id).disabled=locked||routeLocked;
-      $('missionSave').disabled=locked||routeLocked||this.route.points.length<2||!!this.storageError;
+      for(const id of ['missionName','missionSpeed','missionRadius','missionLoopEnabled','missionEdit','missionClear','missionAddCenter'])$(id).disabled=locked||routeLocked;
+      $('missionLoopCount').disabled=locked||routeLocked||!this.route.loopEnabled;
+      $('missionSave').disabled=locked||routeLocked||this.route.points.length<2||!!this.storageError||!validCount;
       $('missionDelete').disabled=locked||routeLocked||!this.route.id;
       $('missionAddPosition').disabled=locked||routeLocked||!this.position;
       $('missionGoto').disabled=$('missionStart').disabled=locked||active||!this.route.id||this.dirty||!!this.storageError;
@@ -165,6 +174,9 @@
       $('missionDistance').textContent=Number.isFinite(run?.distanceM)?run.distanceM.toFixed(1)+' m':'--';
       $('missionHeading').textContent=Number.isFinite(run?.targetHeading)?run.targetHeading.toFixed(1)+'°':'--';
       $('missionCommandSpeed').textContent=run?run.commandSpeedMps.toFixed(2)+' m/s':'--';
+      $('missionLoopProgress').textContent=run?.action==='start'?(run.loopEnabled?run.currentLoop+' / '+run.loopCount+' 圈':'单次'):'--';
+      $('missionLoopProgress').title=run?'已完成 '+(run.completedLoops??0)+' 圈':'';
+      $('missionPhase').textContent=run?.status==='running'?({route:'沿线航行',returning:'返回起点',goto:'前往起点'}[run.phase]||'沿线航行'):(labels[run?.status]||'--');
       this.renderRunningBar();
       if(this.storageError)this.notice(this.storageError,true);
       else if(BoatAuth.enabled===false)this.notice('航线任务需要在服务器启用平台账户，并使用管理员登录。');
@@ -196,10 +208,12 @@
     draw(){
       if(!this.map?.ready)return;
       const points=this.route.points,run=this.run(),current=run?.active&&run.routeId===this.route.id&&!this.dirty?run.targetIndex:-1;
-      const key=JSON.stringify([points,current,this.map.provider]);
+      const key=JSON.stringify([points,current,this.route.loopEnabled,this.map.provider]);
       if(key!==this.drawKey){
         this.drawKey=key;for(const m of this.markers)m.remove();this.markers=[];
-        this.map.setTrackLines(points.length>1?[{points,color:'#467dff',width:3}]:[]);
+        const lines=points.length>1?[{points,color:'#467dff',width:3}]:[];
+        if(this.route.loopEnabled&&points.length>1)lines.push({points:[points.at(-1),points[0]],color:'#d5952b',width:3});
+        this.map.setTrackLines(lines);
         points.forEach((p,i)=>{
           const kind=i===0?'start':i===points.length-1?'end':'via';
           const m=this.map.createMarker(p,{className:'mission-pin',html:'<span data-kind="'+kind+'" data-current="'+(i===current)+'">'+(i+1)+'</span>',iconSize:[28,28],iconAnchor:[14,14],bubble:false,interactive:true,title:'航点 '+(i+1),onClick:()=>this.map.setView(p,Math.max(this.map.getZoom(),17))});if(m)this.markers.push(m);

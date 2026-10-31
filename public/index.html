@@ -102,7 +102,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.38.1</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.39.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -134,7 +134,7 @@
             <div class="mission-map-tools"><button id="missionEdit" type="button" class="small-button" aria-pressed="false">开启点选航点</button><button id="missionFit" type="button" class="small-button">显示整条航线</button><button id="missionCenter" type="button" class="small-button">定位船只</button><button id="missionProvider" type="button" class="small-button">切换地图</button></div>
             <div id="missionMap" role="application" aria-label="点击地图依次添加开始点、中间点和结束点"></div>
             <p id="missionMapStatus" class="mission-map-status" role="status">打开任务页后加载地图</p>
-            <div class="mission-map-legend"><span><i class="mission-start-dot"></i>开始点</span><span><i></i>中间点</span><span><i class="mission-end-dot"></i>结束点</span><span>WGS84 · 依次直线连接</span></div>
+            <div class="mission-map-legend"><span><i class="mission-start-dot"></i>开始点</span><span><i></i>中间点</span><span><i class="mission-end-dot"></i>结束点</span><span id="missionLoopLegend" hidden><i class="mission-return-line"></i>终点 → 起点</span><span>WGS84 · 依次直线连接</span></div>
           </section>
           <div class="mission-sidebar">
             <section class="mission-card" aria-labelledby="missionRouteTitle">
@@ -142,15 +142,17 @@
               <label class="mission-field">已保存航线<select id="missionRouteSelect"><option value="">新航线</option></select></label>
               <label class="mission-field">任务名称<input id="missionName" type="text" maxlength="80" value="新航线" autocomplete="off"></label>
               <div class="mission-fields"><label class="mission-field">航速 · m/s<input id="missionSpeed" type="number" min="0.1" max="20" step="0.1" value="1.0"></label><label class="mission-field">到点半径 · m<input id="missionRadius" type="number" min="1" max="50" step="0.5" value="3"></label></div>
+              <div class="mission-fields"><label class="mission-loop-toggle"><input id="missionLoopEnabled" type="checkbox" aria-describedby="missionLoopHelp">循环执行</label><label class="mission-field">循环次数 · 圈<input id="missionLoopCount" type="number" min="1" max="999" step="1" value="1" aria-describedby="missionLoopHelp" disabled></label></div>
+              <p id="missionLoopHelp" class="mission-loop-help">关闭循环：执行一次，到终点后停船。</p>
               <p id="missionRouteSummary" class="muted">0 个航点 · 尚未保存</p>
               <div class="mission-actions"><button id="missionSave" type="button" class="primary">保存到服务器</button><button id="missionDelete" type="button" class="ghost">删除航线</button></div>
             </section>
             <section class="mission-card" aria-labelledby="missionRunTitle">
               <div class="mission-card-heading"><h2 id="missionRunTitle">执行任务</h2><span id="missionRunState" class="mission-state">待命</span></div>
               <p id="missionRunMessage" role="status">先保存航线，再前往开始点。</p>
-              <dl class="mission-progress"><div><dt>当前航点</dt><dd id="missionWaypointProgress">--</dd></div><div><dt>剩余距离</dt><dd id="missionDistance">--</dd></div><div><dt>目标航向</dt><dd id="missionHeading">--</dd></div><div><dt>目标船速</dt><dd id="missionCommandSpeed">--</dd></div></dl>
+              <dl class="mission-progress"><div><dt>当前航点</dt><dd id="missionWaypointProgress">--</dd></div><div><dt>剩余距离</dt><dd id="missionDistance">--</dd></div><div><dt>目标航向</dt><dd id="missionHeading">--</dd></div><div><dt>目标船速</dt><dd id="missionCommandSpeed">--</dd></div><div><dt>当前循环</dt><dd id="missionLoopProgress">--</dd></div><div><dt>航行阶段</dt><dd id="missionPhase">--</dd></div></dl>
               <div class="mission-actions"><button id="missionGoto" type="button">前往任务开始点</button><button id="missionStart" type="button" class="primary">开始任务</button><button id="missionStop" type="button" class="mission-danger">停止任务</button></div>
-              <p class="mission-note">到达开始点后停止，需点击“开始任务”沿线航行。定位、船速、航向失效或断网时停止；任务不自动避障。</p>
+              <p class="mission-note">“前往任务开始点”到点后停止。开始任务后按已保存的循环设置执行，循环的最后一圈也返回起点。定位、船速、航向失效或断网时停止；任务不自动避障。</p>
             </section>
           </div>
         </div>

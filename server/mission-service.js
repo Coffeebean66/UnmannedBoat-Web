@@ -28,6 +28,8 @@ class MissionService{
     if(!job)return null;
     return {deviceId:job.id,runId:job.runId,routeId:job.route.id,routeName:job.route.name,...(includeRoute?{route:structuredClone(job.route)}:{}),action:job.action,
       status:job.status,message:job.message,active:ACTIVE.has(job.status),targetIndex:job.index,pointCount:job.route.points.length,
+      loopEnabled:job.loopEnabled,loopCount:job.loopCount,completedLoops:job.completedLoops,
+      currentLoop:job.action==='start'?Math.min(job.completedLoops+1,job.loopCount):null,phase:job.phase,
       distanceM:job.distanceM??null,crossTrackM:job.crossTrackM??null,targetHeading:job.heading??null,commandSpeedMps:job.commandSpeedMps??0,
       position:job.position||null,startedAt:job.startedAt,finishedAt:job.finishedAt||null,stopConfirmed:job.stopConfirmed===true};
   }
@@ -42,7 +44,8 @@ class MissionService{
     if(action==='start'&&nav.distance(position,route.points[0])>route.arrivalRadiusM)throw fault(409,'船不在开始点范围内，请先前往任务开始点');
     if(!this.control.snapshot(id).ready)throw fault(409,'船端尚未就绪或正被手动驾驶、调参、OTA 占用');
     const runId=crypto.randomBytes(8).toString('hex'),job={id,route,action,runId,owner:'mission:'+runId,clientId:crypto.randomBytes(8).toString('hex'),
-      status:'preparing',message:'正在读取船端最大速度参数',startedAt:this.now(),index:0,sequence:0,arrivalCount:0,controller:new AbortController()};
+      status:'preparing',message:'正在读取船端最大速度参数',startedAt:this.now(),index:0,sequence:0,arrivalCount:0,controller:new AbortController(),
+      loopEnabled:action==='start'&&route.loopEnabled,loopCount:action==='start'&&route.loopEnabled?route.loopCount:1,completedLoops:0,phase:action==='goto'?'goto':'route'};
     this.jobs.set(id,job);
     // 限制仅在内存保留最近 128 艘船的结束状态，活动任务不会被驱逐。
     if(this.jobs.size>128)for(const [key,value]of this.jobs)if(!this.active(key)){this.jobs.delete(key);break;}
@@ -79,6 +82,19 @@ class MissionService{
     else if(controlJob){this.finish(job,'failed',message+'；控制租约已丢失，请确认船已停止');}
     else this.finish(job,result,message+'（未进入运动控制）',true);
   }
+  arrived(job,now){
+    if(job.action==='goto'){this.stopJob(job,'completed','已到达任务开始点');return;}
+    if(job.phase==='returning'){
+      // 只有返回起点并取得两份新定位后才完成一圈；最后一圈同样回到起点。
+      job.completedLoops++;
+      if(job.completedLoops>=job.loopCount){this.stopJob(job,'completed','已完成 '+job.loopCount+' 圈并返回开始点');return;}
+      job.phase='route';job.index=1;
+    }else if(job.index===job.route.points.length-1){
+      if(!job.loopEnabled){job.completedLoops=1;this.stopJob(job,'completed','全部航点已完成');return;}
+      job.phase='returning';job.index=0;
+    }else job.index++;
+    job.arrivalCount=0;job.bestDistance=Infinity;job.lastProgressAt=now;
+  }
   step(job){
     const now=this.now(),p=feedback(this.bridge,job.id,now),cj=job.controlJob,cap=this.control.cap(job.id);
     if(this.control.jobs.get(job.id)!==cj||cj.status!=='active'||!cap||cap.mode!==2||cap.testMode)throw fault(409,cj?.lastError?.message||'任务控制租约已失效');
@@ -93,11 +109,12 @@ class MissionService{
     // 连续两份不同 RTK 样本确认到点；同一个定位不能连续跨过多个相邻航点。
     if(isNew){job.arrivalCount=d<=radius?job.arrivalCount+1:0;}
     if(job.arrivalCount>=2){
-      if(job.action==='goto'||job.index===job.route.points.length-1){this.stopJob(job,'completed',job.action==='goto'?'已到达任务开始点':'全部航点已完成');return;}
-      job.index++;job.arrivalCount=0;job.bestDistance=Infinity;job.lastProgressAt=now;
+      this.arrived(job,now);if(job.status!=='running')return;
     }
     const target=job.route.points[job.index];
-    const g=job.index===0?{heading:nav.bearing(p,target),distanceM:nav.distance(p,target),crossM:0}:nav.guide(p,job.route.points[job.index-1],target,Math.max(5,radius*2,job.route.speedMps*4));
+    // 返回航段沿“终点 → 起点”引导，也接受原有横向偏差/进度保护。
+    const from=job.phase==='returning'?job.route.points[job.route.points.length-1]:job.index>0?job.route.points[job.index-1]:null;
+    const g=from?nav.guide(p,from,target,Math.max(5,radius*2,job.route.speedMps*4)):{heading:nav.bearing(p,target),distanceM:nav.distance(p,target),crossM:0};
     job.distanceM=g.distanceM;job.crossTrackM=g.crossM;job.heading=g.distanceM<0.2?p.heading:g.heading;
     if(Math.abs(g.crossM)>Math.max(30,radius*5))throw fault(409,'船位偏离航线过远，任务停止');
     if(g.distanceM<job.bestDistance-0.5){job.bestDistance=g.distanceM;job.lastProgressAt=now;}
@@ -108,7 +125,7 @@ class MissionService{
     job.commandSpeedMps=g.distanceM<=radius||error>70?0:slow*Math.max(0,Math.cos(error*Math.PI/180));
     const input={...job.input,throttle:Math.min(1000,Math.round(job.commandSpeedMps*1000000/job.maximum)),targetHeading:Math.round(job.heading*100)%36000};
     this.control.command(job.id,job.owner,job.clientId,job.leaseId,++job.sequence,'input',input);
-    job.message=(job.action==='goto'?'前往开始点':'航线执行')+' · 航点 '+(job.index+1)+' / '+job.route.points.length;
+    job.message=(job.action==='goto'?'前往开始点':job.loopEnabled?'第 '+(job.completedLoops+1)+' / '+job.loopCount+' 圈 · '+(job.phase==='returning'?'终点返回起点':'沿线航行'):'航线执行')+' · 航点 '+(job.index+1)+' / '+job.route.points.length;
   }
   refresh(){
     if(this.closed)return;

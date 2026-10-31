@@ -8,6 +8,8 @@ async function until(check){for(let n=0;n<120;n++){if(check())return;await wait(
 function fixture(t,options){const f=createMissionFixture(options);t.after(()=>f.close());return f;}
 async function running(f,route=f.route(),action='start'){f.mission.start('boat-01',route.id,action);await until(()=>f.mission.snapshot('boat-01').status==='running');return f.mission.jobs.get('boat-01');}
 async function flush(f){await Promise.resolve();await Promise.resolve();f.mission.refresh();}
+async function arrive(f,point){for(let n=0;n<2;n++){f.advance(100,'boat-01',point);await flush(f);}}
+async function reachReturn(f,route){await running(f,route);f.advance(100);await flush(f);for(const p of route.points.slice(1))await arrive(f,p);}
 
 test('WGS84 geometry guides along a line, corrects cross track, wraps north, and reverses AMap conversion',()=>{
   const north=N.destination(ORIGIN,0,100),east=N.destination(ORIGIN,90,10),g=N.guide(east,ORIGIN,north,10);
@@ -29,6 +31,32 @@ test('route library validates data, persists separately per boat, atomically rev
   f.store.delete('boat-01',r.id,2);assert.equal(new MissionStore({env:f.env}).list('boat-01').length,0);
   fs.writeFileSync(f.store.file,'broken');const broken=new MissionStore({env:f.env});assert.match(broken.error,/读取失败/);assert.throws(()=>broken.save('boat-01',definition),{status:503});assert.equal(fs.readFileSync(f.store.file,'utf8'),'broken');
 });
+
+test('loop settings are finite integers, validated with the return leg and persist independently per boat',t=>{
+  const f=fixture(t),r=f.route(),{name,speedMps,arrivalRadiusM,points}=r,definition={name,speedMps,arrivalRadiusM,points};
+  assert.equal(normalizeRoute(definition).loopEnabled,false);assert.equal(normalizeRoute(definition).loopCount,1);
+  for(const loopCount of [0,-1,1000,1.5,'2',null,NaN])assert.throws(()=>normalizeRoute({...definition,loopEnabled:true,loopCount}),{status:400});
+  for(const loopEnabled of [0,1,'true',null])assert.throws(()=>normalizeRoute({...definition,loopEnabled}),{status:400});
+  for(const loopCount of [1,999])assert.equal(normalizeRoute({...definition,loopEnabled:true,loopCount}).loopCount,loopCount);
+  const distant=[ORIGIN,N.destination(ORIGIN,0,15000),N.destination(ORIGIN,0,30000)];
+  assert.doesNotThrow(()=>normalizeRoute({...definition,points:distant}));assert.throws(()=>normalizeRoute({...definition,points:distant,loopEnabled:true}),/返回起点/);
+  const far=N.destination(ORIGIN,0,13000),long=Array.from({length:8},(_,i)=>i%2?far:ORIGIN);
+  assert.doesNotThrow(()=>normalizeRoute({...definition,points:long}));assert.throws(()=>normalizeRoute({...definition,points:long,loopEnabled:true}),/100 千米/);
+  const a=f.store.save('boat-01',{...definition,loopEnabled:true,loopCount:3},r.id,r.revision),b=f.route('boat-02',{loopEnabled:true,loopCount:7});
+  const reopened=new MissionStore({env:f.env});assert.equal(reopened.error,'');assert.deepEqual(reopened.get('boat-01',a.id),a);assert.equal(reopened.get('boat-02',b.id).loopCount,7);
+  assert.equal(JSON.parse(fs.readFileSync(f.store.file,'utf8')).version,2);
+});
+
+test('legacy route libraries retain single-run behavior and migrate on save; invalid loop files fail closed',t=>{
+  const f=fixture(t),r=f.route(),{loopEnabled,loopCount,...legacy}=r;
+  fs.writeFileSync(f.store.file,JSON.stringify({version:1,routes:[legacy]}));const old=new MissionStore({env:f.env});
+  assert.equal(old.error,'');assert.deepEqual(old.get('boat-01',r.id),r);assert.equal(JSON.parse(fs.readFileSync(f.store.file,'utf8')).version,1,'Loading does not rewrite a legacy file');
+  const {name,speedMps,arrivalRadiusM,points}=legacy;
+  old.save('boat-01',{name,speedMps,arrivalRadiusM,points,loopEnabled:true,loopCount:2},r.id,r.revision);
+  assert.equal(new MissionStore({env:f.env}).get('boat-01',r.id).loopCount,2);
+  const broken=JSON.parse(fs.readFileSync(f.store.file,'utf8'));broken.routes[0].loopCount=0;fs.writeFileSync(f.store.file,JSON.stringify(broken));
+  assert.match(new MissionStore({env:f.env}).error,/读取失败/);
+});
 test('takeover requires a real MCU ACK, starts at zero, reads maximum once and maps speed to throttle',async t=>{
   const f=fixture(t,{autoAck:false}),r=f.route();f.mission.start('boat-01',r.id,'start');
   await until(()=>f.commands().length===1);assert.equal(f.mission.snapshot('boat-01').status,'acquiring');assert.equal(f.commands()[0].payload.readInt16LE(30),0);assert.equal(f.commands()[0].payload[29],2);
@@ -47,10 +75,56 @@ test('goto stops at start, requires two new samples, waits for stop ACK, and nev
   f.advance(100);assert.equal(f.mission.snapshot('boat-01').status,'completed');
 });
 test('start requires being at start; ordered samples advance once per point, final point stops with confirmation',async t=>{
-  const f=fixture(t),r=f.route();f.feed('boat-01',N.destination(ORIGIN,90,50));assert.throws(()=>f.mission.start('boat-01',r.id,'start'),{status:409});
+  const f=fixture(t),r=f.route('boat-01',{loopCount:9});f.feed('boat-01',N.destination(ORIGIN,90,50));assert.throws(()=>f.mission.start('boat-01',r.id,'start'),{status:409});
   f.feed('boat-01',ORIGIN);await running(f,r);f.advance(100);await flush(f);assert.equal(f.mission.snapshot('boat-01').targetIndex,1);
   for(let index=1;index<r.points.length;index++){f.advance(100,'boat-01',{...r.points[index],heading:90});await flush(f);assert.equal(f.mission.snapshot('boat-01').targetIndex,index);f.advance(100);await flush(f);}
-  assert.equal(f.mission.snapshot('boat-01').status,'completed');assert.equal(f.mission.snapshot('boat-01').stopConfirmed,true);
+  assert.equal(f.mission.snapshot('boat-01').status,'completed');assert.equal(f.mission.snapshot('boat-01').stopConfirmed,true);assert.equal(f.mission.snapshot('boat-01').loopCount,1,'Disabled loops ignore a previously saved count');
+});
+
+test('finite loops visit every waypoint, return directly, reuse the lease and stop at start after the final lap',async t=>{
+  const f=fixture(t),r=f.route('boat-01',{loopEnabled:true,loopCount:2});await running(f,r);f.advance(100);await flush(f);
+  const lease=f.mission.snapshot('boat-01').runId;
+  for(let lap=1;lap<=2;lap++){
+    for(let index=1;index<r.points.length;index++){
+      f.advance(100,'boat-01',r.points[index]);await flush(f);assert.equal(f.mission.snapshot('boat-01').targetIndex,index,'One RTK sample cannot skip the waypoint');
+      f.advance(100);await flush(f);
+    }
+    let run=f.mission.snapshot('boat-01');assert.equal(run.status,'running');assert.equal(run.phase,'returning');assert.equal(run.targetIndex,0);assert.equal(run.currentLoop,lap);assert.equal(run.completedLoops,lap-1);assert.equal(run.runId,lease);
+    const last=r.points.at(-1),heading=N.bearing(last,ORIGIN),middle=N.destination(last,heading,N.distance(last,ORIGIN)/2);
+    f.advance(100,'boat-01',{...middle,heading});await flush(f);run=f.mission.snapshot('boat-01');
+    assert.ok(run.commandSpeedMps>0.5,'Return leg issues movement with valid feedback');assert.ok(Math.abs(N.angleError(run.targetHeading,heading))<0.02);assert.ok(Math.abs(run.crossTrackM)<0.02,'Return follows end-to-start instead of retracing intermediate points');
+    assert.throws(()=>f.control.acquire('boat-01','browser-session',CLIENT,{mode:2,throttle:0,turn:0,targetHeading:0}),{status:409});
+    f.advance(100,'boat-01',{...ORIGIN,heading});await flush(f);assert.equal(f.mission.snapshot('boat-01').completedLoops,lap-1);
+    f.advance(100);await flush(f);run=f.mission.snapshot('boat-01');assert.equal(run.completedLoops,lap);
+    if(lap<2){assert.equal(run.status,'running');assert.equal(run.phase,'route');assert.equal(run.targetIndex,1);assert.equal(run.currentLoop,2);}
+  }
+  const result=f.mission.snapshot('boat-01');assert.equal(result.status,'completed');assert.equal(result.stopConfirmed,true);assert.equal(result.currentLoop,2);assert.match(result.message,/完成 2 圈并返回开始点/);assert.equal(f.control.jobs.size,0);
+  assert.equal(f.client.sent.filter(p=>p.topic.endsWith('parameter-command')).length,1);assert.equal(f.commands().filter(p=>p.payload[28]===1).length,1,'Laps never release and reacquire control');
+  const sent=f.commands().length;f.advance(1000);assert.equal(f.commands().length,sent,'Completed loops never restart automatically');
+});
+
+test('one enabled loop includes the return, and closed geometry still needs new RTK samples before completing',async t=>{
+  const f=fixture(t),r=f.route('boat-01',{loopEnabled:true,loopCount:1,points:[ORIGIN,N.destination(ORIGIN,0,30),ORIGIN]});await reachReturn(f,r);
+  assert.equal(f.mission.snapshot('boat-01').phase,'returning');assert.equal(f.mission.snapshot('boat-01').completedLoops,0);
+  const tick=f.now();for(let n=0;n<2;n++){f.advance(100,'boat-01',{sourceTick:tick});await flush(f);}assert.equal(f.mission.snapshot('boat-01').status,'running','Repeated last sample cannot also confirm return');
+  f.advance(100,'boat-01',{sourceTick:undefined});await flush(f);assert.equal(f.mission.snapshot('boat-01').status,'running');
+  f.advance(100);await flush(f);assert.equal(f.mission.snapshot('boat-01').status,'completed');assert.equal(f.mission.snapshot('boat-01').completedLoops,1);
+});
+
+test('goto on a looping route only goes to start and never enters a loop',async t=>{
+  const f=fixture(t),r=f.route('boat-01',{loopEnabled:true,loopCount:5});f.feed('boat-01',N.destination(ORIGIN,180,20));await running(f,r,'goto');await arrive(f,ORIGIN);
+  const run=f.mission.snapshot('boat-01');assert.equal(run.status,'completed');assert.equal(run.loopEnabled,false);assert.equal(run.completedLoops,0);assert.equal(run.stopConfirmed,true);
+});
+
+test('return-leg feedback failures, excessive deviation and manual stop end the job without counting an unfinished lap',async t=>{
+  for(const cause of ['fix','cross','stop']){
+    const f=fixture(t),r=f.route('boat-01',{loopEnabled:true,loopCount:3,points:[ORIGIN,N.destination(ORIGIN,0,30)]});await reachReturn(f,r);const before=f.commands().length;
+    if(cause==='fix'){f.flags.set('boat-01',{fix:false});f.advance(100);}
+    else if(cause==='cross')f.advance(100,'boat-01',N.destination(N.destination(ORIGIN,0,15),90,40));
+    else f.mission.stop('boat-01');
+    await flush(f);const run=f.mission.snapshot('boat-01');assert.equal(run.status,cause==='stop'?'stopped':'failed');assert.equal(run.completedLoops,0);assert.equal(run.commandSpeedMps,0);
+    assert.ok(f.commands().slice(before).every(p=>p.payload.readInt16LE(30)===0));f.advance(100);await flush(f);assert.equal(f.mission.active('boat-01'),false);
+  }
 });
 test('stale RTK, invalid position, missing motors and heading fail closed; unconfirmed stop never claims success',async t=>{
   for(const failure of [{age:1000},{fix:false},{motors:false},{heading:false}]){

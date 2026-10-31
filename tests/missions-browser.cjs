@@ -37,12 +37,20 @@ async function main(){
     assert.deepEqual(await evaluate('[...document.querySelectorAll(".mission-point-label")].map(n=>n.textContent.split(" · ")[1])'),['开始点','中间点','结束点']);
     assert.equal(await evaluate('document.getElementById("missionStart").disabled'),true,'Unsaved route cannot execute');
     await clickPoint(ORIGIN);assert.equal(await evaluate('BoatMissions.route.points.length'),3,'Marker click never bubbles into adding a duplicate waypoint');
+    assert.equal(await evaluate('document.getElementById("missionLoopCount").disabled'),true,'New routes keep the original single-run default');
+    await evaluate('document.getElementById("missionLoopEnabled").click();document.getElementById("missionLoopCount").value="0";document.getElementById("missionLoopCount").dispatchEvent(new Event("input"))');
+    assert.equal(await evaluate('document.getElementById("missionSave").disabled'),true,'Zero loops cannot be saved');
+    await evaluate('document.getElementById("missionLoopCount").value="2";document.getElementById("missionLoopCount").dispatchEvent(new Event("input"))');
+    assert.equal(await evaluate('!document.getElementById("missionLoopLegend").hidden&&BoatMissions.map.lastTrackLines.length===2'),true,'Loop map visibly includes a separate end-to-start leg');
+    assert.deepEqual(await evaluate('BoatMissions.map.lastTrackLines[1].points'),await evaluate('[BoatMissions.route.points.at(-1),BoatMissions.route.points[0]]'));
     await evaluate('document.getElementById("missionName").value="湖区巡检 A";document.getElementById("missionName").dispatchEvent(new Event("input"));document.getElementById("missionSave").click()');
     await until('BoatMissions.route.id&&!BoatMissions.busy&&!BoatMissions.dirty');
-    assert.equal(new MissionStore({env:f.env}).list('boat-01').length,1);const routeId=await evaluate('BoatMissions.route.id');
-    await evaluate('document.getElementById("missionNew").click()');await wait(1200);assert.equal(await evaluate('BoatMissions.route.points.length===0&&!BoatMissions.route.id'),true,'Background polling preserves an explicitly created blank draft');
+    assert.equal(new MissionStore({env:f.env}).list('boat-01').length,1);const routeId=await evaluate('BoatMissions.route.id'),savedRoute=new MissionStore({env:f.env}).get('boat-01',routeId);
+    assert.equal(savedRoute.loopEnabled,true);assert.equal(savedRoute.loopCount,2,'Loop count persists through real HTTP and storage reload');
+    await evaluate('document.getElementById("missionNew").click()');await wait(1200);assert.equal(await evaluate('BoatMissions.route.points.length===0&&!BoatMissions.route.id&&!document.getElementById("missionLoopEnabled").checked&&document.getElementById("missionLoopCount").disabled'),true,'Background polling preserves an explicitly created blank single-run draft');
     await evaluate('document.getElementById("missionRouteSelect").value="'+routeId+'";document.getElementById("missionRouteSelect").dispatchEvent(new Event("change"))');
     assert.equal(await evaluate('BoatMissions.route.points.length'),3,'Saved route reloads all ordered waypoints');
+    assert.equal(await evaluate('document.getElementById("missionLoopEnabled").checked&&document.getElementById("missionLoopCount").value==="2"'),true,'Loading a route restores its loop settings');
     await evaluate('window.scrollTo(0,0)');await shot('missions-desktop-dark');
     await evaluate('document.getElementById("missionGoto").click()');await until('BoatMissions.run()?.status==="completed"');assert.equal(f.mission.snapshot('boat-01').stopConfirmed,true);
     await evaluate('document.getElementById("missionStart").click()');await until('BoatMissions.run()?.status==="running"');const before=f.commands().length;
@@ -61,6 +69,28 @@ async function main(){
     await evaluate('BoatWorkspace.navigate("driving",{focus:false})');assert.equal(await evaluate('document.getElementById("driverMissionStop").hidden'),false,'Driving station retains a mission stop entry');
     await evaluate('document.activeElement?.blur()');await send('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',windowsVirtualKeyCode:32});await send('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32});
     await until('!BoatMissions.run()?.active');assert.equal(f.mission.snapshot('boat-01').status,'stopped');
+    await evaluate('BoatWorkspace.navigate("missions",{focus:false});document.getElementById("missionStart").click()');
+    await until('BoatMissions.run()?.status==="running"&&BoatMissions.run()?.targetIndex===1');
+    assert.equal(await evaluate('document.getElementById("missionLoopEnabled").disabled&&document.getElementById("missionLoopCount").disabled'),true,'An executing route cannot change its loop count');
+    for(let lap=1;lap<=2;lap++){
+      for(let index=1;index<savedRoute.points.length;index++){
+        const target=savedRoute.points[index],previous=f.positions.get('boat-01');f.feed('boat-01',{...target,heading:N.bearing(previous,target)});
+        await until(index===savedRoute.points.length-1?'BoatMissions.run()?.phase==="returning"&&BoatMissions.run()?.currentLoop==='+lap:'BoatMissions.run()?.phase==="route"&&BoatMissions.run()?.targetIndex==='+(index+1));
+      }
+      assert.equal(await evaluate('document.getElementById("missionPhase").textContent'),'返回起点');
+      assert.equal(await evaluate('document.getElementById("missionLoopProgress").textContent'),lap+' / 2 圈');
+      if(lap===1){
+        await send('Page.reload');await until('window.BoatMissions?.run()?.phase==="returning"&&BoatMissions.run()?.currentLoop===1&&BoatMissions.map?.ready');
+        assert.equal(await evaluate('document.getElementById("missionLoopCount").value'), '2','Refreshing during return preserves the configured and running loops');
+        assert.equal(f.mission.active('boat-01'),true);
+      }
+      f.feed('boat-01',{...savedRoute.points[0],heading:N.bearing(savedRoute.points.at(-1),savedRoute.points[0])});
+      await until(lap<2?'BoatMissions.run()?.phase==="route"&&BoatMissions.run()?.currentLoop===2&&BoatMissions.run()?.completedLoops===1':'BoatMissions.run()?.status==="completed"&&BoatMissions.run()?.stopConfirmed');
+    }
+    assert.equal(f.mission.snapshot('boat-01').completedLoops,2);assert.equal(await evaluate('document.getElementById("missionPhase").textContent'),'已完成');
+    assert.equal(await evaluate('document.getElementById("missionLoopProgress").title'),'已完成 2 圈');
+    assert.equal(await evaluate('document.getElementById("missionActiveBar").hidden'),true,'Final return completes the task and removes the active task banner');
+    await shot('missions-loops-completed');
     await evaluate('BoatWorkspace.navigate("missions",{focus:false});document.getElementById("themeToggle").click()');
     for(const [width,height]of [[1440,1100],[1024,900],[375,812],[320,812]]){
       await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});await wait(100);
@@ -73,7 +103,7 @@ async function main(){
     assert.equal(await evaluate('document.getElementById("view-missions").hidden&&document.getElementById("view-driving").hidden&&document.getElementById("missionActiveBar").hidden'),true,'Guest cannot see task, driver or global task interface');
     assert.equal(await evaluate('BoatMissions.routes.length===0&&BoatMissions.runs.length===0'),true,'Role change clears private task UI state');
     await evaluate('BoatMissions.poll(true)');assert.equal(await evaluate('BoatMissions.routes.length'),0,'Guest does not poll or repopulate the task interface');
-    assert.deepEqual(errors,[]);console.log('PASS: mission planner in real Chrome; actual map clicks and connected ordered waypoints; server persistence/reload; goto; hardware ACK and task progress; page closure/reopen; driving Space stop; guest permissions; dark/light and 1440/1024/375/320 px layouts.');
+    assert.deepEqual(errors,[]);console.log('PASS: mission planner in real Chrome; actual map clicks and return-leg preview; loop settings and server persistence/reload; goto; MCU ACK and two complete loops ending at start; refresh during return and live progress; page closure/reopen; driving Space stop; guest permissions; dark/light and 1440/1024/375/320 px layouts.');
   }finally{socket?.close();browser.kill();server.closeAllConnections?.();await f.close();}
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
