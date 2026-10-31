@@ -1,6 +1,6 @@
 {
   "name": "unmanned-boat-monitor-web",
-  "version": "1.38.0",
+  "version": "1.38.1",
   "private": true,
   "engines": {
     "node": ">=18"

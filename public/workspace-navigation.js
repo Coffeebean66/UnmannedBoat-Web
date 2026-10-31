@@ -16,6 +16,7 @@
   const panels = new Map([...document.querySelectorAll('[data-workspace-view]')].map(panel => [panel.dataset.workspaceView,panel]));
   if (!panels.has('overview')) return;
   const links = [...document.querySelectorAll('.side-nav a,.mobile-nav a')];
+  const restrictedViews = new Set(['driving','missions']);
   const boatNav = document.getElementById('singleBoatNav');
   const boatNavName = document.getElementById('singleBoatNavName');
   const breadcrumbView = document.getElementById('workspaceBreadcrumbView');
@@ -28,7 +29,28 @@
     motors:document.getElementById('motors')
   };
   const title = document.getElementById('viewTitle');
-  let current = null, selectedBoatId = '';
+  let current = null, selectedBoatId = '', deferredView = null;
+
+  function canAccessView(id) {
+    const auth = window.BoatAuth;
+    // 账户状态未确认时先隐藏入口；旧访问密码模式保留原来的监测页面。
+    return !restrictedViews.has(id) || (auth?.ready === true &&
+      (auth.enabled === false || (auth.enabled === true && auth.user?.role === 'admin')));
+  }
+
+  function updateAccess() {
+    for (const link of links) {
+      if (restrictedViews.has(link.hash.slice(1))) link.hidden = !canAccessView(link.hash.slice(1));
+    }
+    if (deferredView && canAccessView(deferredView)) {
+      const destination = deferredView; deferredView = null;
+      navigate(destination,{replace:true,focus:false});
+    } else if (current && !canAccessView(current)) {
+      // 切换账号/会话过期时立即离开专用页面，正常派发离页事件以释放手动驾驶。
+      navigate(defaultView(),{replace:true,focus:false});
+    }
+    if (window.BoatAuth?.user?.role === 'guest' || window.BoatAuth?.enabled === false) deferredView = null;
+  }
 
   function updateBreadcrumb() {
     if (breadcrumbView) breadcrumbView.textContent = views[current]?.title || '';
@@ -76,8 +98,8 @@
       mount(shared.motors,'driving-motors');
     }
   }
-  function validView(id) { return Object.hasOwn(views,id) && panels.has(id) ? id : (panels.has('fleet') ? 'fleet' : 'overview'); }
-  function routeFromLocation() { return validView(window.location.hash.slice(1)); }
+  function defaultView() { return panels.has('fleet') ? 'fleet' : 'overview'; }
+  function routeFromLocation() { return window.location.hash.slice(1); }
   function writeHash(view, replace) {
     const hash = '#'+view;
     if (window.location.hash !== hash) window.history[replace ? 'replaceState' : 'pushState'](window.history.state,'',hash);
@@ -87,7 +109,11 @@
     window.scrollTo({top:0,left:0,behavior:'instant'});
   }
   function navigate(id, {replace=false,focus=true,history:recordHistory=true} = {}) {
-    const view = validView(id), previous = current, changed = view !== previous;
+    const requested = Object.hasOwn(views,id) && panels.has(id) ? id : defaultView();
+    const permitted = canAccessView(requested);
+    if (!permitted && (!window.BoatAuth?.ready || (window.BoatAuth?.enabled === true && !window.BoatAuth.user))) deferredView = requested;
+    else deferredView = null;
+    const view = permitted ? requested : defaultView(), previous = current, changed = view !== previous;
     if (recordHistory) writeHash(view,replace);
     if (boatNav) boatNav.open = !!selectedBoatId && view !== 'fleet';
     if (changed) {
@@ -128,16 +154,16 @@
     navigate(link.hash.slice(1));
   });
   function restoreLocation() {
-    const view = routeFromLocation();
-    // 无效片段统一回到概览，不让浏览器滚到不存在或旧的页面锚点。
-    if (window.location.hash !== '#'+view) writeHash(view,true);
-    navigate(view,{focus:false,history:false});
+    // 地址栏直达、刷新、前进/后退与点击入口走同一权限校验，不增加额外历史。
+    navigate(routeFromLocation(),{replace:true,focus:false});
   }
   window.addEventListener('popstate',restoreLocation);
   window.addEventListener('hashchange',restoreLocation);
   window.addEventListener('boat-selection-change',event=>setBoatSelected(event.detail?.selectedId));
   if ('scrollRestoration' in window.history) window.history.scrollRestoration = 'manual';
-  window.BoatWorkspace = Object.freeze({get current(){return current;},navigate,setBoatSelected});
+  window.BoatAuth?.addEventListener('change',updateAccess);
+  window.BoatWorkspace = Object.freeze({get current(){return current;},navigate,setBoatSelected,canAccessView});
   setBoatSelected('');
   navigate(routeFromLocation(),{replace:true,focus:false});
+  updateAccess();
 })();

@@ -3,7 +3,7 @@ const fs = require('node:fs'), path = require('node:path'), vm = require('node:v
 const source = fs.readFileSync(path.join(__dirname,'../public/workspace-navigation.js'),'utf8');
 const names = ['overview','navigation','attitude','analysis','propulsion','diagnostics','video','driving','missions'];
 
-function setup(hash = '', includeFleet = false) {
+function setup(hash = '', includeFleet = false, authState = {}) {
   const activeNames = includeFleet ? ['fleet',...names] : names;
   const nodes = new Map(), slots = new Map(), handlers = new Map(), events = [], scrolls = [];
   const location = {hash}, entries = [hash]; let cursor = 0;
@@ -30,6 +30,7 @@ function setup(hash = '', includeFleet = false) {
     addEventListener(name,handler){handlers.set(name,handler);}
   };
   const window = new EventTarget();window.location=location;window.scrollTo=options=>scrolls.push(options);
+  const auth = new EventTarget();Object.assign(auth,{ready:true,enabled:true,user:{username:'captain',role:'admin'}},authState);window.BoatAuth=auth;
   window.history = {
     state:{preserved:true},scrollRestoration:'auto',
     pushState(state,title,next){entries.splice(cursor+1);entries.push(next);cursor++;location.hash=next;},
@@ -39,7 +40,8 @@ function setup(hash = '', includeFleet = false) {
   };
   window.addEventListener('boat-view-change',event=>events.push({view:event.detail.view,previous:event.detail.previous,visible:panels.filter(panel=>!panel.hidden).map(panel=>panel.dataset.workspaceView),mapParent:nodes.get('navigation').parentElement.id}));
   vm.runInNewContext(source,{window,document,CustomEvent});
-  return {window,document,nodes,slots,panels,links,events,scrolls,entries,
+  return {window,document,nodes,slots,panels,links,events,scrolls,entries,auth,
+    setAuth(values){Object.assign(auth,values);auth.dispatchEvent(new Event('change'));},
     click(name,options={}){let prevented=false;handlers.get('click')({button:0,target:links[activeNames.indexOf(name)],preventDefault(){prevented=true;},...options});return prevented;},
     hash(next){location.hash=next;window.dispatchEvent(new Event('hashchange'));}
   };
@@ -55,6 +57,58 @@ test('首次恢复独立页面或修正无效片段，不额外增加历史记�
     assert.ok(s.links.filter(link=>link.hash==='#'+view).every(link=>link.attributes['aria-current']==='page'));
     assert.ok(s.links.every(link=>link.attributes['aria-label']&&link.title&&link.attributes['aria-controls']));
   }
+});
+
+test('访客桌面与手机入口均隐藏，地址直达、代码导航和历史记录无法打开驾驶或任务页',()=>{
+  const guest={username:'observer',role:'guest'};
+  for(const destination of ['driving','missions']){
+    const s=setup('#'+destination,true,{user:guest});
+    assert.equal(s.window.BoatWorkspace.current,'fleet');assert.equal(s.window.location.hash,'#fleet');
+    assert.equal(s.entries.length,1);assert.equal(s.nodes.get('view-'+destination).hidden,true);
+    assert.ok(s.links.filter(link=>['#driving','#missions'].includes(link.hash)).every(link=>link.hidden));
+    assert.ok(s.links.filter(link=>!['#driving','#missions'].includes(link.hash)).every(link=>!link.hidden));
+    assert.equal(s.window.BoatWorkspace.navigate(destination),'fleet');assert.equal(s.click(destination),true);
+    s.hash('#'+destination);assert.equal(s.window.location.hash,'#fleet');
+    assert.ok(s.events.every(event=>!['driving','missions'].includes(event.view)));
+  }
+  const s=setup('#overview',true);s.click('driving');s.click('analysis');s.setAuth({user:guest});
+  s.window.history.back();assert.equal(s.window.BoatWorkspace.current,'fleet');assert.equal(s.window.location.hash,'#fleet');
+  s.window.history.forward();assert.equal(s.window.BoatWorkspace.current,'analysis');
+});
+
+test('管理员降为访客或退出立即离开驾驶/任务，恢复管理员入口无需刷新且保留监测面板',()=>{
+  for(const destination of ['driving','missions']){
+    const s=setup('#'+destination,true), map=s.nodes.get('navigation');
+    assert.equal(s.window.BoatWorkspace.current,destination);
+    s.setAuth({user:{username:'observer',role:'guest'}});
+    assert.equal(s.window.BoatWorkspace.current,'fleet');assert.equal(s.nodes.get('view-'+destination).hidden,true);
+    assert.equal(s.events.at(-1).previous,destination);assert.equal(s.events.at(-1).view,'fleet');
+    assert.ok(s.links.filter(link=>['#driving','#missions'].includes(link.hash)).every(link=>link.hidden));
+    s.click('overview');assert.equal(s.nodes.get('navigation'),map);assert.equal(map.parentElement,s.slots.get('overview-map'));
+    s.setAuth({user:{username:'captain',role:'admin'}});s.click(destination);
+    assert.equal(s.window.BoatWorkspace.current,destination);
+    assert.ok(s.links.every(link=>!link.hidden));
+    s.setAuth({user:null});assert.equal(s.window.BoatWorkspace.current,'fleet');assert.equal(s.nodes.get('view-'+destination).hidden,true);
+  }
+});
+
+test('权限检查期间隐藏专用页，管理员登录后恢复原链接，访客登录放弃受限目标',()=>{
+  for(const destination of ['driving','missions']){
+    const s=setup('#'+destination,true,{ready:false,enabled:null,user:null});
+    assert.equal(s.window.BoatWorkspace.current,'fleet');assert.equal(s.events.some(event=>event.view===destination),false);
+    s.setAuth({ready:true,enabled:true,user:null});assert.equal(s.window.BoatWorkspace.current,'fleet');
+    s.setAuth({user:{username:'captain',role:'admin'}});assert.equal(s.window.BoatWorkspace.current,destination);
+    const g=setup('#'+destination,true,{ready:false,enabled:null,user:null});
+    g.setAuth({ready:true,enabled:true,user:{username:'observer',role:'guest'}});assert.equal(g.window.BoatWorkspace.current,'fleet');
+    g.setAuth({user:{username:'captain',role:'admin'}});assert.equal(g.window.BoatWorkspace.current,'fleet','访客已经拒绝的旧链接不在切换管理员后突然打开');
+  }
+});
+
+test('旧访问密码模式保留专用页展示，账户检查失败仍隐藏',()=>{
+  const legacy=setup('#driving',true,{enabled:false,user:null});assert.equal(legacy.window.BoatWorkspace.current,'driving');
+  assert.ok(legacy.links.every(link=>!link.hidden));
+  legacy.setAuth({ready:false,enabled:true,user:null});assert.equal(legacy.window.BoatWorkspace.current,'fleet');
+  assert.ok(legacy.links.filter(link=>['#driving','#missions'].includes(link.hash)).every(link=>link.hidden));
 });
 
 test('点击切换页面、只移动同一面板实例，返回概览恢复面板且不丢失内部状态',()=>{

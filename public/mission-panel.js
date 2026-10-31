@@ -30,8 +30,8 @@
       window.addEventListener('boat-theme-change',()=>this.map?.setTheme(document.documentElement.dataset.theme));
       window.BoatAuth?.addEventListener('change',()=>{
         const key=String(BoatAuth.generation);
-        if(this.authKey!==key){this.authKey=key;this.generation++;this.controller?.abort();this.routes=[];this.runs=[];this.position=null;this.drafts.clear();this.route=this.blank();this.dirty=false;this.fillForm();this.renderPoints();this.draw();}
-        if(BoatAuth.canMonitor)this.poll(true);this.render();
+        if(this.authKey!==key){this.authKey=key;this.generation++;this.controller?.abort();this.polling=false;this.routes=[];this.runs=[];this.position=null;this.editing=false;this.drafts.clear();this.route=this.blank();this.dirty=false;this.fillForm();this.renderPoints();this.draw();}
+        if(this.admin)this.poll(true);this.render();
       });
       this.timer=setInterval(()=>{if(!document.hidden)this.poll();},1000);
       window.addEventListener('pagehide',()=>{clearInterval(this.timer);this.controller?.abort();this.map?.destroy();});
@@ -58,7 +58,7 @@
       }finally{clearTimeout(timer);}
     }
     async poll(force=false){
-      if(!window.BoatAuth?.canMonitor||BoatAuth.enabled!==true)return;
+      if(!this.admin)return;
       if(this.polling&&!force)return;
       if(force)this.controller?.abort();
       const generation=this.generation,id=this.deviceId,controller=new AbortController();this.controller=controller;this.polling=true;
@@ -155,7 +155,7 @@
       $('missionAddPosition').disabled=locked||routeLocked||!this.position;
       $('missionGoto').disabled=$('missionStart').disabled=locked||active||!this.route.id||this.dirty||!!this.storageError;
       $('missionStop').disabled=!this.admin||this.stops.has(this.deviceId)||!active||run.status==='stopping';
-      $('driverMissionStop').hidden=!active;$('driverMissionStop').disabled=$('missionStop').disabled;
+      $('driverMissionStop').hidden=!this.admin||!active;$('driverMissionStop').disabled=$('missionStop').disabled;
       $('missionEdit').setAttribute('aria-pressed',String(this.editing&&!locked&&!routeLocked));$('missionEdit').textContent=this.editing?'停止点选':'开启点选航点';
       $('missionMap').dataset.editing=String(this.editing&&!locked&&!routeLocked);
       for(const el of document.querySelectorAll('[data-mission-editor]'))el.disabled=locked||routeLocked||el.dataset.fixedDisabled==='true';
@@ -168,10 +168,10 @@
       this.renderRunningBar();
       if(this.storageError)this.notice(this.storageError,true);
       else if(BoatAuth.enabled===false)this.notice('航线任务需要在服务器启用平台账户，并使用管理员登录。');
-      else if(!this.admin)this.notice(BoatAuth.canMonitor?'访客可查看航线与进度；编辑及执行需要管理员账户。':'请登录并选择需要规划任务的无人船。');
+      else if(!this.admin)this.notice('航线任务界面仅供管理员使用。');
     }
     renderRunningBar(){
-      const bar=$('missionActiveBar'),runs=this.runs.filter(r=>r.active),keys=new Set(runs.map(r=>r.runId));bar.hidden=!runs.length;
+      const bar=$('missionActiveBar'),runs=this.admin?this.runs.filter(r=>r.active):[],keys=new Set(runs.map(r=>r.runId));bar.hidden=!runs.length;
       for(const [key,value]of this.activeRows)if(!keys.has(key)){value.row.remove();this.activeRows.delete(key);}
       for(const run of runs){
         let item=this.activeRows.get(run.runId);
@@ -185,6 +185,7 @@
       }
     }
     async initializeMap(){
+      if(window.BoatWorkspace?.canAccessView&&!BoatWorkspace.canAccessView('missions'))return;
       if(this.map){this.map.invalidateSize();return;}
       this.map=new BoatMapView('missionMap');
       this.map.on('click',p=>{const r=this.run();if(this.editing&&!(r?.active&&r.routeId===this.route.id))this.addPoint(p);});

@@ -26,8 +26,9 @@ async function main(){
     };
     await send('Runtime.enable');await send('Page.enable');await send('Network.enable');await send('Network.setBlockedURLs',{urls:['https://*']});
     await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
-    await send('Page.navigate',{url:base+'/#missions'});await until('window.boatMonitor&&BoatAuth.ready&&window.BoatMissions?.map?.ready');
-    await evaluate('BoatAuth.login("operator","browser-admin-test-only")');await until('BoatMissions.deviceId==="boat-01"');
+    await send('Page.navigate',{url:base+'/#missions'});await until('window.boatMonitor&&BoatAuth.ready&&window.BoatMissions');
+    assert.equal(await evaluate('document.getElementById("view-missions").hidden'),true,'Task interface stays hidden before authentication');
+    await evaluate('BoatAuth.login("operator","browser-admin-test-only")');await until('BoatMissions.deviceId==="boat-01"&&BoatMissions.map?.ready&&BoatWorkspace.current==="missions"');
     assert.equal(f.commands().length,0,'Entering planning never acquires or moves a boat');
     await evaluate('document.getElementById("missionMap").scrollIntoView({block:"center",behavior:"instant"});BoatMissions.map.setView('+JSON.stringify(ORIGIN)+',18,{animate:false});document.getElementById("missionEdit").click()');await wait(150);
     for(const p of [ORIGIN,N.destination(ORIGIN,0,30),N.destination(ORIGIN,90,45)])await clickPoint(p);
@@ -47,6 +48,16 @@ async function main(){
     await evaluate('document.getElementById("missionStart").click()');await until('BoatMissions.run()?.status==="running"');const before=f.commands().length;
     await send('Page.navigate',{url:'about:blank'});await wait(1100);assert.equal(f.mission.active('boat-01'),true,'Task runs without any browser page');assert.ok(f.commands().length>before+5,'Server calculates and publishes navigation after the page is closed');
     await send('Page.navigate',{url:base+'/#missions'});await until('window.BoatMissions?.run()?.status==="running"');assert.equal(await evaluate('document.getElementById("missionActiveBar").hidden'),false);
+    await evaluate('BoatAuth.logout()');
+    assert.equal(await evaluate('BoatWorkspace.current==="fleet"&&document.getElementById("view-missions").hidden&&document.getElementById("missionActiveBar").hidden'),true,'Logging out immediately hides the active task interface');
+    await evaluate('BoatAuth.login("observer","browser-guest-test-only")');await until('BoatAuth.user?.role==="guest"');
+    await evaluate('BoatMissions.poll(true)');
+    assert.equal(await evaluate('BoatMissions.routes.length===0&&BoatMissions.runs.length===0&&document.getElementById("missionActiveBar").children.length===0'),true,'Guest never retains task details or the global task entry');
+    for(const view of ['missions','driving'])assert.equal(await evaluate('BoatWorkspace.navigate('+JSON.stringify(view)+')'),'fleet');
+    assert.equal(f.mission.active('boat-01'),true,'Hiding the interface and switching accounts do not stop a server task');
+    await evaluate('BoatAuth.logout()');await evaluate('BoatAuth.login("operator","browser-admin-test-only")');
+    await until('BoatMissions.run()?.status==="running"');
+    assert.equal(await evaluate('document.getElementById("missionActiveBar").hidden'),false,'Administrator can see the running task again after login');
     await evaluate('BoatWorkspace.navigate("driving",{focus:false})');assert.equal(await evaluate('document.getElementById("driverMissionStop").hidden'),false,'Driving station retains a mission stop entry');
     await evaluate('document.activeElement?.blur()');await send('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',windowsVirtualKeyCode:32});await send('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32});
     await until('!BoatMissions.run()?.active');assert.equal(f.mission.snapshot('boat-01').status,'stopped');
@@ -58,8 +69,10 @@ async function main(){
       assert.equal(await evaluate('document.getElementById("missionMap").getBoundingClientRect().height>=300'),true);
       await evaluate('document.getElementById("view-missions").scrollIntoView({block:"start",behavior:"instant"})');await shot('missions-'+width+'-light');
     }
-    await evaluate('BoatAuth.logout();');await evaluate('BoatAuth.login("observer","browser-guest-test-only")');await until('BoatMissions.routes.length===1');
-    assert.equal(await evaluate('document.getElementById("missionSave").disabled&&document.getElementById("missionStart").disabled&&document.getElementById("missionEdit").disabled'),true,'Guest can browse but cannot edit or execute');
+    await evaluate('BoatAuth.logout()');await evaluate('BoatAuth.login("observer","browser-guest-test-only")');await until('BoatAuth.user?.role==="guest"');
+    assert.equal(await evaluate('document.getElementById("view-missions").hidden&&document.getElementById("view-driving").hidden&&document.getElementById("missionActiveBar").hidden'),true,'Guest cannot see task, driver or global task interface');
+    assert.equal(await evaluate('BoatMissions.routes.length===0&&BoatMissions.runs.length===0'),true,'Role change clears private task UI state');
+    await evaluate('BoatMissions.poll(true)');assert.equal(await evaluate('BoatMissions.routes.length'),0,'Guest does not poll or repopulate the task interface');
     assert.deepEqual(errors,[]);console.log('PASS: mission planner in real Chrome; actual map clicks and connected ordered waypoints; server persistence/reload; goto; hardware ACK and task progress; page closure/reopen; driving Space stop; guest permissions; dark/light and 1440/1024/375/320 px layouts.');
   }finally{socket?.close();browser.kill();server.closeAllConnections?.();await f.close();}
 }

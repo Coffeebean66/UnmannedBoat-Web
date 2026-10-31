@@ -85,8 +85,8 @@
           <a href="#propulsion"><span data-icon="motor"></span><span>推进系统</span><span class="nav-index">06</span></a>
           <a href="#diagnostics"><span data-icon="activity"></span><span>通信诊断</span><span class="nav-index">07</span></a>
           <a href="#video"><span data-icon="video"></span><span>视频监控</span><span class="nav-index">08</span></a>
-          <a href="#driving"><span data-icon="monitor"></span><span>驾驶操控</span><span class="nav-index">09</span></a>
-          <a href="#missions"><span data-icon="map"></span><span>航线任务</span><span class="nav-index">10</span></a>
+          <a href="#driving" hidden><span data-icon="monitor"></span><span>驾驶操控</span><span class="nav-index">09</span></a>
+          <a href="#missions" hidden><span data-icon="map"></span><span>航线任务</span><span class="nav-index">10</span></a>
           <button id="settingsToggle" type="button" class="nav-parameter-button" aria-haspopup="dialog" aria-controls="settingsDialog" hidden><span data-icon="sliders"></span><span>调参设置</span></button>
           <button id="firmwareToggle" type="button" class="nav-parameter-button" aria-haspopup="dialog" aria-controls="firmwareDialog" hidden><span data-icon="download"></span><span>固件升级</span></button>
         </div>
@@ -102,11 +102,11 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.38.0</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.38.1</span></div>
     </div>
   </aside>
   <div class="app-shell">
-    <nav class="mobile-nav" aria-label="快捷导航"><a href="#fleet">船队</a><a href="#overview">单船</a><a href="#navigation">轨迹</a><a href="#attitude">姿态</a><a href="#analysis">曲线</a><a href="#propulsion">电机</a><a href="#diagnostics">诊断</a><a href="#video">视频</a><a href="#driving">驾驶</a><a href="#missions">任务</a></nav>
+    <nav class="mobile-nav" aria-label="快捷导航"><a href="#fleet">船队</a><a href="#overview">单船</a><a href="#navigation">轨迹</a><a href="#attitude">姿态</a><a href="#analysis">曲线</a><a href="#propulsion">电机</a><a href="#diagnostics">诊断</a><a href="#video">视频</a><a href="#driving" hidden>驾驶</a><a href="#missions" hidden>任务</a></nav>
     <main class="page" id="mainContent">
       <nav class="workspace-breadcrumb" aria-label="当前位置"><a href="#fleet" data-view-link><span data-icon="dashboard"></span>工作台</a><span aria-hidden="true">/</span><span id="workspaceBreadcrumbBoat" hidden></span><span id="workspaceBreadcrumbView" aria-current="page">船队总览</span></nav>
       <section class="hero">

@@ -6,7 +6,9 @@ const output = path.resolve(__dirname, '../.test-output'), wait = ms => new Prom
 
 async function main() {
   fs.mkdirSync(output, { recursive: true });
-  const server = createFixtureServer(); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const server = createFixtureServer(), missionRequests = [];
+  server.prependListener('request', req => { if (req.url.startsWith('/api/missions')) missionRequests.push(req.url); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const profile = fs.mkdtempSync(path.join(output, 'chrome-accounts-')), errors = [];
   const browser = spawn(process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe', [
     '--headless', '--no-first-run', '--no-default-browser-check', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
@@ -35,17 +37,37 @@ async function main() {
       await until('document.getElementById("cloudDevice").value==="boat-mqtt-test" && boatMonitor.link.wanted && boatMonitor.link.connected');
     };
     const visible = id => evaluate('document.getElementById(' + JSON.stringify(id) + ')?.checkVisibility({checkVisibilityCSS:true})===true');
+    const assertGuestWorkspace = async () => {
+      assert.equal(await evaluate('(()=>{const links=[...document.querySelectorAll(".side-nav a,.mobile-nav a")].filter(a=>["#driving","#missions"].includes(a.hash));return links.length===4&&links.every(a=>a.hidden&&!a.checkVisibility({checkVisibilityCSS:true}));})()'), true, 'Guest has no desktop or mobile driver/task entry');
+      for (const id of ['view-driving', 'view-missions', 'missionActiveBar', 'driverMissionStop']) assert.equal(await evaluate('document.getElementById(' + JSON.stringify(id) + ').hidden'), true, 'Guest interface hidden: ' + id);
+      assert.equal(await evaluate('BoatMissions.routes.length===0&&BoatMissions.runs.length===0'), true);
+    };
     await send('Runtime.enable'); await send('Page.enable'); await send('Page.addScriptToEvaluateOnNewDocument', { source: fixtureScript });
     await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
     await send('Page.navigate', { url: 'http://127.0.0.1:' + server.address().port });
     await until('!!window.boatMonitor && window.BoatAuth.ready && document.getElementById("accountLoginDialog").open');
     assert.equal(await evaluate('window.BoatAuth.canManage'), false); assert.equal(await visible('updateToggle'), false);
+    await assertGuestWorkspace();
     assert.equal(await evaluate('document.getElementById("connectButton").disabled'), true); await shot('accounts-desktop-login');
     await login('observer', 'browser-guest-test-only');
     assert.equal(await evaluate('document.getElementById("accountName").textContent'), 'observer · 访客');
     for (const id of ['updateToggle', 'settingsToggle', 'settingsEntry']) assert.equal(await visible(id), false);
     assert.equal(await evaluate('document.getElementById("cloudLoginOpen").hidden'), true);
     assert.equal(await evaluate('boatMonitor.link.connected'), true,'Login automatically subscribes to the online boat');
+    const guestMissionRequests = missionRequests.length;
+    await assertGuestWorkspace();
+    for (const destination of ['driving', 'missions']) {
+      assert.equal(await evaluate('BoatWorkspace.navigate(' + JSON.stringify(destination) + ')'), 'fleet', 'Guest programmatic navigation is rejected');
+      await evaluate('location.hash=' + JSON.stringify('#' + destination)); await until('BoatWorkspace.current==="fleet"&&location.hash==="#fleet"');
+      await assertGuestWorkspace();
+      await send('Page.navigate', { url: 'http://127.0.0.1:' + server.address().port + '/#' + destination });
+      await until('window.boatMonitor&&BoatAuth.ready&&BoatAuth.user?.role==="guest"&&boatMonitor.link.connected');
+      assert.equal(await evaluate('BoatWorkspace.current'), 'fleet', 'Guest direct URL and page reload are rejected');
+      await assertGuestWorkspace();
+    }
+    await evaluate('BoatWorkspace.navigate("video")'); assert.equal(await visible('videoCard'), true, 'Guest video page remains available');
+    await evaluate('BoatWorkspace.navigate("overview")'); assert.equal(await visible('sensorTelemetry'), true, 'Guest monitoring page remains available');
+    await wait(1100); assert.equal(missionRequests.length, guestMissionRequests, 'Guest never polls the task API');
     for (const expression of ['boatMonitor.link.request("read")', 'boatMonitor.link.request("write",{})', 'boatMonitor.params.command("flash")']) {
       const result = await evaluate(expression + '.then(()=>"unexpected",error=>error.message)'); assert.match(result, /访客|只读/);
     }
@@ -55,6 +77,7 @@ async function main() {
     await evaluate('document.getElementById("animationEnabled").click()');
     await shot('accounts-desktop-guest');
     await send('Emulation.setDeviceMetricsOverride', { width: 320, height: 740, deviceScaleFactor: 1, mobile: true }); await wait(100);
+    await assertGuestWorkspace();
     assert.equal(await evaluate('document.documentElement.scrollWidth>innerWidth'), false); await shot('accounts-mobile-guest');
     await evaluate('document.getElementById("accountLogout").click()'); await until('!BoatAuth.user && !BoatAuth.busy');
     assert.equal(await evaluate('boatMonitor.link.connected'), false);
@@ -62,6 +85,12 @@ async function main() {
     await send('Page.navigate', { url: 'http://127.0.0.1:' + server.address().port });
     await until('!!window.boatMonitor && BoatAuth.ready && document.getElementById("accountLoginDialog").open');
     await evaluate('document.getElementById("accountLoginOpen").click()'); await login('operator', 'browser-admin-test-only');
+    assert.equal(await evaluate('[...document.querySelectorAll(".side-nav a,.mobile-nav a")].filter(a=>["#driving","#missions"].includes(a.hash)).every(a=>!a.hidden)'), true, 'Administrator entries return without changing navigation layout');
+    for (const destination of ['driving', 'missions']) {
+      assert.equal(await evaluate('BoatWorkspace.navigate(' + JSON.stringify(destination) + ')'), destination);
+      assert.equal(await visible('view-' + destination), true, 'Administrator can open ' + destination);
+    }
+    await evaluate('BoatWorkspace.navigate("fleet")');
     assert.equal(await visible('updateToggle'), true); assert.equal(await visible('settingsToggle'), false);
     assert.equal(await evaluate('document.getElementById("settingsToggle").hidden'),false,'Automatic selection makes the administrator parameter entry available');
     const configure='document.querySelector(".fleet-card[data-device-id=boat-mqtt-test] .fleet-parameter-button")';
@@ -74,9 +103,12 @@ async function main() {
     assert.ok(await evaluate('!!boatMonitor.params.confirmed'));
     await evaluate('document.getElementById("settingsClose").click();document.getElementById("updateToggle").click()'); await until('/安装|启用/.test(document.getElementById("updateStatus").textContent)');
     assert.equal(await evaluate('document.getElementById("updateLoginForm").hidden'), true); await shot('accounts-mobile-admin-update');
-    await evaluate('document.getElementById("updateClose").click();document.getElementById("accountLogout").click()'); await until('!BoatAuth.user && !BoatAuth.busy');
+    await evaluate('document.getElementById("updateClose").click();BoatWorkspace.navigate("driving");document.getElementById("accountLogout").click()');
+    await assertGuestWorkspace(); assert.equal(await evaluate('BoatWorkspace.current'), 'fleet', 'Logout immediately exits the driver interface');
+    await until('!BoatAuth.user && !BoatAuth.busy');
     assert.equal(await evaluate('boatMonitor.params.confirmed'), null);
     await evaluate('document.getElementById("accountLoginOpen").click()'); await login('observer', 'browser-guest-test-only');
+    await assertGuestWorkspace();
     assert.equal(await visible('updateToggle'), false);
     assert.equal(await evaluate('boatMonitor.link.wanted'), true,'A new viewer session automatically subscribes without clicking connect');
     for (let i = 0; i < 60 && server.boatCloudApi.getClientCount() < 2; i++) await wait(25);
@@ -85,7 +117,7 @@ async function main() {
     assert.equal(server.boatCloudApi.getClientCount(), 0); assert.equal(await evaluate('boatMonitor.link.wanted'), false);
     assert.equal(await evaluate('[...Object.values(localStorage),...Object.values(sessionStorage)].some(value=>String(value).includes("browser-admin-test-only")||String(value).includes("browser-guest-test-only"))'), false);
     assert.deepEqual(errors, []);
-    console.log('Chrome shared accounts passed: real local account/MQTT bridge APIs, admin/guest/login/logout, 1440px/320px, guest telemetry, guarded cloud parameters, account switching, shared update login, SSE logout.');
+    console.log('Chrome shared accounts passed: real local account/MQTT bridge APIs, admin/guest/login/logout, 1440px/320px, guest telemetry/video, hidden driver/task entries and interfaces, direct URL/hash/reload guards, no guest task polling, administrator access and immediate logout redirect, guarded cloud parameters, shared update login, SSE logout.');
   } finally { if (socket) socket.close(); browser.kill(); server.closeAllConnections?.(); await new Promise(resolve => server.close(resolve)); }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
