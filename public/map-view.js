@@ -35,6 +35,7 @@
       this._events = new Map();
       this._markers = new Set();
       this._trackLayers = [];
+      this._lineOverlays = new Map();
       this._mapEvents = [];
       this._tileLayers = [];
       this._destroyed = false;
@@ -159,6 +160,7 @@
           this.ready = true;
         }
         this._mapReadyStatus();
+        this._restoreLineOverlays();
         this._emit('ready', this);
       } catch (error) {
         if (!this._destroyed) {
@@ -227,6 +229,7 @@
       if (viewport.center) this.setView(viewport.center, Math.max(3, Math.min(this.maxZoom, viewport.zoom)), { animate: false });
       for (const marker of this._markers) marker._mount();
       this.setTrackLines(tracks);
+      this._restoreLineOverlays();
     }
 
     _loadConfig() {
@@ -556,22 +559,47 @@
     setTrackLines(lines) {
       if (!this.ready) return this;
       this._clearTrackLines();
-      this.lastTrackLines = [];
+      const rendered = this._renderLines(lines);
+      this.lastTrackLines = rendered.lines;
+      this._trackLayers = rendered.layers;
+      return this;
+    }
+
+    // 任务路线使用独立图层，实际轨迹的更新/清除不会影响任务路线。
+    setOverlayLines(name, lines) {
+      if (this._destroyed) return this;
+      this._removeLineLayers(this._lineOverlays.get(name)?.layers || []);
+      const rendered = this._renderLines(lines);
+      if (rendered.lines.length) this._lineOverlays.set(name, rendered);
+      else this._lineOverlays.delete(name);
+      return this;
+    }
+
+    _restoreLineOverlays() {
+      for (const [name, group] of [...this._lineOverlays]) this.setOverlayLines(name, group.lines);
+    }
+
+    _renderLines(lines) {
+      const result = { lines: [], layers: [] };
       for (const line of lines || []) {
         let points = [];
         const addPart = () => {
           if (points.length < 2) { points = []; return; }
           const rawPoints = points;
-          this.lastTrackLines.push({ ...line, points: rawPoints });
+          result.lines.push({ ...line, points: rawPoints });
+          if (!this.ready) { points = []; return; }
           const path = rawPoints.map(point => this.project(point));
           const layer = this.provider === 'amap' ? new scope.AMap.Polyline({
             path: path.map(point => [point.longitude, point.latitude]), strokeColor: line.color,
-            strokeWeight: line.width || 4, strokeOpacity: 1, lineJoin: 'round', lineCap: 'round', zIndex: 100
+            strokeWeight: line.width || 4, strokeOpacity: 1, lineJoin: 'round', lineCap: 'round', zIndex: line.behind ? 80 : 100,
+            strokeStyle: line.dashed ? 'dashed' : 'solid', strokeDasharray: [8, 6]
           }) : scope.L.polyline(path.map(point => [point.latitude, point.longitude]), {
-            color: line.color, weight: line.width || 4
+            color: line.color, weight: line.width || 4, dashArray: line.dashed ? '8 6' : null,
+            className: line.className || '', interactive: false
           });
           if (this.provider === 'amap') layer.setMap(this.map); else layer.addTo(this.map);
-          this._trackLayers.push(layer);
+          if (line.behind) layer.bringToBack?.();
+          result.layers.push(layer);
           points = [];
         };
         for (const value of line.points || []) {
@@ -580,14 +608,18 @@
         }
         addPart();
       }
-      return this;
+      return result;
     }
 
     _clearTrackLines() {
-      for (const layer of this._trackLayers) {
+      this._removeLineLayers(this._trackLayers);
+      this._trackLayers = [];
+    }
+
+    _removeLineLayers(layers) {
+      for (const layer of layers) {
         if (this.provider === 'amap') layer.setMap(null); else layer.remove();
       }
-      this._trackLayers = [];
     }
 
     setView(value, zoom, options = {}) {
@@ -709,6 +741,10 @@
         if (preserveMarkers) marker._detach(); else marker.remove();
       }
       this._clearTrackLines();
+      for (const group of this._lineOverlays.values()) {
+        this._removeLineLayers(group.layers);
+        group.layers = [];
+      }
       for (const [name, callback] of this._mapEvents) this.map?.off?.(name, callback);
       this._mapEvents = [];
       this._zoomControls?.remove();
@@ -730,6 +766,7 @@
       this._cancelSdk?.();
       this._disposeMap();
       this.lastTrackLines = [];
+      this._lineOverlays.clear();
       scope.removeEventListener?.('pagehide', this._pageHide);
       scope.document?.removeEventListener?.('securitypolicyviolation', this._policyViolation);
       this._events.clear();

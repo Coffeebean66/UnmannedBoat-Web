@@ -27,7 +27,7 @@ html[data-workspace-view="driving"] .cloud-source-label,html[data-workspace-view
 .driver-region-toolbar svg { display:block; width:13px; height:13px; color:var(--blue); }
 .driver-region-toolbar small { color:var(--faint); font-size:7px; letter-spacing:.08em; }
 .driver-region-toolbar .small-button { min-height:27px; padding:4px 7px; font-size:9px; white-space:nowrap; }
-.driving-workspace .video-heading,.driving-workspace .video-details,.driving-workspace .map-card .card-title,.driving-workspace .map-card .panel-caption,.driving-workspace .panel-page-link,.driving-workspace .map-track-info,.driving-workspace .map-footer,.driving-workspace .vector-info { display:none; }
+.driving-workspace .video-heading,.driving-workspace .video-details,.driving-workspace .map-card .card-title,.driving-workspace .map-card .panel-caption,.driving-workspace .panel-page-link,.driving-workspace .map-track-info,.driving-workspace .map-mission-info,.driving-workspace .map-footer,.driving-workspace .vector-info { display:none; }
 .driving-workspace .video-stage,.driving-workspace .map-stage { position:absolute; inset:0; width:100%; height:100%; min-height:0; max-height:none; aspect-ratio:auto; border:0; border-radius:0; }
 .driving-workspace #boatVideo { width:100%; height:100%; max-height:none; object-fit:contain; }
 .driving-workspace #map { min-height:0; height:100%; }

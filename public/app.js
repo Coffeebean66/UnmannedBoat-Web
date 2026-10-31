@@ -25,7 +25,7 @@
   const state={latest:{},history:[],chartMode:'speed',lastReceived:null,lastUpdateAt:null,forwardDelayMs:null,
     uplinkDelayMs:null,uplinkRttMs:null,uplinkUncertaintyMs:null,deviceId:null,
     historical:null,historyEnd:null,historyMessage:'选择无人船后自动载入记录',trackDisplayEnabled:true,liveTrackPoints:[]};
-  let map,marker,mapVectors,trackRevision=-1,lastLocation,hadFix=false,viewResizeFrame;
+  let map,marker,mapVectors,mapMission,trackRevision=-1,lastLocation,hadFix=false,viewResizeFrame;
   let autoSelectInFlight=null,autoSelectionSuppressed=false,historyRequest=0,historyController=null;
   let chartPalette;
   let compassVisible=true;
@@ -579,7 +579,7 @@
   on('cloudLogout',()=>cloud.logout());
   cloud.initialize().catch(()=>{cloud.message='无法读取云端配置，请检查服务器连接';renderCloud();});
   set('supportNotice','无人船通过 MQTT 向服务器上报，浏览器通过同源 HTTP/SSE 接收实时数据。船→云延迟在船端校时完成后显示；合计为船→云估计值与云→网页转发耗时之和，不含传感器采样或画面绘制。旧固件或校时失效时显示 --。远程访问建议使用 HTTPS；地图底图需要联网。');
-  readChartPalette();setupMap();mapVectors=new MapVelocityView(map);render();
+  readChartPalette();setupMap();mapVectors=new MapVelocityView(map);mapMission=new MapMissionView(map);render();
   function refreshWorkspace() {
     videoView.setVisible(['video','driving'].includes(window.BoatWorkspace?.current)&&!document.hidden);
     videoRecording.setVisible(window.BoatWorkspace?.current==='video'&&!document.hidden);
@@ -604,11 +604,11 @@
     if(document.hidden){cancelHistory();cloud.suspend();}else{cloud.resume();if(cloud.selectedId&&cloud.wanted)hydrateHistory(cloud.selectedId,cloud.generation);}
     if(!document.hidden)render();
   });
-  window.addEventListener('pagehide',()=>{driver.destroy();cancelHistory();cancelAnimationFrame(viewResizeFrame);clearInterval(timer);clearInterval(cloudTimer);videoView.destroy();videoRecording.destroy();viewer.stop();compass.destroy?.();mapSettings.destroy();fleetMapView.destroy();fleet.destroy();fleetView.destroy();link.disconnect();});
+  window.addEventListener('pagehide',()=>{driver.destroy();mapMission.destroy();cancelHistory();cancelAnimationFrame(viewResizeFrame);clearInterval(timer);clearInterval(cloudTimer);videoView.destroy();videoRecording.destroy();viewer.stop();compass.destroy?.();mapSettings.destroy();fleetMapView.destroy();fleet.destroy();fleetView.destroy();link.disconnect();});
   window.addEventListener('pageshow',event=>{if(event.persisted)location.reload();});
   window.addEventListener('resize',()=>render());
   window.addEventListener('boat-theme-change',()=>{readChartPalette();map?.setTheme(document.documentElement.dataset.theme);fleetMapView.setTheme(document.documentElement.dataset.theme);render();});
   // 提供浏览器控制台诊断入口，界面不显示原始字节流。
-  window.boatMonitor={link,params,viewer,horizon,compass,driver,track,map,mapVectors,mapSettings,mqttDevices,fleet,fleetView,fleetMapView,videoView,videoRecording,selectBoat,openBoatSettings,openBoatVideo,
+  window.boatMonitor={link,params,viewer,horizon,compass,driver,track,map,mapVectors,mapMission,mapSettings,mqttDevices,fleet,fleetView,fleetMapView,videoView,videoRecording,selectBoat,openBoatSettings,openBoatVideo,
     historyState:()=>({deviceId:cloud.selectedId,recordedAt:state.historical?.receivedAt||null,points:track.pointCount,chartSamples:state.history.length,message:state.historyMessage})};
 })();

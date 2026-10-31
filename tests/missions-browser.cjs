@@ -53,7 +53,41 @@ async function main(){
     assert.equal(await evaluate('document.getElementById("missionLoopEnabled").checked&&document.getElementById("missionLoopCount").value==="2"'),true,'Loading a route restores its loop settings');
     await evaluate('window.scrollTo(0,0)');await shot('missions-desktop-dark');
     await evaluate('document.getElementById("missionGoto").click()');await until('BoatMissions.run()?.status==="completed"');assert.equal(f.mission.snapshot('boat-01').stopConfirmed,true);
-    await evaluate('document.getElementById("missionStart").click()');await until('BoatMissions.run()?.status==="running"');const before=f.commands().length;
+    await evaluate('document.getElementById("missionStart").click()');await until('BoatMissions.run()?.status==="running"');
+    await evaluate('BoatWorkspace.navigate("navigation",{focus:false});document.getElementById("mapFollow").checked=false');
+    await until('boatMonitor.mapMission.markers.length===3&&document.getElementById("mapMissionInfo").dataset.visible==="true"');
+    assert.equal(await evaluate('boatMonitor.map._lineOverlays.get("mission").lines.length'),2,'Navigation shows the active route and its loop return leg');
+    assert.deepEqual(await evaluate('boatMonitor.map._lineOverlays.get("mission").lines[0].points'),savedRoute.points);
+    await evaluate('BoatMissions.load("")');
+    assert.equal(await evaluate('BoatMissions.route.points.length'),0);
+    assert.equal(await evaluate('boatMonitor.mapMission.markers.length'),3,'Editing another route never replaces the currently running route overlay');
+    await evaluate('BoatMissions.load('+JSON.stringify(routeId)+');document.getElementById("mapMissionToggle").click()');
+    assert.equal(await evaluate('boatMonitor.mapMission.markers.length===0&&!boatMonitor.map._lineOverlays.has("mission")'),true);
+    assert.equal(f.mission.active('boat-01'),true,'Hiding the route never stops the mission');
+    await send('Page.reload');
+    await until('window.boatMonitor?.mapMission&&window.BoatMissions?.run()?.status==="running"&&BoatMissions.routes.length>0&&boatMonitor.map.ready');
+    assert.equal(await evaluate('BoatWorkspace.current'), 'navigation');
+    assert.equal(await evaluate('boatMonitor.mapMission.visible'),false,'Refresh preserves the hidden preference');
+    assert.equal(await evaluate('boatMonitor.mapMission.markers.length'),0);
+    await evaluate('document.getElementById("mapMissionToggle").click();document.getElementById("mapFollow").checked=false');
+    assert.equal(await evaluate('boatMonitor.mapMission.markers.length'),3);
+    await evaluate('boatMonitor.map.switchMode("satellite")');
+    assert.equal(await evaluate('boatMonitor.mapMission.markers.length'),3,'Satellite switching restores route markers');
+    assert.deepEqual(await evaluate('boatMonitor.map._lineOverlays.get("mission").lines[0].points'),savedRoute.points);
+    await evaluate('boatMonitor.map.switchProvider("osm")');
+    f.feed('boat-02');
+    await evaluate('boatMonitor.selectBoat("boat-02",false)');await until('BoatMissions.deviceId==="boat-02"');
+    assert.equal(await evaluate('boatMonitor.mapMission.markers.length'),0,'Another vessel never inherits the original mission route');
+    assert.equal(f.mission.active('boat-01'),true);
+    await evaluate('boatMonitor.selectBoat("boat-01",false)');await until('boatMonitor.mapMission.markers.length===3');
+    for(const [width,height]of [[1440,1100],[375,812],[320,812]]){
+      await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
+      await evaluate('boatMonitor.map.fitLocations(BoatMissions.routes.find(r=>r.id===BoatMissions.run().routeId).points,{maxZoom:18,padding:[35,35]});document.getElementById("navigation").scrollIntoView({block:"start",behavior:"instant"})');await wait(150);
+      assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth+1'),true,'Navigation route controls fit '+width);
+      await shot('navigation-mission-'+width+'-dark');
+    }
+    await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
+    const before=f.commands().length;
     await send('Page.navigate',{url:'about:blank'});await wait(1100);assert.equal(f.mission.active('boat-01'),true,'Task runs without any browser page');assert.ok(f.commands().length>before+5,'Server calculates and publishes navigation after the page is closed');
     await send('Page.navigate',{url:base+'/#missions'});await until('window.BoatMissions?.run()?.status==="running"');assert.equal(await evaluate('document.getElementById("missionActiveBar").hidden'),false);
     await evaluate('BoatAuth.logout()');
@@ -61,6 +95,7 @@ async function main(){
     await evaluate('BoatAuth.login("observer","browser-guest-test-only")');await until('BoatAuth.user?.role==="guest"');
     await evaluate('BoatMissions.poll(true)');
     assert.equal(await evaluate('BoatMissions.routes.length===0&&BoatMissions.runs.length===0&&document.getElementById("missionActiveBar").children.length===0'),true,'Guest never retains task details or the global task entry');
+    assert.equal(await evaluate('boatMonitor.mapMission.markers.length===0&&!boatMonitor.map._lineOverlays.has("mission")&&document.getElementById("mapMissionToggle").hidden&&document.getElementById("mapMissionInfo").hidden'),true,'Guest cannot retain the private mission overlay');
     for(const view of ['missions','driving'])assert.equal(await evaluate('BoatWorkspace.navigate('+JSON.stringify(view)+')'),'fleet');
     assert.equal(f.mission.active('boat-01'),true,'Hiding the interface and switching accounts do not stop a server task');
     await evaluate('BoatAuth.logout()');await evaluate('BoatAuth.login("operator","browser-admin-test-only")');
@@ -69,6 +104,7 @@ async function main(){
     await evaluate('BoatWorkspace.navigate("driving",{focus:false})');assert.equal(await evaluate('document.getElementById("driverMissionStop").hidden'),false,'Driving station retains a mission stop entry');
     await evaluate('document.activeElement?.blur()');await send('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',windowsVirtualKeyCode:32});await send('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32});
     await until('!BoatMissions.run()?.active');assert.equal(f.mission.snapshot('boat-01').status,'stopped');
+    assert.equal(await evaluate('boatMonitor.mapMission.markers.length===0&&!boatMonitor.map._lineOverlays.has("mission")'),true,'Stopping removes the navigation task route');
     await evaluate('BoatWorkspace.navigate("missions",{focus:false});document.getElementById("missionStart").click()');
     await until('BoatMissions.run()?.status==="running"&&BoatMissions.run()?.targetIndex===1');
     assert.equal(await evaluate('document.getElementById("missionLoopEnabled").disabled&&document.getElementById("missionLoopCount").disabled'),true,'An executing route cannot change its loop count');
@@ -90,6 +126,7 @@ async function main(){
     assert.equal(f.mission.snapshot('boat-01').completedLoops,2);assert.equal(await evaluate('document.getElementById("missionPhase").textContent'),'已完成');
     assert.equal(await evaluate('document.getElementById("missionLoopProgress").title'),'已完成 2 圈');
     assert.equal(await evaluate('document.getElementById("missionActiveBar").hidden'),true,'Final return completes the task and removes the active task banner');
+    assert.equal(await evaluate('boatMonitor.mapMission.markers.length===0&&!boatMonitor.map._lineOverlays.has("mission")'),true,'Completion removes the navigation task route');
     await shot('missions-loops-completed');
     await evaluate('BoatWorkspace.navigate("missions",{focus:false});document.getElementById("themeToggle").click()');
     for(const [width,height]of [[1440,1100],[1024,900],[375,812],[320,812]]){

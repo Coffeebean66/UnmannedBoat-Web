@@ -168,6 +168,31 @@ async function until(predicate) {
   assert.fail('expected asynchronous phase was not reached');
 }
 
+test('任务路线与实际轨迹独立，底图切换只投影一次并清理旧图层', async () => {
+  const f = fixture(); await readyAmap(f);
+  const points = [{ latitude: 31.23, longitude: 121.47 }, { latitude: 31.231, longitude: 121.471 }];
+  f.view.setTrackLines([{ points, color: '#00ff00' }]);
+  f.view.setOverlayLines('mission', [{ points, color: '#467dff', dashed: true, behind: true }]);
+  const first = f.view._lineOverlays.get('mission').layers[0];
+  assert.equal(first.options.strokeStyle, 'dashed'); assert.equal(first.options.zIndex, 80);
+  const roundedPath = layer => plain(layer.options.path).map(p => p.map(value => Number(value.toFixed(6))));
+  assert.deepEqual(roundedPath(first), [[121.474, 31.232], [121.475, 31.233]]);
+  f.view.setTrackLines([]);
+  assert.equal(first.map, f.view.map, 'Clearing actual tracks retains mission lines');
+  f.view.setTrackLines([{ points, color: '#00ff00' }]);
+  await f.view.switchProvider('arcgis');
+  assert.equal(first.map, null, 'Dispose the old AMap route layer');
+  const restored = f.view._lineOverlays.get('mission').layers[0];
+  assert.deepEqual(plain(restored.path), points.map(p => [p.latitude, p.longitude]));
+  assert.equal(restored.options.dashArray, '8 6');
+  assert.deepEqual(plain(f.view.lastTrackLines[0].points), points);
+  await f.view.switchProvider('amap');
+  assert.deepEqual(roundedPath(f.view._lineOverlays.get('mission').layers[0]), [[121.474, 31.232], [121.475, 31.233]]);
+  f.view.setOverlayLines('mission', []);
+  assert.equal(f.view._lineOverlays.size, 0); assert.equal(f.view._trackLayers.length, 1);
+  f.view.destroy(); assert.equal(f.view._lineOverlays.size, 0);
+});
+
 async function readyAmap(f) {
   const pending = f.view.initialize();
   await until(() => f.scripts.length === 1);

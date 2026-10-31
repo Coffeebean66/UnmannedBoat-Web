@@ -41,6 +41,12 @@
     blank(){return {name:'新航线',speedMps:1,arrivalRadiusM:3,loopEnabled:false,loopCount:1,points:[]};}
     get admin(){return window.BoatAuth?.enabled===true&&BoatAuth.ready&&BoatAuth.user?.role==='admin';}
     run(){return this.runs.find(r=>r.deviceId===this.deviceId);}
+    navigationState(){
+      const run=this.admin?this.run():null;
+      // 始终采用服务器正在执行的航线，编辑器可同时载入其他草稿。
+      const route=run?.active?(run.route||this.routes.find(route=>route.id===run.routeId)):null;
+      return {allowed:this.admin,deviceId:this.deviceId,run:run?.active?run:null,route,stale:!!this.statusError};
+    }
     readForm(){
       this.route.name=$('missionName').value;this.route.speedMps=Number($('missionSpeed').value);this.route.arrivalRadiusM=Number($('missionRadius').value);
       this.route.loopEnabled=$('missionLoopEnabled').checked;this.route.loopCount=Number($('missionLoopCount').value);
@@ -178,6 +184,7 @@
       $('missionLoopProgress').title=run?'已完成 '+(run.completedLoops??0)+' 圈':'';
       $('missionPhase').textContent=run?.status==='running'?({route:'沿线航行',returning:'返回起点',goto:'前往起点'}[run.phase]||'沿线航行'):(labels[run?.status]||'--');
       this.renderRunningBar();
+      window.dispatchEvent(new CustomEvent('boat-mission-change',{detail:this.navigationState()}));
       if(this.storageError)this.notice(this.storageError,true);
       else if(BoatAuth.enabled===false)this.notice('航线任务需要在服务器启用平台账户，并使用管理员登录。');
       else if(!this.admin)this.notice('航线任务界面仅供管理员使用。');
