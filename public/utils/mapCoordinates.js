@@ -40,4 +40,17 @@ function wgs84ToGcj02(latitude, longitude) {
   };
 }
 
-module.exports = { wgs84ToGcj02 };
+// 高德点选坐标反算后保存为 WGS84；迭代只消除模型内误差，不代表底图定位精度。
+function gcj02ToWgs84(latitude, longitude) {
+  if (!wgs84ToGcj02(latitude, longitude)) return null;
+  const raw = {latitude, longitude};
+  for (let i = 0; i < 10; i++) {
+    const projected = wgs84ToGcj02(raw.latitude, raw.longitude);
+    if (!projected) return null;
+    const dy = projected.latitude - latitude, dx = projected.longitude - longitude;
+    raw.latitude -= dy; raw.longitude -= dx;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < 1e-9) break;
+  }
+  return raw;
+}
+module.exports = { wgs84ToGcj02, gcj02ToWgs84 };

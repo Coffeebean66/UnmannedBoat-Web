@@ -206,6 +206,18 @@ test('unconfigured AMap retains explicit OSM status and raw WGS84 throughout', a
   assert.equal(f.lines[0].removed, true);
 });
 
+test('map clicks expose WGS84 on both providers and native listeners are detached on destroy',async()=>{
+  for(const provider of ['osm','amap']){
+    const f=fixture(provider==='osm'?{enabled:false,configured:false}:undefined),pending=f.view.initialize();
+    if(provider==='amap'){await until(()=>f.scripts.length===1);f.finishSdk();}
+    await pending;const points=[];f.view.on('click',p=>points.push(plain(p)));const map=f.view.map;
+    if(provider==='osm')map.emit('click',{latlng:{lat:31,lng:121}});
+    else map.emit('click',{lnglat:{getLat:()=>31.002,getLng:()=>121.004}});
+    assert.ok(Math.abs(points[0].latitude-31)<1e-8);assert.ok(Math.abs(points[0].longitude-121)<1e-8);
+    f.view.destroy();map.emit('click',{latlng:{lat:32,lng:122},lnglat:{lat:32.002,lng:122.004}});assert.equal(points.length,1);
+  }
+});
+
 test('official SDK loads only once after security code and initialization stays north-up 2D', async () => {
   const f = fixture();
   const first = f.view.initialize();

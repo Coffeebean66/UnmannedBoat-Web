@@ -10,7 +10,8 @@
     propulsion: { title:'推进系统', english:'PROPULSION SYSTEM', description:'监测双推进器转速、电压、电流和输出状态。' },
     diagnostics: { title:'通信诊断', english:'COMMUNICATION DIAGNOSTICS', description:'检查通信链路、有效帧、CRC 与数据接收情况。' },
     video: { title:'视频监控', english:'ONBOARD VIDEO', description:'查看当前无人船的船载摄像头画面，独立控制视频连接与播放。' },
-    driving: { title:'驾驶操控', english:'PILOT STATION', description:'集中查看图传、地图与航行仪表；管理员启用操控后使用键盘驾驶。' }
+    driving: { title:'驾驶操控', english:'PILOT STATION', description:'集中查看图传、地图与航行仪表；管理员启用操控后使用键盘驾驶。' },
+    missions: { title:'航线任务', english:'MISSION PLANNER', description:'在地图规划航点并保存到服务器，按船只独立执行航线。' }
   };
   const panels = new Map([...document.querySelectorAll('[data-workspace-view]')].map(panel => [panel.dataset.workspaceView,panel]));
   if (!panels.has('overview')) return;

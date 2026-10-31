@@ -48,13 +48,14 @@ async function fixture(t, options = {}) {
   return { server, call, login, calls, advance: ms => time += ms };
 }
 const input = (values = {}) => ({ username: 'new-boat', password: 'NewPassword!123', revision, ...values });
-// 等待两个 HTTP 入口都已收到请求，再放行模拟组件；不依赖延时碰巧制造并发。
+// 等待两个请求走完当前轮的异步路由派发，再放行模拟组件。
+// request 事件本身早于多层 await 的延续，不能在该事件的微任务里提前结束共享读取。
 function collectionReadsArrive(server, count = 2) {
   return new Promise(resolve => {
     let received = 0;
     const observe = req => {
       if (req.url === '/api/mqtt/devices' && req.method === 'GET' && ++received === count) {
-        server.removeListener('request', observe); resolve();
+        server.removeListener('request', observe); setImmediate(resolve);
       }
     };
     server.on('request', observe);

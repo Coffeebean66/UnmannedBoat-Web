@@ -266,6 +266,11 @@
       });
       this._bindMap('dragstart', event => this._emit('dragstart', event));
       this._bindMap('resize', event => this._emit('resize', event));
+      this._bindMap('click', event => {
+        const p=event.lnglat;
+        const location=this.unproject({latitude:p?.getLat?.()??p?.lat,longitude:p?.getLng?.()??p?.lng});
+        if(location)this._emit('click',location);
+      });
       const currentMap = this.map;
       // SDK 下载成功、构造函数返回都不代表底图已绘制；必须收到真实 complete。
       return new Promise((resolve, reject) => {
@@ -320,6 +325,7 @@
       this.map = scope.L.map(this.container, { zoomControl: true }).setView([31.23, 121.47], 5);
       this._bindMap('dragstart', event => this._emit('dragstart', event));
       this._bindMap('resize', event => this._emit('resize', event));
+      this._bindMap('click', event => {const location=fix(event.latlng);if(location)this._emit('click',location);});
       const currentMap = this.map;
       this._tiles = scope.L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>'
@@ -340,6 +346,12 @@
       const convert = scope.BoatModules?.mapCoordinates?.wgs84ToGcj02;
       if (typeof convert !== 'function') throw new Error('WGS84/GCJ-02 坐标转换组件未加载');
       return convert(raw.latitude, raw.longitude);
+    }
+
+    unproject(value) {
+      const point=fix(value);
+      if(!point||this.provider!=='amap')return point;
+      return scope.BoatModules.mapCoordinates.gcj02ToWgs84(point.latitude,point.longitude);
     }
 
     createMarker(value, options = {}) {
@@ -365,14 +377,14 @@
             const offset = scope.AMap.Pixel ? new scope.AMap.Pixel(x, y) : { x, y };
             native = new scope.AMap.Marker({
               position: [point.longitude, point.latitude], content: element, offset, anchor: 'top-left',
-              zIndex: 120 + (options.zIndexOffset || 0), clickable: interactive, bubble: true, title: options.title || ''
+              zIndex: 120 + (options.zIndexOffset || 0), clickable: interactive, bubble: options.bubble !== false, title: options.title || ''
             });
             this.native = native;
             native.setMap(view.map);
           } else {
             native = scope.L.marker([point.latitude, point.longitude], {
               icon: scope.L.divIcon({ className: options.className || '', html: element.innerHTML, iconSize: size, iconAnchor: anchor }),
-              interactive, keyboard: interactive, title: options.title || '', alt: options.ariaLabel || options.title || '',
+              interactive, keyboard: interactive, bubblingMouseEvents:options.bubble!==false, title: options.title || '', alt: options.ariaLabel || options.title || '',
               zIndexOffset: options.zIndexOffset || 0
             });
             this.native = native;

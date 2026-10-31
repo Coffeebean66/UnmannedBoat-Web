@@ -1,5 +1,8 @@
 /deployments/
 /.test-output/
+/.local-state/
+missions.json
+.missions-*.tmp
 *.log
 *.pid
 accounts.json

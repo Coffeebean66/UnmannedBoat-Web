@@ -1,6 +1,6 @@
 {
   "name": "unmanned-boat-monitor-web",
-  "version": "1.36.0",
+  "version": "1.37.0",
   "private": true,
   "engines": {
     "node": ">=18"
@@ -23,6 +23,7 @@
     "test:recording:native": "node tests/video-recording-native.cjs",
     "test:firmware:browser": "node tests/firmware-browser.cjs",
     "test:compass:browser": "node tests/compass-browser.cjs",
-    "test:driving:browser": "node tests/driver-browser.cjs"
+    "test:driving:browser": "node tests/driver-browser.cjs",
+    "test:missions:browser": "node tests/missions-browser.cjs"
   }
 }

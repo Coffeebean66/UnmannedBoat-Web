@@ -1,4 +1,5 @@
-/* 每船独占驾驶租约：浏览器新输入才会发给船，禁止服务器自动续发上一次非零推力。 */
+/* 每船独占驾驶租约：手动输入来自浏览器，任务输入由服务器基于实时定位重新计算。
+ * 两者均须持续提交新序号；本服务绝不自动续发上一次非零推力。 */
 'use strict';
 const crypto=require('node:crypto');
 const P=require('./control-protocol');
@@ -25,7 +26,8 @@ class ControlService {
     const ready=!!(available&&cap&&cap.state!==1&&!job&&!this.bridge.firmwareLocks?.has(id)&&!this.bridge.pendingParameters?.has(id));
     const state=cap?.state??null,status=job?.status||(active?'active':state===2?'hold':available&&cap?'idle':'unavailable');
     let message=this.closed||!this.bridge?.enabled||!this.bridge?.brokerConnected?'云端 MQTT 通道未就绪':!this.live(id)?'船端实时遥测未就绪或已超时':!this.bridge.controlSubscribed?'驾驶主题订阅未就绪，请检查 MQTT 驾驶主题权限及管理组件':!cap?'尚未收到有效的船端驾驶状态，请检查固件及 MQTT 驾驶主题权限':job?.status==='acquiring'?'等待单片机确认接管':job?.status==='stopping'?'正在停船并释放操控':active?(owned?'网页已接管，遥控器无效':'该船已由其他驾驶会话接管'):REASONS[cap?.reason??0];
-    return {deviceId:id,supported,ready,active,owned,state,status,reason:cap?.reason??null,message,mode:cap?.mode??0,
+    if(job?.source==='mission')message=job.status==='stopping'?'任务正在停船并释放控制':'服务器航线任务正在控制此船，请先停止任务';
+    return {deviceId:id,supported,ready,active,owned,state,status,source:job?.source||null,reason:cap?.reason??null,message,mode:cap?.mode??0,
       testSupported:!!cap&&Object.hasOwn(cap,'testMode'),testMode:cap?.testMode===true,
       sequence:cap?.sequence??0,clientSequence:owned?job.lastBrowserSequence:0,...(owned?{leaseId:job.leaseId}:{}),timeoutMs:500};
   }
@@ -53,22 +55,22 @@ class ControlService {
     if(value.leaseId===job.leaseId&&value.state===1&&value.sequence>=1&&job.status==='acquiring'){
       job.status='active';job.lastInputAt=this.now();job.resolve?.(this.snapshot(deviceId,job.owner,job.clientId));job.resolve=job.reject=null;return;
     }
-    if(value.state!==1&&value.leaseId===job.leaseId){this.drop(job,fault(409,REASONS[value.reason]||'船端已停止网页操控'));return;}
-    if(value.state===0&&job.status==='stopping'){this.drop(job);return;}
+    if(value.state!==1&&value.leaseId===job.leaseId){job.stopConfirmed=job.status==='stopping';this.drop(job,job.stopConfirmed?undefined:fault(409,REASONS[value.reason]||'船端已停止网页操控'));return;}
+    if(value.state===0&&job.status==='stopping'){job.stopConfirmed=true;this.drop(job);return;}
     if(value.state===1&&value.leaseId!==job.leaseId)this.drop(job,fault(409,'船端操控会话不匹配，已取消本机操控'));
   }
   assertClient(id,owner,clientId){if(typeof id!=='string'||!DEVICE.test(id)||!owner||!P.validToken(clientId))throw fault(400,'无人船或驾驶会话标识不正确');}
   assertReady(id){
     if(this.closed||!this.bridge?.enabled||!this.bridge?.brokerConnected||!this.bridge?.controlSubscribed||!this.live(id)||!this.cap(id))throw fault(503,'驾驶通道未就绪，请检查固件、实时遥测和 MQTT 主题权限');
   }
-  acquire(id,owner,clientId,input){
+  acquire(id,owner,clientId,input,{source='browser'}={}){
     this.assertClient(id,owner,clientId);P.controls(input);
     if(input.throttle!==0||input.turn!==0)throw fault(400,'接管时运动输入必须归零');
     this.assertReady(id);const cap=this.cap(id);
     if(input.testMode&&!Object.hasOwn(cap,'testMode'))throw fault(409,'当前船端未声明测试场景能力，请先更新单片机固件');
     if(this.jobs.has(id)||cap.state===1)throw fault(409,'这艘船已有驾驶会话，请先停止并释放操控');
     this.bridge.claimControl(id);
-    const job={id,owner,clientId,leaseId:crypto.randomBytes(8).toString('hex'),token:cap.token,sequence:0,lastBrowserSequence:0,lastInputAt:this.now(),startedAt:this.now(),status:'acquiring',input:{...input},resolve:null,reject:null};
+    const job={id,owner,clientId,source,leaseId:crypto.randomBytes(8).toString('hex'),token:cap.token,sequence:0,lastBrowserSequence:0,lastInputAt:this.now(),startedAt:this.now(),status:'acquiring',input:{...input},resolve:null,reject:null};
     this.jobs.set(id,job);
     const promise=new Promise((resolve,reject)=>{job.resolve=resolve;job.reject=reject;});
     this.send(job,'acquire',input).catch(()=>this.stopJob(job,'stop',fault(503,'接管指令发送失败，已取消操控')));
@@ -107,12 +109,14 @@ class ControlService {
   }
   stopJob(job,action='stop',error){
     if(this.jobs.get(job.id)!==job||job.status==='stopping')return;
+    job.lastError=error;
     job.status='stopping';job.stopAt=this.now();
     if(job.reject){job.reject(error||fault(409,'接管已取消，请重新启用'));job.resolve=job.reject=null;}
     this.send(job,action,{...job.input,throttle:0,turn:0}).catch(()=>{});
   }
   drop(job,error){
     if(this.jobs.get(job.id)!==job)return;
+    if(error)job.lastError=error;
     this.jobs.delete(job.id);this.bridge.releaseControl?.(job.id);
     if(job.reject)job.reject(error||fault(409,'网页操控已停止'));job.resolve=job.reject=null;
   }

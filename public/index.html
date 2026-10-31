@@ -25,6 +25,7 @@
   <link rel="stylesheet" href="video-recording.css">
   <link rel="stylesheet" href="firmware.css">
   <link rel="stylesheet" href="driver-control.css">
+  <link rel="stylesheet" href="mission-panel.css">
   <script defer src="vendor/leaflet/leaflet.js"></script>
   <script defer src="vendor/hls/hls.min.js"></script>
   <script defer src="vendor/mpegts/mpegts.js"></script>
@@ -51,6 +52,7 @@
   <script defer src="video-recording.js"></script>
   <script defer src="firmware-panel.js"></script>
   <script defer src="driver-control.js"></script>
+  <script defer src="mission-panel.js"></script>
   <script defer src="app.js"></script>
   <script defer src="update-panel.js"></script>
 </head>
@@ -84,6 +86,7 @@
           <a href="#diagnostics"><span data-icon="activity"></span><span>通信诊断</span><span class="nav-index">07</span></a>
           <a href="#video"><span data-icon="video"></span><span>视频监控</span><span class="nav-index">08</span></a>
           <a href="#driving"><span data-icon="monitor"></span><span>驾驶操控</span><span class="nav-index">09</span></a>
+          <a href="#missions"><span data-icon="map"></span><span>航线任务</span><span class="nav-index">10</span></a>
           <button id="settingsToggle" type="button" class="nav-parameter-button" aria-haspopup="dialog" aria-controls="settingsDialog" hidden><span data-icon="sliders"></span><span>调参设置</span></button>
           <button id="firmwareToggle" type="button" class="nav-parameter-button" aria-haspopup="dialog" aria-controls="firmwareDialog" hidden><span data-icon="download"></span><span>固件升级</span></button>
         </div>
@@ -99,11 +102,11 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.36.0</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.37.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
-    <nav class="mobile-nav" aria-label="快捷导航"><a href="#fleet">船队</a><a href="#overview">单船</a><a href="#navigation">轨迹</a><a href="#attitude">姿态</a><a href="#analysis">曲线</a><a href="#propulsion">电机</a><a href="#diagnostics">诊断</a><a href="#video">视频</a><a href="#driving">驾驶</a></nav>
+    <nav class="mobile-nav" aria-label="快捷导航"><a href="#fleet">船队</a><a href="#overview">单船</a><a href="#navigation">轨迹</a><a href="#attitude">姿态</a><a href="#analysis">曲线</a><a href="#propulsion">电机</a><a href="#diagnostics">诊断</a><a href="#video">视频</a><a href="#driving">驾驶</a><a href="#missions">任务</a></nav>
     <main class="page" id="mainContent">
       <nav class="workspace-breadcrumb" aria-label="当前位置"><a href="#fleet" data-view-link><span data-icon="dashboard"></span>工作台</a><span aria-hidden="true">/</span><span id="workspaceBreadcrumbBoat" hidden></span><span id="workspaceBreadcrumbView" aria-current="page">船队总览</span></nav>
       <section class="hero">
@@ -123,6 +126,40 @@
         <p id="sourceHint" class="muted">管理员可对支持云端调参的无人船远程设置参数；访客可查看实时监测。</p>
       </section>
       <p id="connectionText" class="workspace-connection" role="status">正在检查 MQTT 服务器配置…</p>
+      <section id="missionActiveBar" class="mission-active-bar" aria-label="服务器执行中的航线任务" hidden></section>
+      <section id="view-missions" class="workspace-view" data-workspace-view="missions" aria-labelledby="viewTitle" hidden>
+        <div class="mission-toolbar"><div><strong id="missionBoatName">请选择无人船</strong><p class="muted">服务器独立执行 · 关闭网页后继续 · 重启后手动开始</p></div><button id="missionRefresh" type="button" class="small-button">刷新任务</button></div>
+        <div class="mission-layout">
+          <section class="mission-map-card" aria-label="航线地图">
+            <div class="mission-map-tools"><button id="missionEdit" type="button" class="small-button" aria-pressed="false">开启点选航点</button><button id="missionFit" type="button" class="small-button">显示整条航线</button><button id="missionCenter" type="button" class="small-button">定位船只</button><button id="missionProvider" type="button" class="small-button">切换地图</button></div>
+            <div id="missionMap" role="application" aria-label="点击地图依次添加开始点、中间点和结束点"></div>
+            <p id="missionMapStatus" class="mission-map-status" role="status">打开任务页后加载地图</p>
+            <div class="mission-map-legend"><span><i class="mission-start-dot"></i>开始点</span><span><i></i>中间点</span><span><i class="mission-end-dot"></i>结束点</span><span>WGS84 · 依次直线连接</span></div>
+          </section>
+          <div class="mission-sidebar">
+            <section class="mission-card" aria-labelledby="missionRouteTitle">
+              <div class="mission-card-heading"><h2 id="missionRouteTitle">航线库</h2><button id="missionNew" type="button" class="small-button">新建航线</button></div>
+              <label class="mission-field">已保存航线<select id="missionRouteSelect"><option value="">新航线</option></select></label>
+              <label class="mission-field">任务名称<input id="missionName" type="text" maxlength="80" value="新航线" autocomplete="off"></label>
+              <div class="mission-fields"><label class="mission-field">航速 · m/s<input id="missionSpeed" type="number" min="0.1" max="20" step="0.1" value="1.0"></label><label class="mission-field">到点半径 · m<input id="missionRadius" type="number" min="1" max="50" step="0.5" value="3"></label></div>
+              <p id="missionRouteSummary" class="muted">0 个航点 · 尚未保存</p>
+              <div class="mission-actions"><button id="missionSave" type="button" class="primary">保存到服务器</button><button id="missionDelete" type="button" class="ghost">删除航线</button></div>
+            </section>
+            <section class="mission-card" aria-labelledby="missionRunTitle">
+              <div class="mission-card-heading"><h2 id="missionRunTitle">执行任务</h2><span id="missionRunState" class="mission-state">待命</span></div>
+              <p id="missionRunMessage" role="status">先保存航线，再前往开始点。</p>
+              <dl class="mission-progress"><div><dt>当前航点</dt><dd id="missionWaypointProgress">--</dd></div><div><dt>剩余距离</dt><dd id="missionDistance">--</dd></div><div><dt>目标航向</dt><dd id="missionHeading">--</dd></div><div><dt>目标船速</dt><dd id="missionCommandSpeed">--</dd></div></dl>
+              <div class="mission-actions"><button id="missionGoto" type="button">前往任务开始点</button><button id="missionStart" type="button" class="primary">开始任务</button><button id="missionStop" type="button" class="mission-danger">停止任务</button></div>
+              <p class="mission-note">到达开始点后停止，需点击“开始任务”沿线航行。定位、船速、航向失效或断网时停止；任务不自动避障。</p>
+            </section>
+          </div>
+        </div>
+        <section class="mission-card mission-waypoint-card" aria-labelledby="missionPointsTitle">
+          <div class="mission-card-heading"><div><h2 id="missionPointsTitle">航点序列</h2><p class="muted">首点为开始点，末点为结束点；经纬度可手动校准。</p></div><div class="mission-actions"><button id="missionAddPosition" type="button" class="small-button">加入当前船位</button><button id="missionAddCenter" type="button" class="small-button">加入地图中心</button><button id="missionClear" type="button" class="small-button">清空航点</button></div></div>
+          <p id="missionPointsEmpty" class="mission-empty">开启地图点选，依次添加开始点、中间点和结束点。</p><ol id="missionPoints" class="mission-points" aria-label="航点列表"></ol>
+        </section>
+        <p id="missionNotice" class="mission-notice" role="status">请登录并选择需要规划任务的无人船。</p>
+      </section>
       <section id="historyPanel" class="cloud-history-panel" aria-label="服务器自动记录" hidden>
         <div class="cloud-history-heading"><strong id="historyRecordingState" role="status">服务器持续采集</strong><span id="historyStatus" role="status">选择无人船后自动载入记录</span></div>
         <p>服务器在无人船在线时自动记录，无需保持网页打开。轨迹开始、停止与清除只影响本页显示。</p>
@@ -279,6 +316,7 @@
         <article class="card driver-console" aria-label="驾驶操控控制台">
           <div class="driver-console-heading"><div><span class="driver-eyebrow">PILOT STATION</span><h2>驾驶操控</h2></div><span id="driverState" class="driver-state" data-state="idle">监测待机</span><div class="driver-actions"><button id="driverTestMode" type="button" class="driver-test-mode" aria-pressed="false" title="真实 PWM 开环，跳过电调反馈和停稳检查；先停止操控才能切换" hidden disabled>测试场景：关</button><button id="driverEnable" type="button" class="primary" disabled>启用操控</button><button id="driverRelease" type="button" class="ghost" disabled>停船并退出操控</button><button id="driverEmergency" type="button" class="driver-emergency" disabled><span data-icon="power"></span>急停 · SPACE</button></div></div>
           <p id="driverNotice" class="driver-notice" role="status" aria-live="polite">选择在线无人船，由管理员启用操控后使用键盘驾驶。</p>
+          <button id="driverMissionStop" type="button" class="mission-danger" hidden>停止服务器航线任务 · SPACE</button>
           <p id="driverTestNotice" class="driver-test-notice" role="status" hidden>测试场景 · 真实 PWM 输出 · 电调反馈 / RTK / IMU 可离线。<span id="driverTestAck">尚未接管</span></p>
           <div class="driver-inputs"><label>控制模式<select id="driverMode"><option value="0">PWM 油门</option><option value="1" selected>船速闭环</option><option value="2">航向闭环</option></select></label><label class="driver-limit">运动幅度 <output id="driverLimitValue" for="driverLimit">20%</output><input id="driverLimit" type="range" min="5" max="100" step="5" value="20" aria-label="键盘运动幅度百分比"></label><label class="driver-heading">目标航向 · 真北<input id="driverHeading" type="number" min="0" max="359.99" step="1" value="0" inputmode="decimal"><span>°</span></label><button id="driverHoldHeading" type="button" class="small-button">取当前航向</button><div class="driver-keyboard" aria-label="键盘操作说明"><div class="driver-key-row"><kbd data-driver-key="KeyW">W / ↑</kbd></div><div class="driver-key-row"><kbd data-driver-key="KeyA">A / ←</kbd><kbd data-driver-key="KeyS">S / ↓</kbd><kbd data-driver-key="KeyD">D / →</kbd></div><span>按住运动，松开归零</span></div></div>
           <details class="driver-controls-help"><summary>按键与保护说明 <i data-icon="help"></i></summary><p class="driver-help">W/S 前进后退，A/D 左右转向；启用航向模式时以当前船头为目标；A/D 调整目标航向，松键后仍可能自动转向，需急停或退出操控才能撤去全部输出。空格急停。切换模式先归零，失焦、离开驾驶页或断连会停船并退出操控，重新启用后才可继续。</p></details>

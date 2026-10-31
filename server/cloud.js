@@ -135,6 +135,8 @@ class CloudBridge extends EventEmitter {
   fleetSnapshot(device){const snapshot=this.snapshot(device);return {...snapshot,summary:snapshot.online?fleetSummary(device.fleetTelemetry,this.now()):null};}
   fleetList(){return {brokerConnected:this.brokerConnected,devices:[...this.devices.values()].map(device=>this.fleetSnapshot(device))};}
   get(id){const device=this.devices.get(id);return device?this.snapshot(device):null;}
+  // 任务只读取当前非 retained 遥测；历史记录不可用于驱动船只。
+  navigationSnapshot(id){const data=this.devices.get(id)?.fleetTelemetry;return data?{receivedAt:data.receivedAt,velocity:data.frames[1],boat:data.frames[2]}:null;}
   state(id){return {brokerConnected:this.brokerConnected,device:this.get(id)};}
   obtain(id){
     if(this.devices.has(id))return this.devices.get(id);
