@@ -56,7 +56,7 @@ function createControlApi({bridge,accounts,service,serviceOptions={}}={}){
         }else if(['input','stop','release'].includes(action)){
           json(res,202,manager.command(deviceId,owner.key,clientId,leaseId,sequence,action,controls));
         }else throw fault(400,'驾驶操作不正确');
-      }catch(error){req.resume();json(res,error.status||503,{error:error.status?error.message:'驾驶服务不可用，已取消操控'});}
+      }catch(error){req.resume();json(res,error.status||503,{error:error.status?error.message:'驾驶服务不可用，已取消操控',...(error.code==='STALE_CONTROL_SEQUENCE'?{code:error.code}:{})});}
       return true;
     },
     close(){if(closed)return;closed=true;unsubscribe();manager.close();}

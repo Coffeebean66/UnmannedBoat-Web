@@ -3,7 +3,7 @@
 const {createFixtureServer,fixtureScript}=require('./mqtt-browser-fixture.cjs');
 const fs=require('node:fs');
 function createDriverFixture(options={}) {
-  const server=createFixtureServer(options),fixture={calls:[],active:false,hold:false,owner:'',leaseId:'aabbccddeeff0011',leaseCounter:0,ackDelay:150,failInputs:false,testSupported:true,testMode:false};
+  const server=createFixtureServer(options),fixture={calls:[],active:false,hold:false,owner:'',leaseId:'aabbccddeeff0011',leaseCounter:0,ackDelay:150,failInputs:false,testSupported:true,testMode:false,lastBrowserSequence:0,inputResponseDelay:0,inputProcessingDelay:0};
   const originalList=server.boatCloud.list,originalState=server.boatCloud.state,updatedAt=Date.now();
   const descriptor=()=>({version:1,enabled:true,url:'http://127.0.0.1:'+server.address()?.port+'/__test/driver-video.mp4',format:'native',updatedAt});
   if(options.mediaPath){
@@ -11,7 +11,7 @@ function createDriverFixture(options={}) {
     server.boatCloud.state=()=>{const value=originalState();return {...value,device:{...value.device,video:descriptor()}};};
   }
   const original=server.listeners('request')[0];server.removeListener('request',original);
-  function snapshot(clientId){const owned=fixture.active&&fixture.owner===clientId;return {supported:true,ready:!fixture.active,active:fixture.active,owned,testSupported:fixture.testSupported,testMode:fixture.active&&fixture.testMode,state:fixture.active?1:fixture.hold?2:0,status:fixture.active?'active':fixture.hold?'hold':'idle',reason:fixture.hold?2:0,mode:server.mqttFixture.overrides.mode??1,sequence:fixture.calls.length,clientSequence:fixture.calls.at(-1)?.sequence??0,...(owned?{leaseId:fixture.leaseId}:{}),message:fixture.active?'单片机已确认接管':'船端已就绪，可接管'};}
+  function snapshot(clientId){const owned=fixture.active&&fixture.owner===clientId;return {supported:true,ready:!fixture.active,active:fixture.active,owned,testSupported:fixture.testSupported,testMode:fixture.active&&fixture.testMode,state:fixture.active?1:fixture.hold?2:0,status:fixture.active?'active':fixture.hold?'hold':'idle',reason:fixture.hold?2:0,mode:server.mqttFixture.overrides.mode??1,sequence:fixture.lastBrowserSequence,clientSequence:fixture.lastBrowserSequence,...(owned?{leaseId:fixture.leaseId}:{}),message:fixture.active?'单片机已确认接管':'船端已就绪，可接管'};}
   server.on('request',(req,res)=>{
     const url=new URL(req.url,'http://localhost');
     if(url.pathname==='/__test/driver-video.mp4'&&options.mediaPath){
@@ -34,14 +34,25 @@ function createDriverFixture(options={}) {
       if(input.action==='acquire'){
         if(fixture.active)return json(409,{error:'已有驾驶员'});
         if(input.testMode&&(!fixture.testSupported||input.mode!==0))return json(409,{error:'测试场景不可用'});
-        const timer=setTimeout(()=>{if(res.destroyed)return;fixture.leaseId=(++fixture.leaseCounter).toString(16).padStart(16,'0');fixture.active=true;fixture.hold=false;fixture.testMode=!!input.testMode;fixture.owner=input.clientId;server.mqttFixture.overrides.mode=input.mode;json(200,snapshot(input.clientId));},fixture.ackDelay);
+        const timer=setTimeout(()=>{if(res.destroyed)return;fixture.leaseId=(++fixture.leaseCounter).toString(16).padStart(16,'0');fixture.lastBrowserSequence=0;fixture.active=true;fixture.hold=false;fixture.testMode=!!input.testMode;fixture.owner=input.clientId;server.mqttFixture.overrides.mode=input.mode;json(200,snapshot(input.clientId));},fixture.ackDelay);
         res.once('close',()=>clearTimeout(timer));return;
       }
       if(input.clientId!==fixture.owner||input.leaseId!==fixture.leaseId)return json(409,{error:'不是当前驾驶员'});
       if(input.action==='input'){
-        if(!!input.testMode!==fixture.testMode)return json(409,{error:'场景不匹配'});
-        if(fixture.failInputs){fixture.active=false;fixture.hold=true;return json(503,{error:'模拟链路中断'});}
-        server.mqttFixture.overrides.mode=input.mode;return json(202,{accepted:true,...snapshot(input.clientId)});
+        const apply=()=>{
+          if(!fixture.active||input.leaseId!==fixture.leaseId)return json(409,{error:'租约已失效'});
+          if(input.sequence<=fixture.lastBrowserSequence)return json(409,{error:'驾驶输入序号已过期，拒绝重放旧指令',code:'STALE_CONTROL_SEQUENCE'});
+          if(!!input.testMode!==fixture.testMode)return json(409,{error:'场景不匹配'});
+          if(fixture.failInputs){fixture.active=false;fixture.hold=true;return json(503,{error:'模拟链路中断'});}
+          fixture.lastBrowserSequence=input.sequence;
+          server.mqttFixture.overrides.mode=input.mode;
+          const value={accepted:true,...snapshot(input.clientId)};
+          if(fixture.inputResponseDelay)return setTimeout(()=>json(202,value),fixture.inputResponseDelay).unref();
+          return json(202,value);
+        };
+        const delay=typeof fixture.inputProcessingDelay==='function'?fixture.inputProcessingDelay(input):fixture.inputProcessingDelay;
+        if(delay)return setTimeout(apply,delay).unref();
+        return apply();
       }
       fixture.active=false;fixture.hold=true;return json(200,snapshot(input.clientId));
     });

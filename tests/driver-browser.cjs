@@ -13,7 +13,7 @@ async function main(){
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const profile=fs.mkdtempSync(path.join(output,'chrome-driver-')),errors=[];
   const browser=spawn(process.env.CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':'google-chrome'),['--headless','--no-first-run','--no-default-browser-check','--disable-background-networking','--use-angle=swiftshader','--enable-unsafe-swiftshader','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{windowsHide:true,stdio:'ignore'});
-  browser.on('error',error=>errors.push(error.message));let socket;
+  browser.on('error',error=>errors.push(error.message));let socket,diagnostics;
   try{
     const portFile=path.join(profile,'DevToolsActivePort');
     for(let n=0;n<100&&!fs.existsSync(portFile)&&!errors.length;n++)await wait(100);
@@ -25,6 +25,7 @@ async function main(){
     socket.onmessage=event=>{const value=JSON.parse(event.data);if(value.method==='Runtime.exceptionThrown')errors.push(value.params.exceptionDetails.exception?.description||value.params.exceptionDetails.text);const item=pending.get(value.id);if(item){pending.delete(value.id);clearTimeout(item.timer);value.error?item.reject(Error(value.error.message)):item.resolve(value.result);}};
     const send=(method,params={})=>new Promise((resolve,reject)=>{const id=++serial,timer=setTimeout(()=>{pending.delete(id);reject(Error('CDP timeout '+method));},15000);pending.set(id,{resolve,reject,timer});socket.send(JSON.stringify({id,method,params}));});
     const evaluate=async expression=>{const value=await send('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true,userGesture:true});if(value.exceptionDetails)throw Error(value.exceptionDetails.exception?.description||value.exceptionDetails.text);return value.result.value;};
+    diagnostics=()=>evaluate('window.boatMonitor?.driver&&({state:boatMonitor.driver.state(),message:boatMonitor.driver.message,stopReason:boatMonitor.driver.stopReason,context:boatMonitor.driver.context,responseAge:performance.now()-boatMonitor.driver.lastInputResponseAt,requests:boatMonitor.driver.inputRequests.size,notice:document.getElementById("driverNotice").textContent})');
     const until=async expression=>{for(let n=0;n<120;n++){if(await evaluate(expression))return;await wait(50);}throw Error('Condition timed out: '+expression+'\n'+errors.join('\n'));};
     const untilCall=async test=>{for(let n=0;n<100;n++){if(server.driverFixture.calls.some(test))return;await wait(25);}throw Error('Expected control request missing: '+JSON.stringify({calls:server.driverFixture.calls.slice(-8),state:await evaluate('({active:boatMonitor.driver.active,testMode:boatMonitor.driver.testMode,keys:[...boatMonitor.driver.keys],notice:document.getElementById("driverNotice").textContent})')}));};
     const key=async(code,down=true)=>send('Input.dispatchKeyEvent',{type:down?'keyDown':'keyUp',code,key:({KeyW:'w',KeyA:'a',KeyS:'s',KeyD:'d',Space:' '})[code]||code,windowsVirtualKeyCode:({KeyW:87,KeyA:65,KeyS:83,KeyD:68,Space:32,ArrowUp:38,ArrowDown:40,ArrowLeft:37,ArrowRight:39})[code]});
@@ -73,12 +74,36 @@ async function main(){
     await evaluate('document.getElementById("driverTestMode").click()');
     assert.equal(await evaluate('boatMonitor.driver.testMode&&document.getElementById("driverMode").value==="0"&&document.getElementById("driverMode").disabled'),true,'Test scene explicitly chooses PWM even without heading');
     assert.match(await evaluate('document.getElementById("driverTestNotice").textContent'),/真实 PWM 输出/);
+    // 软件光栅截图可能暂停页面数秒，应在未接管时捕获，不能放宽驾驶失联保护。
+    await shot('driver-test-scene-desktop');
     await enable();assert.equal(await evaluate('document.getElementById("driverTestMode").disabled'),true,'Cannot toggle scenario during a lease');
     await key('KeyW');await untilCall(call=>server.driverFixture.calls.indexOf(call)>=testStart&&call.action==='input'&&call.testMode===true&&call.mode===0&&call.throttle===200);
     await key('KeyW',false);await key('KeyS');await untilCall(call=>server.driverFixture.calls.indexOf(call)>=testStart&&call.testMode===true&&call.throttle===-200);await key('KeyS',false);
     await key('KeyA');await untilCall(call=>server.driverFixture.calls.indexOf(call)>=testStart&&call.testMode===true&&call.turn===-200);await key('KeyA',false);
     assert.match(await evaluate('document.getElementById("driverTestAck").textContent'),/船端确认序号：\d+/);
-    await shot('driver-test-scene-desktop');
+    // 模拟响应慢、乱序及中断：心跳发包独立于返回速度，松键仍及时发送零输入。
+    server.driverFixture.inputResponseDelay=450;
+    const slowStart=server.driverFixture.calls.length;
+    await key('KeyW');await wait(1400);
+    const slowState=await evaluate('({active:boatMonitor.driver.active,testMode:boatMonitor.driver.testMode,message:boatMonitor.driver.message,remote:boatMonitor.driver.remote,age:performance.now()-boatMonitor.driver.lastInputResponseAt,requests:boatMonitor.driver.inputRequests.size,sequence:boatMonitor.driver.sequence,lastAcceptedSequence:boatMonitor.driver.lastAcceptedSequence})');
+    assert.equal(slowState.active&&slowState.testMode,true,'450 ms HTTP replies do not interrupt a healthy test lease: '+JSON.stringify({state:slowState,calls:server.driverFixture.calls.slice(-8)}));
+    assert.ok(server.driverFixture.calls.slice(slowStart).filter(call=>call.action==='input').length>=8,'Slow replies do not serialize all heartbeats');
+    assert.ok(await evaluate('boatMonitor.driver.inputRequests.size<=4'),'At most four motion requests can be in flight');
+    const zeroStart=server.driverFixture.calls.length;await key('KeyW',false);
+    await untilCall(call=>server.driverFixture.calls.indexOf(call)>=zeroStart&&call.action==='input'&&call.throttle===0);
+    server.driverFixture.inputResponseDelay=0;await wait(500);
+    const reorderSequence=server.driverFixture.lastBrowserSequence+1;
+    server.driverFixture.inputProcessingDelay=input=>input.sequence===reorderSequence?300:0;
+    await key('KeyW');await wait(650);await key('KeyW',false);
+    assert.equal(await evaluate('boatMonitor.driver.active'),true,'An older request rejected after a newer heartbeat does not cancel the lease');
+    server.driverFixture.inputProcessingDelay=0;
+    // 所有响应持续丢失仍会停船，迟到的 active 响应不能让会话自动复活。
+    server.driverFixture.inputResponseDelay=1000;
+    await until('!boatMonitor.driver.active&&!boatMonitor.driver.testMode');
+    assert.match(await evaluate('document.getElementById("driverNotice").textContent'),/持续无响应/);
+    server.driverFixture.inputResponseDelay=0;await wait(1100);
+    assert.equal(await evaluate('boatMonitor.driver.active'),false,'Late responses cannot rearm a timed-out test lease');
+    await enable();
     await key('Space');await until('!boatMonitor.driver.active&&!boatMonitor.driver.testMode');await key('Space',false);
     await wait(150);server.driverFixture.testSupported=false;
     await evaluate('boatMonitor.driver.lastPoll=0;boatMonitor.driver.poll()');await until('!boatMonitor.driver.remote?.testSupported');
@@ -117,7 +142,6 @@ async function main(){
           assert.equal(layers.mode,'1','Short-screen overlap check uses speed mode');
           assert.ok(layers.gap>=8,'Expanded '+type+' controls and instruments keep at least 8px separation at '+width+'x'+height+': '+JSON.stringify(layers));
           assert.ok(layers.consoleTop>=0&&layers.instrumentBottom<=height,'Short-screen driving overlays stay inside the viewport: '+JSON.stringify(layers));
-          await shot('driver-expanded-'+type+'-'+width+'x'+height+'-active');
         }
         if(width>=1440){
           const instruments=await evaluate('(()=>{function visible(selector){const node=document.querySelector(selector),r=node.getBoundingClientRect(),clipped=[];let complete=r.width>0&&r.height>0&&r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight;for(let parent=node.parentElement;parent;parent=parent.parentElement){const style=getComputedStyle(parent),p=parent.getBoundingClientRect(),x=/hidden|clip|auto|scroll/.test(style.overflowX)&&(r.left<p.left-2||r.right>p.right+2),y=/hidden|clip|auto|scroll/.test(style.overflowY)&&(r.top<p.top-2||r.bottom>p.bottom+2);if(x||y){complete=false;clipped.push({node:parent.id||parent.className,x,y,bounds:{left:p.left,top:p.top,right:p.right,bottom:p.bottom}});}if(style.position==="fixed")break;}return {selector,complete,bounds:{left:r.left,top:r.top,right:r.right,bottom:r.bottom},clipped};}return ["#imuHorizon svg","#boatCompass svg"].map(visible);})()');
@@ -164,7 +188,8 @@ async function main(){
     await go('driving');assert.equal(await evaluate('document.getElementById("driverEnable").hidden'),true,'Guest cannot enable control');
     const count=server.driverFixture.calls.filter(call=>call.action==='acquire').length;await evaluate('boatMonitor.driver.acquire()');assert.equal(server.driverFixture.calls.filter(call=>call.action==='acquire').length,count,'Guest never sends acquisition');
     assert.deepEqual(errors,[]);
-    console.log('PASS: real Chrome driving page; MCU ACK gating; WASD/arrows and alias release; zero input; heading initialization/adjustment; editing guard and global Space; explicit rearm; blur/page/boat/disconnect/failure release; admin/guest; shared map/model/compass/video; 320x812/375x667/1440x900/1920x900 layouts; viewport media, nonoverlapping mobile data, complete instruments, transparent data hit-through and real mouse emergency stop.');
-  }finally{socket?.close();browser.kill();server.closeAllConnections?.();await new Promise(resolve=>server.close(resolve));if(path.dirname(run)===output&&path.basename(run).startsWith('driver-state-'))fs.rmSync(run,{recursive:true,force:true});}
+    console.log('PASS: real Chrome driving page; MCU ACK gating; 450 ms replies with bounded concurrent heartbeats; out-of-order input rejection; sustained outage and no automatic rearm; WASD/arrows and alias release; zero input; heading initialization/adjustment; editing guard and global Space; explicit rearm; blur/page/boat/disconnect/failure release; admin/guest; shared map/model/compass/video; 320x812/375x667/1440x900/1920x900 layouts; viewport media, nonoverlapping mobile data, complete instruments, transparent data hit-through and real mouse emergency stop.');
+  }catch(error){if(diagnostics)console.error('Driver diagnostics:',JSON.stringify({browser:await diagnostics().catch(()=>null),calls:server.driverFixture.calls.slice(-12)}));throw error;}
+  finally{socket?.close();browser.kill();server.closeAllConnections?.();await new Promise(resolve=>server.close(resolve));if(path.dirname(run)===output&&path.basename(run).startsWith('driver-state-'))fs.rmSync(run,{recursive:true,force:true});}
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

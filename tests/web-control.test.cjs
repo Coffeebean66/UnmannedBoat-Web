@@ -160,6 +160,8 @@ test('acquire may await hardware ACK beyond the active input deadline, while dup
   f.publish(status({uptimeMs:2300}));assert.equal(f.manager.caps.get('boat-01').receivedAt,receivedAt);
   f.publish(status({uptimeMs:2299}));assert.equal(f.manager.caps.get('boat-01').receivedAt,receivedAt);
   f.ack(f.client.sent.find(command=>command.payload[28]===1),{uptimeMs:2400});assert.equal((await pending).active,true);
+  assert.equal(job.lastInputAt,f.now(),'The active input deadline starts at the MCU ACK, not the start of acquisition');
+  f.manager.refresh();assert.equal(job.status,'active','A slow but fresh acquisition ACK gets time for the first browser heartbeat');
 });
 
 test('an acquire ACK delayed longer than the firmware deadline never makes the browser active',async t=>{
@@ -175,7 +177,8 @@ test('control HTTP rejects guests, cross origins, extra fields, old browser sequ
   assert.equal((await f.post(admin,{rawPacket:'x'})).status,400);assert.equal((await f.post(admin,{throttle:1})).status,400);
   const count=f.client.sent.length;assert.equal((await f.post(admin,{mode:'1'})).status,400);assert.equal(f.client.sent.length,count);
   const pending=f.post(admin);await until(()=>f.manager.jobs.has('boat-01'));f.ack();const acquired=await pending;assert.equal(acquired.status,200,acquired.text);assert.equal(acquired.json.active,true);
-  const input={action:'input',leaseId:acquired.json.leaseId,sequence:1,throttle:500};assert.equal((await f.post(admin,input)).status,202);assert.equal((await f.post(admin,input)).status,409);
+  const input={action:'input',leaseId:acquired.json.leaseId,sequence:1,throttle:500};assert.equal((await f.post(admin,input)).status,202);
+  const stale=await f.post(admin,input);assert.equal(stale.status,409);assert.equal(stale.json.code,'STALE_CONTROL_SEQUENCE');
   assert.equal((await f.post(admin,{...input,sequence:2,leaseId:OTHER})).status,409);
   const other=await f.login(),view=await f.call('/api/cloud/control?deviceId=boat-01&clientId='+CLIENT,{cookie:other});assert.equal(view.status,200);assert.equal(view.json.owned,false);assert.equal(view.json.leaseId,undefined);
   assert.equal((await f.post(other,{...input,sequence:3})).status,409);

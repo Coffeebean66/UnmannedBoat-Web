@@ -51,7 +51,7 @@ class ControlService {
       this.stopJob(job,'stop',fault(409,'船端确认的测试场景不匹配，已取消操控'));return;
     }
     if(value.leaseId===job.leaseId&&value.state===1&&value.sequence>=1&&job.status==='acquiring'){
-      job.status='active';job.resolve?.(this.snapshot(deviceId,job.owner,job.clientId));job.resolve=job.reject=null;return;
+      job.status='active';job.lastInputAt=this.now();job.resolve?.(this.snapshot(deviceId,job.owner,job.clientId));job.resolve=job.reject=null;return;
     }
     if(value.state!==1&&value.leaseId===job.leaseId){this.drop(job,fault(409,REASONS[value.reason]||'船端已停止网页操控'));return;}
     if(value.state===0&&job.status==='stopping'){this.drop(job);return;}
@@ -78,7 +78,8 @@ class ControlService {
     this.assertClient(id,owner,clientId);P.controls(input);
     const job=this.jobs.get(id);
     if(!this.own(job,owner,clientId)||leaseId!==job.leaseId)throw fault(409,'操控租约已失效或属于其他浏览器');
-    if(!P.isU32(sequence)||sequence<=job.lastBrowserSequence)throw fault(409,'驾驶输入序号已过期，拒绝重放旧指令');
+    if(!P.isU32(sequence))throw fault(400,'驾驶输入序号不正确');
+    if(sequence<=job.lastBrowserSequence)throw Object.assign(fault(409,'驾驶输入序号已过期，拒绝重放旧指令'),{code:'STALE_CONTROL_SEQUENCE'});
     if(!['input','stop','release'].includes(action))throw fault(400,'驾驶操作不正确');
     if(action!=='input'&&(input.throttle||input.turn))throw fault(400,'停止或释放时运动输入必须归零');
     job.lastBrowserSequence=sequence;

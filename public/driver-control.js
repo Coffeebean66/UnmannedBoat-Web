@@ -4,6 +4,7 @@
   const MODES=['PWM 油门','船速闭环','航向闭环'];
   const KEYS={KeyW:'forward',ArrowUp:'forward',KeyS:'backward',ArrowDown:'backward',KeyA:'left',ArrowLeft:'left',KeyD:'right',ArrowRight:'right'};
   const DEVICE=/^[A-Za-z0-9_-]{1,64}$/,LEASE=/^[0-9a-f]{16}$/;
+  const INPUT_PERIOD_MS=100,RESPONSE_TIMEOUT_MS=600,MAX_INPUT_REQUESTS=4;
   class BoatDriverControl {
     constructor({document=window.document,fetch=window.fetch.bind(window),auth=window.BoatAuth,toast=()=>{}}={}) {
       this.document=document;this.fetch=fetch;this.auth=auth;this.toast=toast;
@@ -13,7 +14,8 @@
       this.context={deviceId:'',connected:false,authenticated:false,canManage:false,parameterBusy:false};
       this.keys=new Set();this.remote=null;this.leaseId='';this.sequence=0;this.active=false;this.pending=false;this.testMode=false;
       this.request=null;this.polling=false;this.generation=0;this.destroyed=false;this.lastPoll=0;this.lastPulse=performance.now();
-      this.message='选择在线无人船，由管理员启用操控后使用键盘驾驶。';this.tone='';this.actualHeading=null;
+      this.inputRequests=new Map();this.lastInputSentAt=-Infinity;this.lastInputSignature='';this.lastInputResponseAt=0;this.lastAcceptedSequence=0;
+      this.message='选择在线无人船，由管理员启用操控后使用键盘驾驶。';this.stopReason='';this.tone='';this.actualHeading=null;
       this.lastMode=Number(this.nodes.driverMode.value);
       this.normalMode=this.lastMode;
       this.handlers=[];
@@ -77,13 +79,13 @@
       if(enabled){this.normalMode=Number(this.nodes.driverMode.value);this.nodes.driverMode.value='0';}
       else this.nodes.driverMode.value=String(this.normalMode===2&&!Number.isFinite(this.actualHeading)?1:this.normalMode);
       this.lastMode=Number(this.nodes.driverMode.value);this.headingMode();this.renderKeys();
-      if(announce){this.message=enabled?'测试场景已开启：PWM 开环会产生真实输出，点击启用操控后使用键盘。':'已关闭测试场景，恢复正常接管条件。';this.tone='';}
+      if(announce){this.stopReason='';this.message=enabled?'测试场景已开启：PWM 开环会产生真实输出，点击启用操控后使用键盘。':'已关闭测试场景，恢复正常接管条件。';this.tone='';}
       this.render();
     }
     update(next={}) {
       const before=this.context;
       const merged={...before,...next};
-      if(before.deviceId!==merged.deviceId){this.stop('无人船已切换，已停止原船操控');this.remote=null;this.lastPoll=0;}
+      if(before.deviceId!==merged.deviceId){this.stop('无人船已切换，已停止原船操控');this.remote=null;this.stopReason='';this.lastPoll=0;}
       this.context=merged;
       if((this.active||this.pending)&&!this.permitted())this.stop('操控条件已变化，已停船并退出操控');
       if(!merged.connected||!merged.authenticated)this.setTestMode(false,false);
@@ -101,7 +103,7 @@
         const response=await this.fetch(url,{method:body?'POST':'GET',credentials:'same-origin',redirect:'error',cache:'no-store',keepalive,signal:controller.signal,
           headers:{Accept:'application/json',...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});
         const value=await response.json().catch(()=>({}));
-        if(!response.ok){if(response.status===401)this.auth?.expire?.();throw Error(value.error||'驾驶控制请求失败（'+response.status+'）');}
+        if(!response.ok){if(response.status===401)this.auth?.expire?.();throw Object.assign(Error(value.error||'驾驶控制请求失败（'+response.status+'）'),{status:response.status,code:value.code});}
         return value;
       } finally {window.clearTimeout(timer);}
     }
@@ -129,7 +131,7 @@
         if(!Number.isFinite(this.actualHeading)){this.toast('等待有效的真北船头航向后才能启用航向模式');return;}
         this.nodes.driverHeading.value=this.actualHeading.toFixed(2);
       }
-      this.keys.clear();this.renderKeys();this.pending=true;this.message='正在等待单片机确认接管；确认前键盘不会驱动电机';this.tone='';this.render();
+      this.keys.clear();this.renderKeys();this.pending=true;this.stopReason='';this.message='正在等待单片机确认接管；确认前键盘不会驱动电机';this.tone='';this.render();
       const generation=++this.generation,id=this.context.deviceId,controller=new AbortController();this.request=controller;
       try {
         const result=await this.api({deviceId:id,clientId:this.clientId,action:'acquire',...this.inputs(),throttle:0,turn:0},{timeout:3000,controller});
@@ -140,6 +142,7 @@
         }
         if(!acknowledged)throw Error(result.message||'未收到单片机接管确认，操控未启用');
         this.remote=result;this.leaseId=result.leaseId;this.sequence=0;this.active=true;
+        this.lastInputSentAt=-Infinity;this.lastInputSignature='';this.lastInputResponseAt=performance.now();this.lastAcceptedSequence=0;
         this.message=this.testMode?'测试场景已接管：真实 PWM 输出，按住键盘运动，松开归零。':'单片机已确认电脑接管，遥控器输入已屏蔽；按住键盘运动，松开归零。';
       } catch(error) {
         if(generation===this.generation){this.message=error.name==='AbortError'?'接管确认超时，操控未启用':error.message;this.tone='error';}
@@ -148,7 +151,7 @@
       }
     }
     async poll() {
-      if(this.destroyed||this.polling||!this.visible()||!this.admin()||!this.context.authenticated||!DEVICE.test(this.context.deviceId))return;
+      if(this.destroyed||this.pending||this.polling||!this.visible()||!this.admin()||!this.context.authenticated||!DEVICE.test(this.context.deviceId))return;
       const id=this.context.deviceId,generation=this.generation;this.polling=true;this.lastPoll=performance.now();
       try {
         const value=await this.api(null,{timeout:1200});
@@ -163,17 +166,34 @@
       } finally {this.polling=false;this.render();}
     }
     async sendInput() {
-      if(!this.active||this.request||!this.permitted())return;
-      const generation=this.generation,controller=new AbortController();this.request=controller;
-      const payload=this.payload('input');this.renderKeys();
+      if(!this.active||!this.permitted())return;
+      const now=performance.now();
+      if(now-this.lastInputResponseAt>=RESPONSE_TIMEOUT_MS)return this.stop('控制链路持续无响应，已请求停船',true);
+      const signature=JSON.stringify(this.inputs()),changed=signature!==this.lastInputSignature;
+      if(!changed&&now-this.lastInputSentAt<INPUT_PERIOD_MS-10)return;
+      // 心跳不等待上一条 HTTP 返回，最多四条在途；松键/改模式优先发送当前输入。
+      // 不排队重发旧油门，服务器递增序号使乱序到达的旧请求无法覆盖新输入。
+      if(this.inputRequests.size>=MAX_INPUT_REQUESTS){
+        if(!changed)return;
+        const [sequence,oldest]=this.inputRequests.entries().next().value;
+        oldest.superseded=true;oldest.controller.abort();this.inputRequests.delete(sequence);
+      }
+      const generation=this.generation,controller=new AbortController(),request={controller,superseded:false};
+      const payload=this.payload('input');this.inputRequests.set(payload.sequence,request);
+      this.lastInputSentAt=now;this.lastInputSignature=signature;this.renderKeys();
       try {
-        const value=await this.api(payload,{timeout:400,controller});
-        if(generation!==this.generation)return;
+        const value=await this.api(payload,{timeout:RESPONSE_TIMEOUT_MS,controller});
+        if(generation!==this.generation||request.superseded||payload.sequence<=this.lastAcceptedSequence)return;
         if(!value.active||!value.owned||value.state!==1||value.status!=='active'||value.leaseId!==this.leaseId||!!value.testMode!==this.testMode)return this.stop(value.message||'单片机不再处于电脑操控状态');
-        this.remote=value;
+        this.lastAcceptedSequence=payload.sequence;this.lastInputResponseAt=performance.now();
+        if((value.sequence??0)>=(this.remote?.sequence??0))this.remote=value;
       } catch(error) {
-        if(generation===this.generation)this.stop(error.name==='AbortError'?'控制链路响应超时，已请求停船':error.message,true);
-      } finally {if(generation===this.generation)this.request=null;this.render();}
+        if(generation!==this.generation||request.superseded||payload.sequence<this.lastAcceptedSequence)return;
+        if(error.code==='STALE_CONTROL_SEQUENCE')return;
+        // 单次丢包不撤销仍有新确认的会话；鉴权/租约等明确拒绝立即停止。
+        if(error.status||performance.now()-this.lastInputResponseAt>=RESPONSE_TIMEOUT_MS)
+          this.stop(error.name==='AbortError'?'控制链路持续无响应，已请求停船':error.message,true);
+      } finally {if(this.inputRequests.get(payload.sequence)===request)this.inputRequests.delete(payload.sequence);this.render();}
     }
     releaseDetached(id,leaseId,emergency=false) {
       const stop=this.payload(emergency?'stop':'release',id,leaseId);stop.throttle=0;stop.turn=0;
@@ -185,7 +205,8 @@
       const wasActive=this.active||this.pending,id=this.context.deviceId,leaseId=this.leaseId;
       if(!wasActive&&!leaseId){this.setTestMode(false,false);return;}
       ++this.generation;this.request?.abort();this.request=null;this.active=false;this.pending=false;this.leaseId='';
-      this.keys.clear();this.message=message;this.tone=emergency?'error':'';this.renderKeys();
+      for(const request of this.inputRequests.values())request.controller.abort();this.inputRequests.clear();
+      this.keys.clear();this.message=this.stopReason=message;this.tone=emergency?'error':'';this.renderKeys();
       if(LEASE.test(leaseId))this.releaseDetached(id,leaseId,emergency);
       this.setTestMode(false,false);
       this.lastPoll=0;this.render();
@@ -208,13 +229,15 @@
       const now=performance.now(),delta=Math.min(.2,Math.max(0,(now-this.lastPulse)/1000));this.lastPulse=now;
       if(this.active){
         if(!this.permitted())return this.stop('操控条件失效，已停船并退出操控');
+        if(now-this.lastInputResponseAt>=RESPONSE_TIMEOUT_MS)return this.stop('控制链路持续无响应，已请求停船',true);
         if(Number(this.nodes.driverMode.value)===2){
           const sign=Number(this.held('right'))-Number(this.held('left'));
           if(sign){const heading=((this.headingValue()/100+sign*30*delta)%360+360)%360;this.nodes.driverHeading.value=heading.toFixed(2);}
         }
         this.sendInput();
       }
-      if(this.visible()&&now-this.lastPoll>(this.active?500:2000))this.poll();
+      // 输入响应已经携带驾驶状态，操控中不再额外 GET 抢占连接或误用旧状态。
+      if(!this.active&&this.visible()&&now-this.lastPoll>2000)this.poll();
     }
     renderKeys() {
       for(const node of this.document.querySelectorAll('[data-driver-key]'))node.dataset.pressed=String(this.held(KEYS[node.dataset.driverKey]));
@@ -278,6 +301,7 @@
         else if(!this.context.deviceId)message='请先选择需要操控的无人船。';
         else if(!this.context.connected)message='无人船未在线；等待实时连接后才能接管。';
         else if(this.context.parameterBusy)message='调参或固件升级正在进行，请完成后再接管。';
+        else if(this.stopReason)message=this.stopReason;
         // 未收到实时能力也可能是 MQTT 权限或状态过期，不能据此断言固件不支持。
         else if(this.remote?.supported===false)message=this.remote.message||'尚未收到船端驾驶状态，请检查固件及 MQTT 驾驶主题权限。';
         else if(this.remote&&!this.remote.ready)message=this.remote.message||'当前无法接管，请确认船已停稳且无其他驾驶员占用。';
