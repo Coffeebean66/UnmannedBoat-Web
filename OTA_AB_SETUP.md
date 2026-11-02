@@ -4,6 +4,8 @@ Web `v1.44.0` 同时支持原复制式OTA和新A/B方案，按船端能力自动
 
 ## 固件准备
 
+后续更新至Web `v1.45.0`及配套在线LQR调参固件时，已安装A/B方案的船只需更新应用包，无需重刷Bootloader。新参数存档保留旧固件可读前缀，但旧固件重新保存可能丢失LQR扩展；升级顺序和备份方法见[在线调参与回滚兼容](OPTIMAL_CONTROL_SETUP.md#flash-存档与回滚兼容)。
+
 在主项目 `UnmannedBoat_Controller` 目录执行：
 
 ```powershell

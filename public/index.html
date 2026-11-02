@@ -34,6 +34,7 @@
   <script defer src="account-auth.js"></script>
   <script defer src="cloud-transport.js"></script>
   <script defer src="fleet-transport.js"></script>
+  <script defer src="optimal-parameter-panel.js"></script>
   <script defer src="parameter-panel.js"></script>
   <script defer src="attitude-view.js"></script>
   <script defer src="artificial-horizon.js"></script>
@@ -104,7 +105,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.43.0</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.45.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -507,12 +508,22 @@
     <div class="dialog-head"><div class="title-with-icon"><span class="card-icon teal" data-icon="sliders"></span><div><p class="eyebrow">VESSEL PARAMETERS</p><h2 id="settingsTitle">无人船调参设置</h2></div></div><button id="settingsClose" class="ghost">返回监控<span data-icon="close"></span></button></div>
     <div class="dialog-scroll"><div class="parameter-device-context"><div><span>当前调参对象</span><strong id="parameterDeviceName">未选择无人船</strong></div><span class="chip">单船独立操作</span></div><p id="parameterDeviceNotice" class="parameter-device-notice">请从对应无人船卡片进入，等待实时数据后点击“读取参数”。</p>
       <h3 class="device-settings-heading">无人船电控参数<span>读取、写入与 Flash 保存需要设备在线</span></h3>
-      <fieldset class="parameter-group algorithm-settings"><legend>控制算法<span>仅本次上电有效</span></legend><p id="controlAlgorithmCurrent" class="parameter-group-note" role="status">等待支持算法切换的船端固件上线</p><div class="algorithm-actions"><label for="controlAlgorithmSelect">选择算法</label><select id="controlAlgorithmSelect" disabled><option value="0">原算法：PID＋前视航线</option><option value="1">最优控制：LQR/LQI＋LQR航线</option></select><button id="applyControlAlgorithm" type="button" class="small-button" disabled>应用算法</button></div><p class="parameter-group-note">管理员或驾驶员可切换。先结束任务和驾驶接管，保持零指令且两路电机停稳、反馈正常满 1 秒。选择统一作用于船速、航向和下一次航线任务；不写入 Flash，每次上电恢复原算法。PWM 开环保持原有控制。</p><details><summary>新算法如何调节</summary><p class="parameter-group-note">LQR 使用船体模型和误差/输出权重；船速带积分状态抵抗恒定扰动，航向使用角差和角速度，服务器按横向偏差及相对航向跟踪航线。模型和权重独立于原 PID 增益，需要根据水测辨识后修改配置；两套算法共用输出限幅、变化速度、方向映射与超时保护。初始模型为估计值，具体效果需水测验证。</p></details></fieldset>
+      <fieldset class="parameter-group algorithm-settings"><legend>控制算法<span>仅本次上电有效</span></legend><p id="controlAlgorithmCurrent" class="parameter-group-note" role="status">等待支持算法切换的船端固件上线</p><div class="algorithm-actions"><label for="controlAlgorithmSelect">选择算法</label><select id="controlAlgorithmSelect" disabled><option value="0">原算法：PID＋前视航线</option><option value="1">最优控制：LQR/LQI＋LQR航线</option></select><button id="applyControlAlgorithm" type="button" class="small-button" disabled>应用算法</button></div><p class="parameter-group-note">管理员或驾驶员可切换。先结束任务和驾驶接管，保持零指令且两路电机停稳、反馈正常满 1 秒。单片机确认切换后显示对应参数；算法选择仅本次上电有效，上电恢复原算法。PWM 开环保持原有控制。</p><details><summary>新算法如何调节</summary><p class="parameter-group-note">切换至最优控制后，点击“读取LQR参数”，可在线调整船速LQI、航向LQR和航线LQR的模型与权重。停稳写入并验证增益后生效，调好再保存至Flash；航线配置在下次任务启动时读取。两套算法共用输出限制、方向与超时保护。初始模型需用水测结果校准。</p></details></fieldset>
       <p id="cloudReadOnlyNotice" class="cloud-readonly">云端调参需要管理员或驾驶员账户和支持该功能的固件；操作结果以设备响应为准。</p>
       <div class="settings-intro"><div class="workflow"><span><b>1</b>读取当前参数</span><i>→</i><span><b>2</b>调整并写入</span><i>→</i><span><b>3</b>调好后存入 Flash</span></div><p>方向修改和 Flash 保存需 CH6 低档、两路停稳且反馈正常满 1 秒。</p></div>
+      <section id="optimalParameterSection" class="optimal-parameters" aria-labelledby="optimalParameterHeading" hidden>
+        <h3 id="optimalParameterHeading" class="device-settings-heading">LQI / LQR 专用参数<span>按当前船独立读取与保存</span></h3>
+        <p class="parameter-group-note">先读取实际配置，再逐项调节。写入需结束任务和接管、两路反馈正常且停稳满1秒；航线参数用于下次任务。保存Flash同时保留当前通用参数，上电仍默认原PID。</p>
+        <p id="optimalParameterUnsupported" class="cloud-readonly" hidden>当前固件支持算法切换，但尚不支持LQR在线调参，请先更新船端固件。</p>
+        <p id="optimalParameterStatus" role="status" data-tone="neutral">点击“读取LQR参数”获取当前船的实际配置</p>
+        <div id="optimalParameterFields" class="parameter-fields"></div>
+        <div class="optimal-parameter-actions"><button id="fillOptimalDefaults" type="button" class="subtle" disabled>填入参考初值</button><div class="button-row"><button id="readOptimalParameters" type="button" disabled>读取LQR参数</button><button id="writeOptimalParameters" type="button" class="primary" disabled>写入LQR参数</button><button id="saveOptimalFlash" type="button" disabled>保存LQR到Flash</button></div></div>
+        <details class="optimal-local-tools"><summary>LQR浏览器预设与参数导出</summary><p class="parameter-group-note">保留3组LQR配置；先读取当前船，再一键使用预设。导出包含可写回代码的初始宏定义。</p><div id="optimalPresets"></div><div class="export-actions"><button id="exportOptimalParameters" type="button" disabled>导出LQR .txt</button><button id="copyOptimalParameters" type="button" disabled>复制LQR参数</button></div></details>
+      </section>
+      <h3 id="commonParameterHeading" class="device-settings-heading">PID与电机参数</h3>
       <p id="parameterStatus" role="status" data-tone="neutral">尚未读取设备参数</p>
       <div id="parameterFields" class="parameter-fields"></div>
-      <div class="preset-heading"><div><h3>本地参数预设</h3><p class="muted">保留三组配置，在当前浏览器中随时使用。</p></div><span class="chip">3 SLOTS</span></div>
+      <div class="preset-heading"><div><h3 id="commonPresetTitle">本地参数预设</h3><p class="muted">保留三组通用/PID配置，LQR专用配置在上方独立保存。</p></div><span class="chip">3 SLOTS</span></div>
       <div id="presets"></div>
       <div class="export-actions"><button id="exportParameters"><span data-icon="download"></span>导出 .txt</button><button id="copyParameters"><span data-icon="copy"></span>复制参数</button><button id="helpToggle" class="subtle"><span data-icon="help"></span>参数说明与教程</button></div>
       <div id="parameterHelp" class="help-box" hidden></div>

@@ -3,11 +3,25 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const L=require('../server/optimal-guidance'),N=require('../public/utils/missionNavigation');
 const {createMissionFixture,ORIGIN}=require('./mission-fixture.cjs');
+const O=require('../public/utils/optimalParameters');
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(fn){for(let i=0;i<120;++i){if(fn())return;await wait(5);}throw Error('Control condition timed out');}
 function fixture(t){const f=createMissionFixture({algorithmControl:true});t.after(()=>f.close());return f;}
 async function select(f,id,algorithm){await f.bridge.requestParameters(id,'algorithm',{algorithm});f.feed(id);}
 async function flush(f){await Promise.resolve();await Promise.resolve();f.mission.refresh();}
+
+test('online LQR missions read each boat actual guidance and maximum speed in a single request before acquiring control',async t=>{
+  const f=createMissionFixture({algorithmControl:true,onlineTuning:true});t.after(()=>f.close());f.feed('boat-02');
+  const values={...O.defaults,guidanceQCrossX100:150,guidanceMaxCdeg:3000,guidanceTauMs:900};
+  f.optimalValues.set('boat-01',values);await select(f,'boat-01',1);await select(f,'boat-02',1);
+  const first=f.route(),second=f.route('boat-02');f.mission.start('boat-01',first.id,'start');f.mission.start('boat-02',second.id,'start');
+  await until(()=>f.mission.jobs.get('boat-01')?.status==='running'&&f.mission.jobs.get('boat-02')?.status==='running');
+  assert.deepEqual(f.mission.jobs.get('boat-01').optimalConfig,O.guidanceConfig(values));assert.deepEqual(f.mission.jobs.get('boat-02').optimalConfig,O.guidanceConfig(O.defaults));
+  const commands=f.client.sent.filter(p=>p.topic.endsWith('/parameter-command')&&p.payload[19]===0x14);assert.equal(commands.length,2);
+  assert.equal(f.client.sent.some(p=>p.topic.endsWith('/parameter-command')&&p.payload[19]===0x10),false);
+  f.optimalValues.set('boat-01',{...values,guidanceMaxCdeg:8000});assert.equal(f.mission.jobs.get('boat-01').optimalConfig.maxOffsetDeg,30);
+  await assert.rejects(f.bridge.requestParameters('boat-01','optimalWrite',O.defaults),{status:409});
+});
 
 test('route LQR corrects either side, damps heading, wraps north, limits offsets and captures the true endpoint',()=>{
   const end=N.destination(ORIGIN,0,100),l=L.create(1);

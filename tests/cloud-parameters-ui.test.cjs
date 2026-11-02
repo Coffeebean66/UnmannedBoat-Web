@@ -1,7 +1,7 @@
 /* 云端调参前端：只信原协议设备确认，能力、角色及异步取消分别验证。 */
 const { test } = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
-const P = require('../public/utils/uart4Protocol'), A = require('../public/utils/controlAlgorithm'), root = path.resolve(__dirname, '..');
+const P = require('../public/utils/uart4Protocol'), A = require('../public/utils/controlAlgorithm'), O=require('../public/utils/optimalParameters'), root = path.resolve(__dirname, '..');
 const configContext = { window: {} }; vm.runInNewContext(fs.readFileSync(path.join(root, 'public/parameter-data.js'), 'utf8'), configContext);
 const config = configContext.window.BoatParameters;
 const values = Object.fromEntries(Object.entries(config.ranges).map(([key, range]) => [key, range[0]])); values.kpX2PerMps = 42;
@@ -34,7 +34,7 @@ async function setup() {
     else throw Error('Unexpected URL ' + url);
     return { ok: status >= 200 && status < 300, status, json: async () => body };
   };
-  const context = { window: { BoatAuth: auth }, fetch, BoatModules: { uart4Protocol: P, controlAlgorithm:A }, EventTarget, CustomEvent,
+  const context = { window: { BoatAuth: auth }, fetch, BoatModules: { uart4Protocol: P, controlAlgorithm:A,optimalParameters:O }, EventTarget, CustomEvent,
     Date, performance, Uint8Array, atob, AbortController, document: { hidden: false }, EventSource: Stream,
     setTimeout: (fn, delay) => { const id = ++timerId; timers.set(id, { fn, delay }); return id; }, clearTimeout: id => timers.delete(id),
     setInterval: () => 1, clearInterval() {} };
@@ -194,4 +194,26 @@ test('算法迟到响应不能在切船或降权后恢复旧界面成功状态',
     h.ids.parameterStatus.textContent='新界面';release({status:0,algorithm:1});await assert.rejects(pending,/设备或账户已变化/);
     assert.equal(h.ids.parameterStatus.textContent,'新界面');
   }
+});
+
+test('参数表只随船端实际算法切换，隐藏8项PID增益并保留12项通用限制',()=>{
+  const h=panel();h.panel.link.selectedId='boat-1';h.panel.link.devices=[{id:'boat-1',controlAlgorithm:{id:0,lqrAvailable:true,onlineTuning:true}}];
+  h.inputs.forEach(input=>{input.row={hidden:false};input.closest=()=>input.row;});
+  const contexts=[];h.panel.optimalPanel={setContext:(...args)=>contexts.push(args)};
+  h.panel.updateButtons();h.ids.controlAlgorithmSelect.value='1';h.panel.updateButtons();
+  assert.equal(h.inputs.filter(x=>x.row.hidden).length,0);assert.deepEqual(contexts.at(-1),[0,true]);
+  h.panel.link.devices[0].controlAlgorithm.id=1;h.panel.updateButtons();
+  assert.equal(h.inputs.filter(x=>x.row.hidden).length,8);assert.equal(h.inputs.filter(x=>!x.row.hidden).length,12);assert.deepEqual(contexts.at(-1),[1,true]);
+  assert.equal(h.ids.fillTuning.hidden,true);h.panel.link.devices[0].controlAlgorithm.id=0;h.panel.updateButtons();
+  assert.equal(h.inputs.filter(x=>x.row.hidden).length,0);assert.equal(h.ids.fillTuning.hidden,false);
+});
+
+test('LQR云端读取不携带值，必须支持新能力，普通参数ACK不能冒充LQR成功',async()=>{
+  const h=await setup();h.algorithm({id:1,lqrAvailable:true,onlineTuning:true});await h.cloud.refreshDevices();
+  const b=Buffer.from(O.command('optimalWrite',987,O.defaults));b[3]=0x92;b.writeUInt16LE(2500,44);b.writeUInt16LE(P.crc16CcittFalse(b,2,52),54);
+  h.respond({frame:b.toString('base64')});const result=await h.cloud.request('optimalRead');assert.equal(result.parameters.speedGainMmS,2500);
+  assert.deepEqual(JSON.parse(h.pendingPost().at(-1).body),{deviceId:'boat-1',kind:'optimalRead'});
+  h.respond({frame:frame()});await assert.rejects(h.cloud.request('optimalWrite',O.defaults),error=>error.uncertain);
+  h.algorithm({id:1,lqrAvailable:true});await h.cloud.refreshDevices();const before=h.pendingPost().length;
+  await assert.rejects(h.cloud.request('optimalRead'),/更新船端/);assert.equal(h.pendingPost().length,before);
 });

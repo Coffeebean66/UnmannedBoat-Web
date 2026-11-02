@@ -130,7 +130,8 @@ class CloudBridge extends EventEmitter {
     return {id:device.id,online:!!(this.brokerConnected&&device.live&&device.status!=='offline'&&
       device.lastReceivedAt!==null&&this.now()-device.lastReceivedAt<=this.staleMs),
       lastReceivedAt:device.lastReceivedAt,status:device.status,lastStatusAt:device.lastStatusAt,parametersReady:this.parametersReady(device),video:device.video?{...device.video}:null,
-      ...(this.parameterLive(device)&&Number.isInteger(device.capability.algorithm)?{controlAlgorithm:{id:device.capability.algorithm,lqrAvailable:device.capability.lqr}}:{})};
+      ...(this.parameterLive(device)&&Number.isInteger(device.capability.algorithm)?{controlAlgorithm:{id:device.capability.algorithm,lqrAvailable:device.capability.lqr,
+        ...(device.capability.optimalParameters===1?{onlineTuning:true}:{})}}:{})};
   }
   list(){return {brokerConnected:this.brokerConnected,devices:[...this.devices.values()].map(device=>this.snapshot(device))};}
   fleetSnapshot(device){const snapshot=this.snapshot(device);return {...snapshot,summary:snapshot.online?fleetSummary(device.fleetTelemetry,this.now()):null};}
@@ -225,7 +226,7 @@ class CloudBridge extends EventEmitter {
       }
       const value=parameters.response(payload),pending=this.pendingParameters.get(parts[1]);
       if(!value||!pending||value.token!==pending.token||value.uptimeMs!==pending.uptimeMs||value.sequence!==pending.sequence)return false;
-      if((pending.kind==='algorithm')!==(value.kind==='algorithm'))return false;
+      if((pending.kind.startsWith('optimal')?'optimal':pending.kind==='algorithm'?'algorithm':'parameters')!==value.kind)return false;
       const device=this.devices.get(parts[1]);if(!this.parameterLive(device)){this.cancelParameters(parts[1],503,'设备数据已过期，参数结果未知，请读取确认');return false;}
       if(value.kind==='algorithm'){
         device.capability.algorithm=value.algorithm;
@@ -288,6 +289,8 @@ class CloudBridge extends EventEmitter {
     if(!this.parametersReady(device)||!this.client||this.client.connected===false||this.client.disconnecting)return Promise.reject(Object.assign(Error('设备不在线或尚未提供新参数令牌'),{status:503}));
     if(kind==='algorithm'&&(!Number.isInteger(device.capability.algorithm)||values.algorithm===1&&!device.capability.lqr))
       return Promise.reject(Object.assign(Error('当前固件不支持该控制算法，请先更新船端固件'),{status:409}));
+    if(kind.startsWith('optimal')&&device.capability.optimalParameters!==1)
+      return Promise.reject(Object.assign(Error('当前固件不支持LQR在线调参，请先更新船端固件'),{status:409}));
     if(signal?.aborted)return Promise.reject(Object.assign(Error('参数操作已取消'),{status:409}));
     const sequence=this.parameterSequence=(this.parameterSequence+1)>>>0,cap=device.capability;
     const payload=parameters.envelope(cap.token,cap.uptimeMs,parameters.commandFrame(kind,sequence,values));
@@ -295,7 +298,7 @@ class CloudBridge extends EventEmitter {
     return new Promise((resolve,reject)=>{
       const pending={resolve,reject,sequence,kind,algorithm:values?.algorithm,token:cap.token,uptimeMs:cap.uptimeMs,signal,timer:null,onAbort:()=>this.cancelParameters(id,409,'登录或连接已变化，参数结果未知，请读取确认')};
       this.pendingParameters.set(id,pending);signal?.addEventListener('abort',pending.onAbort,{once:true});
-      pending.timer=setTimeout(()=>this.cancelParameters(id,504,'参数响应超时，结果未知，请读取确认后再试'),kind==='flash'?this.flashTimeoutMs:this.parameterTimeoutMs);pending.timer.unref?.();
+      pending.timer=setTimeout(()=>this.cancelParameters(id,504,'参数响应超时，结果未知，请读取确认后再试'),kind==='flash'||kind==='optimalFlash'?this.flashTimeoutMs:this.parameterTimeoutMs);pending.timer.unref?.();
       try{this.client.publish(this.prefix+'/'+id+'/parameter-command',payload,{qos:0,retain:false},error=>{if(error&&this.pendingParameters.get(id)===pending)this.cancelParameters(id,503,'参数发送失败，结果未知，请读取确认');});}
       catch(_){this.cancelParameters(id,503,'参数发送失败，结果未知，请读取确认');}
       this.emit('state',this.state(id));

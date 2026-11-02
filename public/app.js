@@ -558,7 +558,8 @@
     fleetMapView.update(detail);
     // 总览已通过同一认证通道发现新船，设备下拉框同步而无需等待10秒轮询。
     if(detail.streamConnected&&cloud.authenticated){
-      cloud.devices=detail.devices.map(device=>({id:device.id,online:device.online,parametersReady:device.parametersReady,video:device.video||null}));
+      cloud.devices=detail.devices.map(device=>({id:device.id,online:device.online,parametersReady:device.parametersReady,video:device.video||null,
+        ...(device.controlAlgorithm?{controlAlgorithm:{...device.controlAlgorithm}}:{})}));
       if(cloud.devices.some(device=>device.id===cloud.selectedId&&device.parametersReady))cloud.parameterCapableId=cloud.selectedId;
       renderCloud();
       // 首次打开页面时自动进入第一艘在线船的详情，不需要用户再点击“连接无人船”。

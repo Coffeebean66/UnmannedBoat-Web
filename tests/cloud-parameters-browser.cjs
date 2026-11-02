@@ -2,22 +2,31 @@
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
 const {spawn}=require('node:child_process'),{EventEmitter}=require('node:events'),vm=require('node:vm');
 const {createServer}=require('../server'),P=require('../public/utils/uart4Protocol');
+const O=require('../public/utils/optimalParameters'),A=require('../public/utils/controlAlgorithm');
 const output=path.resolve(__dirname,'../.test-output'),wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const configContext={window:{}};vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../public/parameter-data.js'),'utf8'),configContext);
 const values=Object.fromEntries(Object.entries(configContext.window.BoatParameters.ranges).map(([key,range])=>[key,range[0]]));values.kpX2PerMps=42;
 function parameterFrame(parameters,status=0){const bytes=P.encodeParameterWriteRequest(321,parameters);bytes[3]=0x90;bytes[5]=status;new DataView(bytes.buffer).setUint16(54,P.crc16CcittFalse(bytes,2,52),true);return Buffer.from(bytes);}
+function optimalFrame(parameters,status=0){const b=Buffer.from(O.command('optimalWrite',321,parameters));b[3]=0x92;b[5]=status;b.writeUInt16LE(2500,44);b.writeUInt16LE(P.crc16CcittFalse(b,2,52),54);return b;}
+function algorithmFrame(algorithm,status=0){const b=Buffer.from(A.command(321,algorithm));b[3]=0x91;b[5]=status;b.writeUInt16LE(P.crc16CcittFalse(b,2,52),54);return b;}
 function telemetry(){return Buffer.concat([[1,64,1],[2,40,2],[3,36,2],[4,36,1]].map(([type,size,version])=>{const bytes=Buffer.alloc(size);bytes.set([0xa5,0x5a,version,type,size,3]);bytes.writeUInt16LE(P.crc16CcittFalse(bytes,2,size-4),size-2);return bytes;})).toString('base64');}
 async function main(){
-  fs.mkdirSync(output,{recursive:true});const fixture={ready:true,values:{...values},calls:[],rejectFlash:true,loseResponse:false};
+  fs.mkdirSync(output,{recursive:true});const fixture={ready:true,values:{...values},optimal:{...O.defaults},algorithm:0,lqrStatus:0,calls:[],rejectFlash:true,loseResponse:false};
+  const device=()=>({id:'boat-cloud-test',online:true,parametersReady:fixture.ready,controlAlgorithm:{id:fixture.algorithm,lqrAvailable:true,onlineTuning:true}});
   const bridge=new EventEmitter();Object.assign(bridge,{enabled:true,start(){},stop(){},
-    list:()=>({brokerConnected:true,devices:[{id:'boat-cloud-test',online:true,parametersReady:fixture.ready}]}),
-    state:()=>({brokerConnected:true,device:{id:'boat-cloud-test',online:true,parametersReady:fixture.ready}}),
+    list:()=>({brokerConnected:true,devices:[device()]}),
+    state:()=>({brokerConnected:true,device:device()}),
     async requestParameters(deviceId,kind,input){
       fixture.calls.push({deviceId,kind,values:input});fixture.ready=false;bridge.emit('state',bridge.state());
       await wait(180);const status=kind==='flash'&&fixture.rejectFlash?3:0;
       if(kind==='write'&&status===0)fixture.values={...input};
       setTimeout(()=>{fixture.ready=true;bridge.emit('state',bridge.state());},300);
       if(fixture.loseResponse)throw Object.assign(Error('设备响应超时，结果未知，请读取确认'),{status:504});
+      if(kind==='algorithm'){fixture.algorithm=input.algorithm;return algorithmFrame(fixture.algorithm);}
+      if(kind.startsWith('optimal')){
+        if(kind==='optimalWrite'&&!fixture.lqrStatus)fixture.optimal={...input};
+        return optimalFrame(fixture.optimal,kind==='optimalRead'?0:fixture.lqrStatus);
+      }
       return parameterFrame(fixture.values,status);
     }});
   const env={BOAT_ACCOUNTS_ENABLED:'1',BOAT_ADMIN_USERNAME:'operator',BOAT_ADMIN_PASSWORD:'browser-admin-test-only',BOAT_GUEST_USERNAME:'observer',BOAT_GUEST_PASSWORD:'browser-guest-test-only'};
@@ -51,7 +60,34 @@ async function main(){
     await until('!document.getElementById("saveFlash").disabled');await evaluate('document.getElementById("saveFlash").click()');await until('document.getElementById("parameterStatus").textContent.includes("CH6")&&!boatMonitor.params.busy');
     assert.equal(await evaluate('document.getElementById("parameterStatus").dataset.tone'),'warning');assert.equal(fixture.calls.at(-1).kind,'flash');
     fixture.rejectFlash=false;await until('!document.getElementById("saveFlash").disabled');await evaluate('document.getElementById("saveFlash").click()');await until('document.getElementById("parameterStatus").textContent.includes("已保存到 Flash")&&!boatMonitor.params.busy');
+    // 选择草稿不换表单；单片机确认切换后显示15项LQR和12项共用参数。
+    const beforeLqr=fixture.calls.length;
+    await evaluate('document.getElementById("controlAlgorithmSelect").value="1"');
+    assert.equal(await evaluate('document.getElementById("optimalParameterSection").hidden'),true);
+    await until('!document.getElementById("applyControlAlgorithm").disabled');await evaluate('document.getElementById("applyControlAlgorithm").click()');
+    await until('boatMonitor.params.lqrActive&&!boatMonitor.params.busy&&!document.getElementById("optimalParameterSection").hidden');
+    assert.equal(fixture.calls.length,beforeLqr+1,'Switching algorithm does not auto-read or write tuning parameters');
+    assert.equal(await evaluate('Array.from(document.querySelectorAll("#parameterFields input,#parameterFields select")).filter(e=>!e.closest("label").hidden).length'),12);
+    await until('!document.getElementById("readOptimalParameters").disabled');await evaluate('document.getElementById("readOptimalParameters").click()');
+    await until('document.getElementById("optimalParameterStatus").textContent.includes("LQR读取成功")&&!boatMonitor.params.busy');
+    assert.equal(await evaluate('document.querySelector("[data-optimal-key=speedGainMmS]").value'),'2.5');
+    await evaluate('document.querySelector("[data-optimal-key=speedGainMmS]").value="3.125"');
+    await until('!document.getElementById("saveOptimalFlash").disabled');
+    assert.match(await evaluate('boatMonitor.params.optimalPanel.command("optimalFlash").then(()=>"unexpected",e=>e.message)'),/先写入/);
+    await until('!document.getElementById("writeOptimalParameters").disabled');await evaluate('document.getElementById("writeOptimalParameters").click()');
+    await until('document.getElementById("optimalParameterStatus").textContent.includes("LQR写入成功")&&!boatMonitor.params.busy');assert.equal(fixture.optimal.speedGainMmS,3125);
+    fixture.lqrStatus=6;await until('!document.getElementById("writeOptimalParameters").disabled');await evaluate('document.getElementById("writeOptimalParameters").click()');
+    await until('document.getElementById("optimalParameterStatus").textContent.includes("稳定增益")&&!boatMonitor.params.busy');fixture.lqrStatus=0;
+    await until('!document.getElementById("saveOptimalFlash").disabled');await evaluate('document.getElementById("saveOptimalFlash").click()');
+    await until('document.getElementById("optimalParameterStatus").textContent.includes("已保存到Flash")&&!boatMonitor.params.busy');
+    await evaluate('document.querySelector("#settingsDialog .dialog-scroll").scrollTop=0');await shot('lqr-parameters-desktop');
     await send('Emulation.setDeviceMetricsOverride',{width:320,height:740,deviceScaleFactor:1,mobile:true});await wait(100);
+    assert.equal(await evaluate('document.documentElement.scrollWidth>innerWidth'),false);
+    await evaluate('document.getElementById("optimalParameterSection").scrollIntoView({block:"start"})');await shot('lqr-parameters-mobile');
+    await evaluate('document.querySelector("#settingsDialog .dialog-scroll").scrollTop=0;document.getElementById("controlAlgorithmSelect").value="0"');
+    await until('!document.getElementById("applyControlAlgorithm").disabled');await evaluate('document.getElementById("applyControlAlgorithm").click()');
+    await until('!boatMonitor.params.lqrActive&&!boatMonitor.params.busy&&document.getElementById("optimalParameterSection").hidden');
+    assert.equal(await evaluate('document.querySelector("[data-key=kpX2PerMps]").value'),'91');
     assert.equal(await evaluate('document.documentElement.scrollWidth>innerWidth'),false);await shot('cloud-parameters-mobile-flash');
     await until('!document.getElementById("writeParameters").disabled');fixture.loseResponse=true;const before=fixture.calls.length;
     await evaluate('document.querySelector("[data-key=kpX2PerMps]").value="92";document.getElementById("writeParameters").click()');await until('document.getElementById("parameterStatus").textContent.includes("写入可能已生效")&&!boatMonitor.params.busy');
@@ -62,7 +98,7 @@ async function main(){
     await evaluate('document.getElementById("accountLoginOpen").click()');await login('observer','browser-guest-test-only');
     const count=fixture.calls.length;assert.match(await evaluate('boatMonitor.link.request("read").then(()=>"unexpected",error=>error.message)'),/访客/);assert.equal(fixture.calls.length,count);
     assert.equal(await evaluate('document.getElementById("settingsToggle").hidden'),true);assert.deepEqual(errors,[]);
-    console.log('Chrome cloud parameters passed: real local auth/API/SSE, 1440px/320px, admin read/write/Flash and MCU refusal, consumed-token capability transition, unknown write result requires read, guest denied.');
+    console.log('Chrome cloud parameters passed: real local auth/API/SSE, PID/LQR actual-ACK forms, 15 online model fields and 12 common limits, engineering units, model refusal, Flash, preserved PID, 1440px/320px, token transition, unknown write recovery, guest denied.');
   }finally{clearInterval(feed);socket?.close();browser.kill();server.closeAllConnections?.();await new Promise(resolve=>server.close(resolve));}
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

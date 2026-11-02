@@ -7,6 +7,7 @@ class ParameterPanel {
     this.storageKey='unmanned_boat_web_presets_v1';
     this.slots=[null,null,null];
     this.build();
+    this.optimalPanel=new window.OptimalParameterPanel(this);
     try {
       const saved=JSON.parse(localStorage.getItem(this.storageKey));
       if(Array.isArray(saved))this.slots=this.slots.map((_,i)=>saved[i]&&this.valid(saved[i].values)?saved[i]:null);
@@ -17,6 +18,7 @@ class ParameterPanel {
     return !!values&&this.keys.every(k=>Number.isInteger(values[k])&&values[k]>=this.config.ranges[k][0]&&values[k]<=this.config.ranges[k][1]);
   }
   build() {
+    this.groupUI=[];
     const box=document.getElementById('parameterFields');
     const groups=[
       {title:'速度闭环',note:'前馈、PID、船速限制与输出变化',keys:['feedforwardX2PerMps','kpX2PerMps','kiX2PerMpsS','kdX2PerMps2','integralLimitX2','correctionLimitX2','outputLimitX2','outputSlewStepX2','maxTargetMmS','targetSlewStepMmS']},
@@ -48,6 +50,7 @@ class ParameterPanel {
         row.append(hint);grid.append(row);
       }
       const note=document.createElement('p');note.className='parameter-group-note';note.textContent=group.note;
+      this.groupUI.push({keys,count,note,group});
       fieldset.append(legend,note,grid);box.append(fieldset);
     }
     const helpBox=document.getElementById('parameterHelp');
@@ -75,6 +78,7 @@ class ParameterPanel {
   fill(values) {this.inputs().forEach(el=>el.value=String(values[el.dataset.key]));}
   matches(values) {return this.confirmed&&this.keys.every(k=>values[k]===this.confirmed[k]);}
   reset(preserveDraft=false) {
+    this.optimalPanel?.reset(preserveDraft);
     if(preserveDraft&&this.confirmed){try{this.localDraft=this.form();}catch(_){this.localDraft={...this.confirmed};this.fill(this.localDraft);}}
     this.confirmed=null;
     if(!preserveDraft){this.localDraft=null;this.inputs().forEach(el=>el.value='');}
@@ -103,6 +107,19 @@ class ParameterPanel {
     select.options[1].disabled=!state?.lqrAvailable;
     select.disabled=!supported||this.busy||this.link.readOnly||!this.link.connected;
     document.getElementById('applyControlAlgorithm').disabled=select.disabled;
+    // 只按船端已确认的算法切换表单；选择框草稿不改变可调参数。
+    this.lqrActive=supported&&state.id===1;
+    const pidKeys=new Set(['feedforwardX2PerMps','kpX2PerMps','kiX2PerMpsS','kdX2PerMps2','headingKpX100','headingKiX100','headingKdX100','headingIntegralLimitX2']);
+    this.inputs().forEach(input=>{const row=input.closest?.('.parameter-field');if(row)row.hidden=this.lqrActive&&pidKeys.has(input.dataset.key);});
+    for(const item of this.groupUI||[]){
+      item.count.textContent=item.keys.filter(k=>!this.lqrActive||!pidKeys.has(k)).length+' 项';
+      item.note.textContent=this.lqrActive?(item.group.title==='速度闭环'?'LQI与PID共用的速度、积分修正及输出限制':item.group.title==='航向控制'?'两套算法共用的死区、差速上限和转向方向':item.group.note):item.group.note;
+    }
+    document.getElementById('fillTuning').hidden=!!this.lqrActive;
+    for(const [id,pid,lqr]of [['readParameters','读取参数','读取通用参数'],['writeParameters','写入参数','写入通用参数'],['saveFlash','写入 Flash','保存通用参数到Flash']])document.getElementById(id).textContent=this.lqrActive?lqr:pid;
+    const presetTitle=document.getElementById('commonPresetTitle');if(presetTitle)presetTitle.textContent=this.lqrActive?'通用参数预设':'本地参数预设';
+    const hint=document.getElementById('commonParameterHeading');if(hint)hint.textContent=this.lqrActive?'通用限制与电机参数':'PID与电机参数';
+    this.optimalPanel?.setContext(this.lqrActive?1:0,state?.onlineTuning===true);
   }
   async applyAlgorithm(){
     window.BoatAuth?.assertManage();
@@ -151,7 +168,7 @@ class ParameterPanel {
       if(frame.status!==0)throw Object.assign(Error(errors[frame.status]||'设备返回未知状态'),{status:frame.status});
       if(!valid)throw Error('设备响应参数不完整或超出范围');
       this.fill(frame.parameters);
-      this.status(kind==='flash'?'已保存到 Flash，下次上电自动恢复':kind==='read'?'读取成功 · 已载入20项设备参数':'写入成功 · 已在设备运行中生效，尚未写入 Flash','success');
+      this.status(kind==='flash'?'已保存到 Flash，下次上电自动恢复':kind==='read'?(this.lqrActive?'读取成功 · 已载入通用参数，未使用的PID增益已隐藏':'读取成功 · 已载入20项设备参数'):'写入成功 · 已在设备运行中生效，尚未写入 Flash','success');
     } catch(error) {
       // 旧船请求被取消后的迟到异常不能从新船表单恢复出旧草稿。
       if(error.uncertain&&generation===this.link.generation){

@@ -34,6 +34,15 @@ test('一条船队SSE同时接收多船摘要，选择/断开单船不关闭总�
   assert.equal(h.fleet.state().devices.find(d=>d.id==='boat-a').summary.speedMps,3);
   assert.equal(h.fleet.state().devices.find(d=>d.id==='boat-b').summary.speedMps,2);
 });
+
+test('船队更新保留当前算法与在线调参能力，失联时清除，避免覆盖单船参数界面',async t=>{
+  const h=setup();t.after(()=>h.fleet.destroy());h.change();await flush();const stream=h.streams[0];
+  stream.send('fleet',h.packet([{...h.device('boat-a'),controlAlgorithm:{id:1,lqrAvailable:true,onlineTuning:true}}]));
+  assert.deepEqual({...h.fleet.state().devices[0].controlAlgorithm},{id:1,lqrAvailable:true,onlineTuning:true});
+  stream.send('fleet-device',{...h.packet([]),device:{...h.device('boat-a'),controlAlgorithm:{id:0,lqrAvailable:true}}});
+  assert.equal(h.fleet.state().devices[0].controlAlgorithm.id,0);
+  stream.send('fleet',{...h.packet([h.device('boat-a')]),brokerConnected:false});assert.equal(h.fleet.state().devices[0].controlAlgorithm,undefined);
+});
 test('全量替换可淘汰设备，独立源过期/非法字段保持未知',async t=>{
   const h=setup();t.after(()=>h.fleet.destroy());h.change();await flush();const stream=h.streams[0];
   const first=h.device('boat-a');first.summary.validUntil.speedMps=99999;first.summary.headingDegrees='90';

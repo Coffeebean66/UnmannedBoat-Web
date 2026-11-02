@@ -3,6 +3,7 @@
 const crypto=require('node:crypto');
 const nav=require('../public/utils/missionNavigation');
 const optimal=require('./optimal-guidance');
+const optimalParameters=require('../public/utils/optimalParameters');
 const {decodeParameterFrame}=require('../public/utils/uart4Protocol');
 const {fault}=require('./mission-store');
 const ACTIVE=new Set(['preparing','acquiring','running','stopping']);
@@ -48,7 +49,8 @@ class MissionService{
       status:'preparing',message:'正在读取船端最大速度参数',startedAt:this.now(),index:0,sequence:0,arrivalCount:0,controller:new AbortController(),
       algorithm:this.bridge.get(id).controlAlgorithm?.id??0,origin:{latitude:position.latitude,longitude:position.longitude},
       loopEnabled:action==='start'&&route.loopEnabled,loopCount:action==='start'&&route.loopEnabled?route.loopCount:1,completedLoops:0,phase:action==='goto'?'goto':'route'};
-    if(job.algorithm===1)job.optimal=optimal.create(route.speedMps);
+    job.onlineTuning=job.algorithm===1&&this.bridge.get(id).controlAlgorithm?.onlineTuning===true;
+    if(job.algorithm===1&&!job.onlineTuning)job.optimal=optimal.create(route.speedMps);
     this.jobs.set(id,job);
     // 限制仅在内存保留最近 128 艘船的结束状态，活动任务不会被驱逐。
     if(this.jobs.size>128)for(const [key,value]of this.jobs)if(!this.active(key)){this.jobs.delete(key);break;}
@@ -58,11 +60,12 @@ class MissionService{
   current(job){return !this.closed&&this.jobs.get(job.id)===job&&ACTIVE.has(job.status)&&job.status!=='stopping';}
   async prepare(job){
     // 只在点击执行时读取一次参数，在申请控制锁之前完成，不猜测满杆速度。
-    const packet=await this.bridge.requestParameters(job.id,'read',undefined,{signal:job.controller.signal});
+    const packet=await this.bridge.requestParameters(job.id,job.onlineTuning?'optimalRead':'read',undefined,{signal:job.controller.signal});
     if(!this.current(job))return;
-    const frame=decodeParameterFrame(packet),maximum=frame?.parameters?.maxTargetMmS;
+    const frame=job.onlineTuning?optimalParameters.response(packet):decodeParameterFrame(packet),maximum=job.onlineTuning?frame?.maxTargetMmS:frame?.parameters?.maxTargetMmS;
     if(frame?.status!==0||!Number.isInteger(maximum)||maximum<100||maximum>20000)throw fault(503,'读取船端最大速度失败，未接管');
     if(job.route.speedMps*1000>maximum)throw fault(409,'任务航速超过船端最大目标速度，请降低任务航速或先调参');
+    if(job.onlineTuning){job.optimalConfig=optimalParameters.guidanceConfig(frame.parameters);job.optimal=optimal.create(job.route.speedMps,job.optimalConfig);}
     const position=feedback(this.bridge,job.id,this.now());
     if((this.bridge.get(job.id).controlAlgorithm?.id??0)!==job.algorithm)throw fault(409,'船端算法已变化，请重新开始任务');
     if(job.action==='start'&&nav.distance(position,job.route.points[0])>job.route.arrivalRadiusM)throw fault(409,'船位已离开开始点范围，请重新前往开始点');

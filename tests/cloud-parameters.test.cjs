@@ -2,6 +2,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),{EventEmitter}=require('node:events'),http=require('node:http');
 const {CloudBridge}=require('../server/cloud'),{createServer}=require('../server');
 const PP=require('../server/parameter-protocol'),P=require('../public/utils/uart4Protocol'),A=require('../public/utils/controlAlgorithm');
+const O=require('../public/utils/optimalParameters');
 const ENV={BOAT_CLOUD_ENABLED:'1',BOAT_CLOUD_PASSWORD:'legacy-test-password-fixture',BOAT_CLOUD_ORIGIN:'https://boat.test',BOAT_MQTT_URL:'mqtt://broker.test:1883'};
 const ACCOUNT_ENV={...ENV,BOAT_ACCOUNTS_ENABLED:'1',BOAT_ADMIN_USERNAME:'test-admin',BOAT_ADMIN_PASSWORD:'test admin password',BOAT_GUEST_USERNAME:'test-guest',BOAT_GUEST_PASSWORD:'654321'};
 const TOKEN='0123456789abcdef',NEXT='fedcba9876543210';
@@ -9,8 +10,13 @@ const VALUES=Object.fromEntries(Object.entries(PP.RANGES).map(([key,[min]])=>[ke
 function telemetry(){const result=Buffer.alloc(176);for(const [offset,length,version,type]of [[0,64,1,1],[64,40,2,2],[104,36,2,3],[140,36,1,4]]){const frame=result.subarray(offset,offset+length);frame.set([0xa5,0x5a,version,type,length]);frame.writeUInt16LE(P.crc16CcittFalse(frame,2,length-4),length-2);}return result;}
 class FakeMQTT extends EventEmitter{constructor(){super();this.sent=[];this.connected=true;}subscribe(topics,options,callback){this.topics=topics;callback(null);}publish(topic,payload,options,callback){this.sent.push({topic,payload:Buffer.from(payload),options});if(this.onPublish)this.onPublish(this.sent.at(-1));callback?.(this.publishError);}end(){}}
 function bridgeFixture(t,options={}){let time=10000;const client=new FakeMQTT(),bridge=new CloudBridge({env:ENV,now:()=>time,connect:()=>client,tickMs:60000,...options});bridge.start();client.emit('connect');t.after(()=>bridge.stop());
-  return {bridge,client,now:()=>time,setTime:value=>{time=value;},cap(token=TOKEN,uptimeMs=5000,id='boat-01',packet={},extra={}){return bridge.acceptMessage('boats/'+id+'/parameter-capability',Buffer.from(JSON.stringify({version:1,token,uptimeMs,...extra})),packet);},live(id='boat-01'){bridge.acceptMessage('boats/'+id+'/telemetry',telemetry());},response(command=client.sent.at(-1),{status=0,sequence,token,uptimeMs,values=VALUES,kind,algorithm=1}={}){
+  return {bridge,client,now:()=>time,setTime:value=>{time=value;},cap(token=TOKEN,uptimeMs=5000,id='boat-01',packet={},extra={}){return bridge.acceptMessage('boats/'+id+'/parameter-capability',Buffer.from(JSON.stringify({version:1,token,uptimeMs,...extra})),packet);},live(id='boat-01'){bridge.acceptMessage('boats/'+id+'/telemetry',telemetry());},response(command=client.sent.at(-1),{status=0,sequence,token,uptimeMs,values=VALUES,kind,algorithm=1,optimalValues=O.defaults}={}){
     const result=Buffer.from(command.payload),isAlgorithm=kind?kind==='algorithm':command.payload[19]===0x13;
+    if(kind?kind.startsWith('optimal'):command.payload[19]>=0x14&&command.payload[19]<=0x16){
+      const frame=Buffer.from(O.command('optimalWrite',sequence??command.payload.readUInt32LE(22),optimalValues));
+      frame[3]=0x92;frame[5]=status;frame.writeUInt16LE(2500,44);frame.writeUInt16LE(P.crc16CcittFalse(frame,2,52),54);frame.copy(result,16);
+      if(token)Buffer.from(token,'hex').copy(result,4);if(uptimeMs!==undefined)result.writeUInt32LE(uptimeMs,12);return result;
+    }
     const frame=Buffer.from(isAlgorithm?A.command(sequence??command.payload.readUInt32LE(22),algorithm):P.encodeParameterWriteRequest(sequence??command.payload.readUInt32LE(22),values));frame[3]=isAlgorithm?0x91:0x90;frame[5]=status;frame.writeUInt16LE(P.crc16CcittFalse(frame,2,52),54);frame.copy(result,16);if(token)Buffer.from(token,'hex').copy(result,4);if(uptimeMs!==undefined)result.writeUInt32LE(uptimeMs,12);return result;
   }};
 }
@@ -21,6 +27,30 @@ async function apiFixture(t,{accounts=true,accountOptions={},...bridgeOptions}={
   const port=server.address().port;return {...f,port,server,call:(route,options)=>request(port,route,options),async login(role='admin'){const response=await request(port,accounts?'/api/auth/login':'/api/cloud/login',{method:'POST',body:accounts?{username:role==='admin'?'test-admin':'test-guest',password:role==='admin'?'test admin password':'654321'}:{password:ENV.BOAT_CLOUD_PASSWORD}});assert.equal(response.status,200,response.raw);return response.headers['set-cookie'][0].split(';')[0];},operate:(cookie,body={deviceId:'boat-01',kind:'read'},extra={})=>request(port,'/api/cloud/parameters',{method:'POST',cookie,body,...extra})};
 }
 async function until(predicate){const end=Date.now()+1000;while(!predicate()){if(Date.now()>end)throw Error('Timed out');await new Promise(resolve=>setTimeout(resolve,2));}}
+
+test('LQR operations require explicit capability, preserve per-boat identity and reject a legacy parameter ACK',async t=>{
+  const f=bridgeFixture(t);f.live();f.cap();await assert.rejects(f.bridge.requestParameters('boat-01','optimalRead'),{status:409});assert.equal(f.client.sent.length,0);
+  const cap={algorithm:1,lqr:true,optimalParameters:1};f.cap(TOKEN,5000,'boat-01',{},cap);
+  assert.equal(f.bridge.get('boat-01').controlAlgorithm.onlineTuning,true);
+  f.live('boat-02');f.cap(NEXT,5100,'boat-02',{},cap);
+  const pending=f.bridge.requestParameters('boat-01','optimalWrite',O.defaults),command=f.client.sent.at(-1);
+  assert.equal(command.payload[19],0x15);
+  assert.equal(f.bridge.acceptMessage('boats/boat-01/parameter-response',f.response(command,{kind:'read'})),false);
+  assert.equal(f.bridge.acceptMessage('boats/boat-02/parameter-response',f.response(command)),false);
+  assert.equal(f.bridge.acceptMessage('boats/boat-01/parameter-response',f.response(command,{status:6})),true);
+  assert.equal(O.response(await pending).status,6);assert.equal(f.bridge.get('boat-02').parametersReady,true);
+  f.cap(NEXT,5200,'boat-01',{},cap);const flash=f.bridge.requestParameters('boat-01','optimalFlash',O.defaults);
+  assert.equal(f.client.sent.at(-1).payload[19],0x16);f.bridge.acceptMessage('boats/boat-01/parameter-response',f.response());await flash;
+});
+
+test('LQR HTTP retains admin/guest/origin guards, validates all model fields and returns matching MCU status',async t=>{
+  const f=await apiFixture(t),admin=await f.login(),guest=await f.login('guest'),body={deviceId:'boat-01',kind:'optimalWrite',values:O.defaults};
+  f.live();f.cap(TOKEN,5000,'boat-01',{}, {algorithm:1,lqr:true,optimalParameters:1});
+  assert.equal((await f.operate(guest,body)).status,403);assert.equal((await f.operate(admin,body,{origin:'https://evil.test'})).status,403);
+  assert.equal((await f.operate(admin,{...body,values:{...O.defaults,speedTauMs:0}})).status,400);assert.equal(f.client.sent.length,0);
+  const waiting=f.operate(admin,body);await until(()=>f.client.sent.length===1);f.bridge.acceptMessage('boats/boat-01/parameter-response',f.response(undefined,{status:3}));
+  const result=await waiting;assert.equal(result.status,200);assert.equal(O.response(Buffer.from(result.json.frame,'base64')).status,3);
+});
 
 test('BPC1 protocol validates exact capability, complete typed ranges and CRC response',()=>{
   const cap=Buffer.from(JSON.stringify({version:1,token:TOKEN,uptimeMs:0xffffffff}));assert.deepEqual(PP.capability(cap),{token:TOKEN,uptimeMs:0xffffffff});

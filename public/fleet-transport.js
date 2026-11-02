@@ -38,6 +38,9 @@
         parametersReady:device.parametersReady===true,summary:null,
         // 视频地址独立于遥测时效；视频更新不能续期船速、定位或设备在线状态。
         video:device.video&&typeof device.video==='object'&&!Array.isArray(device.video)?{...device.video}:null};
+      const algorithm=device.controlAlgorithm;
+      if(result.online&&algorithm&&[0,1].includes(algorithm.id)&&typeof algorithm.lqrAvailable==='boolean')
+        result.controlAlgorithm={id:algorithm.id,lqrAvailable:algorithm.lqrAvailable,...(algorithm.onlineTuning===true?{onlineTuning:true}:{})};
       const source=device.summary;
       if(!result.online||!source||!Number.isFinite(source.receivedAt)||serverTime-source.receivedAt>=1000)return result;
       const summary={receivedAt:source.receivedAt,validUntil:{}};
@@ -71,7 +74,7 @@
       this.message=this.brokerConnected?'正在接收全部无人船的实时状态':'服务器与 MQTT Broker 的连接已断开';
       this.notify();
     }
-    invalidateDevices(){for(const [id,device]of this.devices)this.devices.set(id,{...device,online:false,parametersReady:false,summary:null});}
+    invalidateDevices(){for(const [id,device]of this.devices)this.devices.set(id,{...device,online:false,parametersReady:false,controlAlgorithm:undefined,summary:null});}
     start() {
       const token=++this.generation;
       this.lastServerTime=0;this.message='正在连接船队监测通道';this.notify();
