@@ -28,6 +28,58 @@ const list=(f,cookie,options={})=>f.call('/api/auth/users',{cookie,...options});
 const create=(f,cookie,values={})=>f.call('/api/auth/users',{method:'POST',cookie,body:{username:'operator.one',password:'new user password test only',role:'guest',...values}});
 const edit=(f,cookie,id,values)=>f.call('/api/auth/users/'+id,{method:'PATCH',cookie,body:values});
 
+test('driver accounts persist across restart, cannot manage platform settings and cannot replace the last administrator',async t=>{
+  const f=await fixture(t),admin=await f.login();
+  assert.equal((await create(f,admin,{role:'driver'})).status,201);
+  await f.restart();const fresh=await f.login(),driver=await f.login('operator.one','new user password test only');
+  assert.equal((await f.call('/api/auth/config',{cookie:driver})).data.user.role,'driver');
+  for(const route of ['/api/auth/users','/api/auth/online','/api/map/settings','/api/mqtt/devices'])assert.equal((await f.call(route,{cookie:driver})).status,403,route);
+  assert.equal((await create(f,driver,{username:'not.allowed'})).status,403);
+  const snapshot=(await list(f,fresh)).data;
+  assert.equal((await edit(f,fresh,snapshot.currentUserId,{username:ADMIN,role:'driver'})).status,409);
+  const user=snapshot.users.find(item=>item.role==='driver');
+  assert.equal((await edit(f,fresh,user.id,{username:user.username,role:'guest'})).status,200);
+  assert.equal((await f.call('/api/cloud/devices',{cookie:driver})).status,401,'role changes revoke previous driver sessions');
+});
+
+test('online users merge browsers, count only recent activity and drop logged-out or revoked sessions immediately',async t=>{
+  const f=await fixture(t),admin=await f.login();await create(f,admin,{role:'driver'});
+  const driver=await f.login('operator.one','new user password test only'),driver2=await f.login('operator.one','new user password test only'),guest=await f.login(GUEST,GUEST_PASSWORD);
+  assert.equal((await f.call('/api/auth/online')).status,401);
+  assert.equal((await f.call('/api/auth/online',{cookie:guest})).status,403);
+  assert.equal((await f.call('/api/auth/online',{cookie:admin,origin:'https://evil.test'})).status,403);
+  assert.equal((await f.call('/api/auth/online',{cookie:admin,origin:null,headers:{'sec-fetch-site':'cross-site'}})).status,403);
+  let result=await f.call('/api/auth/online',{cookie:admin,origin:null});
+  assert.equal(result.status,200);assert.equal(result.data.userCount,3);assert.equal(result.data.sessionCount,4);
+  assert.equal(result.data.users.find(user=>user.role==='driver').sessionCount,2);
+  assert.doesNotMatch(result.raw,/password|credential|cookie|token|salt|key|ipAddress/i);
+  assert.equal((await f.call('/api/auth/online',{cookie:admin,method:'POST',body:{}})).status,405);
+  assert.equal((await f.call('/api/auth/online?include=secrets',{cookie:admin})).status,400);
+  f.advance(90001);
+  result=await f.call('/api/auth/online',{cookie:admin});assert.equal(result.data.userCount,1);assert.equal(result.data.sessionCount,1);
+  assert.equal((await f.call('/api/cloud/devices',{cookie:driver})).status,200,'online timeout does not terminate an otherwise valid login');
+  result=await f.call('/api/auth/online',{cookie:admin});assert.equal(result.data.userCount,2);assert.equal(result.data.sessionCount,2);
+  await f.call('/api/auth/session',{cookie:driver,method:'DELETE'});
+  assert.equal((await f.call('/api/auth/online',{cookie:admin})).data.userCount,1);
+  assert.equal((await f.call('/api/cloud/devices',{cookie:driver2})).status,200);
+  const snapshot=(await list(f,admin)).data,user=snapshot.users.find(item=>item.role==='driver');
+  await edit(f,admin,user.id,{username:user.username,role:'guest'});
+  assert.equal((await f.call('/api/auth/online',{cookie:admin})).data.userCount,1);
+  f.advance(12*60*60*1000);assert.equal((await f.call('/api/auth/online',{cookie:admin})).status,401,'presence never extends the login lifetime');
+});
+
+test('SSE heartbeat keeps an idle viewer online; closing the connection allows its presence to expire',async t=>{
+  const f=await fixture(t),admin=await f.login(),guest=await f.login(GUEST,GUEST_PASSWORD);
+  const stream=await new Promise((resolve,reject)=>{
+    const req=http.get({hostname:'127.0.0.1',port:f.port,path:'/api/cloud/events?device=boat-01',headers:{Cookie:guest}},res=>{res.on('data',()=>{});resolve({req,res});});req.on('error',reject);
+  });
+  t.after(()=>{stream.res.destroy();stream.req.destroy();});
+  f.advance(90001);await new Promise(resolve=>setTimeout(resolve,40));
+  assert.equal((await f.call('/api/auth/online',{cookie:admin})).data.userCount,2);
+  stream.res.destroy();stream.req.destroy();await new Promise(resolve=>setTimeout(resolve,20));f.advance(90001);
+  assert.equal((await f.call('/api/auth/online',{cookie:admin})).data.userCount,1);
+});
+
 test('user management requires an administrator, while same-origin browser GET needs no Origin header',async t=>{
   const f=await fixture(t),admin=await f.login(),guest=await f.login(GUEST,GUEST_PASSWORD);
   assert.equal((await list(f,undefined)).status,401);assert.equal((await list(f,guest)).status,403);

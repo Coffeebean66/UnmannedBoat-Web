@@ -34,7 +34,7 @@
       this.auth?.addEventListener('change', this.onAuth); this.render();
     }
     _identity() { return JSON.stringify([this.auth?.generation, this.auth?.enabled, this.auth?.ready, this.auth?.user?.username, this.auth?.user?.role]); }
-    admin() { return !this.destroyed && this.auth?.enabled === true && this.auth?.ready === true && this.auth.user?.role === 'admin'; }
+    admin() { return !this.destroyed && this.auth?.enabled === true && this.auth?.ready === true && ['admin', 'driver'].includes(this.auth.user?.role); }
     listen(id, event, handler) { const node = this.nodes[id]; node.addEventListener(event, handler); this.listeners.push([node, event, handler]); }
     notice(text, tone = 'neutral') { this.nodes.firmwareStatus.textContent = text; this.nodes.firmwareStatus.dataset.tone = tone; }
     _stopPoll() { if (this.poll !== null) this.clearTimer(this.poll); this.poll = null; }

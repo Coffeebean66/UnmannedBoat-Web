@@ -89,6 +89,19 @@ async function fixture(t, options = {}) {
     setUnavailable: value => { unavailable = value; }, setDeleteStatus: value => { deleteStatus = value; } };
 }
 
+test('driver can start, stop and delete boat recordings without reading or changing the platform directory', async t => {
+  const f = await fixture(t), admin = await f.login();
+  assert.equal((await f.call('/api/auth/users', { cookie: admin, method: 'POST', body: { username: 'pilot', password: 'driver-recording-test', role: 'driver' } })).status, 201);
+  const login = await f.call('/api/auth/login', { method: 'POST', body: { username: 'pilot', password: 'driver-recording-test' } });
+  assert.equal(login.status, 200); const cookie = login.headers['set-cookie'][0].split(';')[0];
+  const config = await f.call(PREFIX + '/config', { cookie }); assert.equal(config.status, 200); assert.equal(config.data.directory, undefined);
+  assert.equal((await f.call(PREFIX + '/config', { cookie, method: 'PATCH', body: { directory: ROOT + '/forbidden' } })).status, 403);
+  assert.equal((await f.start(cookie)).status, 200); f.addClip(); assert.equal((await f.stop(cookie)).status, 200);
+  const result = await f.call(PREFIX + '/boats/boat-01', { cookie }); assert.equal(result.data.segments.length, 1);
+  assert.equal((await f.call(PREFIX + '/boats/boat-01/clips/' + result.data.segments[0].id, { cookie, method: 'DELETE' })).status, 200);
+  assert.equal((await f.call(PREFIX + '/boats/boat-01', { cookie })).data.segments.length, 0);
+});
+
 test('only normalized absolute subdirectories are accepted; private state paths follow configured precedence', () => {
   assert.equal(normalizeDirectory(ROOT + '/recordings/trip_01-2026'), ROOT + '/recordings/trip_01-2026');
   for (const value of ['/etc/recordings', '/var/lib/unmanned-boat-video-other', ROOT + '/a/../b', ROOT + '//x', ROOT + '/.', ROOT + '/a/', ROOT + '/%path', ROOT + '/x\ny', 'relative', ROOT + '/a\\b', ROOT + '/中文']) assert.equal(normalizeDirectory(value), null, value);

@@ -59,6 +59,18 @@ test('old password-only cloud/update routes and forged role fields cannot bypass
   assert.equal((await f.call('/api/update/check',{method:'POST',cookie:guest,body:{},headers:{'x-boat-role':'admin'}})).status,403);
 });
 
+test('drivers can check and start platform updates just like administrators but cannot change platform settings',async t=>{
+  const f=await fixture(t),admin=await f.login();
+  assert.equal((await f.call('/api/auth/users',{method:'POST',cookie:admin,body:{username:'pilot',role:'driver',password:'driver test password'}})).status,201);
+  const response=await f.call('/api/auth/login',{method:'POST',body:{username:'pilot',password:'driver test password'}});assert.equal(response.status,200);
+  const cookie=response.headers['set-cookie'][0].split(';')[0];
+  assert.equal((await f.call('/api/update/status',{cookie})).status,200);
+  assert.equal((await f.call('/api/update/check',{method:'POST',cookie,body:{}})).status,200);
+  assert.equal((await f.call('/api/update/start',{method:'POST',cookie,body:{expectedCommit:LATEST}})).status,202);
+  assert.equal((await f.call('/api/auth/users',{cookie})).status,403);
+  assert.equal((await f.call('/api/map/settings',{cookie})).status,403);
+});
+
 test('account writes require exact same origin; login input and attempts are bounded',async t=>{
   const f=await fixture(t);
   for(const origin of [null,'https://evil.test'])assert.equal((await f.call('/api/auth/login',{method:'POST',origin,body:{username:ADMIN,password:ADMIN_PASSWORD}})).status,403);

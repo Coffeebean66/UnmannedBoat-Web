@@ -39,7 +39,7 @@
       if(window.BoatWorkspace?.current==='missions')this.initializeMap();
     }
     blank(){return {name:'新航线',speedMps:1,arrivalRadiusM:3,loopEnabled:false,loopCount:1,points:[]};}
-    get admin(){return window.BoatAuth?.enabled===true&&BoatAuth.ready&&BoatAuth.user?.role==='admin';}
+    get admin(){return window.BoatAuth?.enabled===true&&BoatAuth.ready&&['admin','driver'].includes(BoatAuth.user?.role);}
     run(){return this.runs.find(r=>r.deviceId===this.deviceId);}
     navigationState(){
       const run=this.admin?this.run():null;
@@ -188,8 +188,8 @@
       this.renderRunningBar();
       window.dispatchEvent(new CustomEvent('boat-mission-change',{detail:this.navigationState()}));
       if(this.storageError)this.notice(this.storageError,true);
-      else if(BoatAuth.enabled===false)this.notice('航线任务需要在服务器启用平台账户，并使用管理员登录。');
-      else if(!this.admin)this.notice('航线任务界面仅供管理员使用。');
+      else if(BoatAuth.enabled===false)this.notice('航线任务需要启用平台账户，并使用管理员或驾驶员登录。');
+      else if(!this.admin)this.notice('航线任务界面仅供管理员或驾驶员使用。');
     }
     renderRunningBar(){
       const bar=$('missionActiveBar'),runs=this.admin?this.runs.filter(r=>r.active):[],keys=new Set(runs.map(r=>r.runId));bar.hidden=!runs.length;

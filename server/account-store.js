@@ -1,6 +1,7 @@
 /* 账户库与源码分开保存；密码只保存加盐的 scrypt 派生值，更新网页不会覆盖。 */
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto');
+const {validRole}=require('./account-permissions');
 const MAX_USERS=64,MAX_FILE_BYTES=65536,USERNAME=/^[A-Za-z0-9_.-]{1,64}$/,ID=/^[a-f0-9]{32}$/;
 const digest=value=>crypto.createHash('sha256').update(value).digest();
 const failure=(status,message)=>Object.assign(Error(message),{status});
@@ -26,7 +27,7 @@ function validateStore(value){
   if(!exact(value,['version','revision','users'])||value.version!==1||!Number.isSafeInteger(value.revision)||value.revision<1||!Array.isArray(value.users)||value.users.length<1||value.users.length>MAX_USERS)throw Error('Invalid account store');
   const names=new Set(),ids=new Set();let administrators=0;
   for(const user of value.users){
-    if(!exact(user,['id','username','role','credential'])||typeof user.id!=='string'||!ID.test(user.id)||typeof user.username!=='string'||!USERNAME.test(user.username)||!['admin','guest'].includes(user.role)||names.has(user.username)||ids.has(user.id))throw Error('Invalid account record');
+    if(!exact(user,['id','username','role','credential'])||typeof user.id!=='string'||!ID.test(user.id)||typeof user.username!=='string'||!USERNAME.test(user.username)||!validRole(user.role)||names.has(user.username)||ids.has(user.id))throw Error('Invalid account record');
     const c=user.credential;
     if(!exact(c,['scheme','salt','key'])||c.scheme!=='scrypt-sha256-v1'||typeof c.salt!=='string'||!/^[a-f0-9]{32}$/.test(c.salt)||typeof c.key!=='string'||!/^[a-f0-9]{128}$/.test(c.key))throw Error('Invalid password hash');
     names.add(user.username);ids.add(user.id);if(user.role==='admin')administrators++;

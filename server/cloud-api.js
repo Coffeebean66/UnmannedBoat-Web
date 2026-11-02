@@ -4,6 +4,7 @@ const crypto=require('node:crypto');
 const {isIP}=require('node:net');
 const {DEVICE_ID}=require('./cloud');
 const {readVideoConfig}=require('./video-protocol');
+const {canOperate}=require('./account-permissions');
 const COOKIE='boat_cloud_session';
 const hash=value=>crypto.createHash('sha256').update(value).digest();
 function createCloudApi({bridge,env=process.env,now=Date.now,maxSessions=128,maxClients=64,maxClientsPerSession=4,sessionMs=12*60*60*1000,heartbeatMs=15000,accounts}={}){
@@ -116,16 +117,16 @@ function createCloudApi({bridge,env=process.env,now=Date.now,maxSessions=128,max
     if(!enabled||closed){json(res,503,{error:'Cloud telemetry is not enabled'});return true;}
     if(url.pathname==='/api/cloud/parameters'&&req.method==='POST'){
       const shared=accountMode?accounts.sessionFor(req):null;
-      if(!shared||shared.value.role!=='admin'){json(res,accountMode&&!shared?401:403,{error:'仅管理员账户可以操作云端参数'});return true;}
+      if(!shared||!canOperate(shared.value)){json(res,accountMode&&!shared?401:403,{error:'仅管理员或驾驶员可以操作云端参数'});return true;}
       if(!accounts.sameOrigin(req)){json(res,403,{error:'请从本站发起参数操作'});return true;}
       let input;try{input=await readJson(req,2048);}catch(error){json(res,error.status,{error:'参数请求格式不正确'});return true;}
-      if(!accounts.isActive(shared)||shared.value.role!=='admin'||closed){json(res,401,{error:'登录会话已失效，请重新登录'});return true;}
+      if(!accounts.isActive(shared)||!canOperate(shared.value)||closed){json(res,401,{error:'登录会话已失效，请重新登录'});return true;}
       if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['deviceId','kind','values'].includes(key))){json(res,400,{error:'参数请求字段不正确'});return true;}
       const operation={key:shared.key,controller:new AbortController()};parameterOperations.add(operation);
       const onClose=()=>{if(!res.writableEnded)operation.controller.abort();};res.once('close',onClose);
       try{
         const frame=await bridge.requestParameters(input.deviceId,input.kind,input.values,{signal:operation.controller.signal});
-        if(!accounts.isActive(shared)||shared.value.role!=='admin'){json(res,401,{error:'登录会话已失效，结果未知，请重新读取参数'});return true;}
+        if(!accounts.isActive(shared)||!canOperate(shared.value)){json(res,401,{error:'登录会话已失效，结果未知，请重新读取参数'});return true;}
         if(!res.destroyed)json(res,200,{frame:frame.toString('base64'),serverTime:now()});
       }catch(error){if(!res.destroyed)json(res,[400,409,503,504].includes(error.status)?error.status:503,{error:error.status?error.message:'参数操作未完成，请读取确认'});}
       finally{parameterOperations.delete(operation);res.removeListener('close',onClose);}return true;
@@ -190,6 +191,7 @@ function createCloudApi({bridge,env=process.env,now=Date.now,maxSessions=128,max
       client.timer=setInterval(()=>{
         if(!activeKey(client.key))return closeClient(client);
         if(client.backpressured||!res.write(': heartbeat\n\n'))closeClient(client,true);
+        else if(accountMode)accounts.touchKey?.(client.key);
       },heartbeatMs);client.timer.unref?.();
       return true;
     }

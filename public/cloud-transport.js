@@ -38,7 +38,7 @@
     get busy(){return !!this.connecting||!!this.pending;}
     get parameterReadOnlyReason(){
       if(window.BoatAuth?.enabled!==true)return '此云端当前仅支持只读监测；调参需要启用管理员账户和新版固件';
-      if(!window.BoatAuth.canManage)return '访客账户仅可监测，云端调参需要管理员权限';
+      if(!window.BoatAuth.canManage)return '访客账户仅可监测，云端调参需要管理员或驾驶员权限';
       if(!this.configurationKnown||!this.enabled)return '服务器云端配置尚未确认，暂不能操作参数';
       if(this.pending)return '正在等待当前参数操作的设备确认，请稍候';
       if(!this.parametersReady&&this.parameterCapableId===this.selectedId)return '当前设备调参暂未就绪，请稍候后读取；若持续不可用，请检查设备连接';
@@ -205,7 +205,7 @@
           if(bytes.length!==176)return;
           const frames=this.parser.push(bytes).filter(frame=>!frame.parameters);
           if(!frames.length)return;
-          this.lastPayloadAt=now-age;this.message=this.readOnly?'云端实时遥测 · 只读监测':'云端实时遥测 · 管理员可远程调参';
+          this.lastPayloadAt=now-age;this.message=this.readOnly?'云端实时遥测 · 只读监测':'云端实时遥测 · 可远程调参';
           if(!this.live){this.live=true;this.emit('connection',{connected:true,id:'cloud:'+this.selectedId,name:this.selectedId,readOnly:this.readOnly,source:'cloud'});}
           for(const frame of frames){
             frame.receivedAtMonotonic=now-age;

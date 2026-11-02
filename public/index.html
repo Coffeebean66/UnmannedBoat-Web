@@ -46,6 +46,7 @@
   <script defer src="map-mission-view.js"></script>
   <script defer src="map-settings.js"></script>
   <script defer src="user-management.js"></script>
+  <script defer src="online-users.js"></script>
   <script defer src="mqtt-device-settings.js"></script>
   <script defer src="video-device-settings.js"></script>
   <script defer src="fleet-view.js"></script>
@@ -103,7 +104,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.42.0</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.43.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -320,7 +321,7 @@
         </article>
         <article class="card driver-console" aria-label="驾驶操控控制台">
           <div class="driver-console-heading"><div><span class="driver-eyebrow">PILOT STATION</span><h2>驾驶操控</h2></div><span id="driverState" class="driver-state" data-state="idle">监测待机</span><div class="driver-actions"><button id="driverTestMode" type="button" class="driver-test-mode" aria-pressed="false" title="真实 PWM 开环，跳过电调反馈和停稳检查；先停止操控才能切换" hidden disabled>测试场景：关</button><button id="driverEnable" type="button" class="primary" disabled>启用操控</button><button id="driverRelease" type="button" class="ghost" disabled>停船并退出操控</button><button id="driverEmergency" type="button" class="driver-emergency" disabled><span data-icon="power"></span>急停 · SPACE</button></div></div>
-          <p id="driverNotice" class="driver-notice" role="status" aria-live="polite">选择在线无人船，由管理员启用操控后使用键盘驾驶。</p>
+          <p id="driverNotice" class="driver-notice" role="status" aria-live="polite">选择在线无人船，由管理员或驾驶员启用操控后使用键盘驾驶。</p>
           <button id="driverMissionStop" type="button" class="mission-danger" hidden>停止服务器航线任务 · SPACE</button>
           <p id="driverTestNotice" class="driver-test-notice" role="status" hidden>测试场景 · 真实 PWM 输出 · 电调反馈 / RTK / IMU 可离线。<span id="driverTestAck">尚未接管</span></p>
           <div class="driver-inputs"><label>控制模式<select id="driverMode"><option value="0">PWM 油门</option><option value="1" selected>船速闭环</option><option value="2">航向闭环</option></select></label><label class="driver-limit">运动幅度 <output id="driverLimitValue" for="driverLimit">20%</output><input id="driverLimit" type="range" min="5" max="100" step="5" value="20" aria-label="键盘运动幅度百分比"></label><label class="driver-heading">目标航向 · 真北<input id="driverHeading" type="number" min="0" max="359.99" step="1" value="0" inputmode="decimal"><span>°</span></label><button id="driverHoldHeading" type="button" class="small-button">取当前航向</button><div class="driver-keyboard" aria-label="键盘操作说明"><div class="driver-key-row"><kbd data-driver-key="KeyW">W / ↑</kbd></div><div class="driver-key-row"><kbd data-driver-key="KeyA">A / ←</kbd><kbd data-driver-key="KeyS">S / ↓</kbd><kbd data-driver-key="KeyD">D / →</kbd></div><span>按住运动，松开归零</span></div></div>
@@ -408,7 +409,7 @@
   <dialog id="accountLoginDialog" class="account-login-dialog" aria-labelledby="accountLoginTitle">
     <form id="accountLoginForm">
       <div class="dialog-head"><div><p class="eyebrow">PLATFORM ACCOUNT</p><h2 id="accountLoginTitle">登录无人船监测平台</h2></div><button id="accountLoginClose" type="button" class="ghost" aria-label="关闭账户登录窗口">关闭</button></div>
-      <div class="account-login-body"><p class="muted">管理员可监测、通过 MQTT 云端调参和更新平台；访客可查看实时监测。密码仅用于本次登录，不保存在浏览器中。</p><label>账户<input id="accountUsername" type="text" autocomplete="username" required maxlength="64"></label><label>密码<input id="accountPassword" type="password" autocomplete="off" required maxlength="256"></label><p id="accountLoginError" class="muted" role="alert"></p></div>
+      <div class="account-login-body"><p class="muted">管理员拥有全部权限；驾驶员可驾驶、执行任务、调参、管理录像及升级，平台设置仅限管理员；访客仅可监测。密码不保存在浏览器中。</p><label>账户<input id="accountUsername" type="text" autocomplete="username" required maxlength="64"></label><label>密码<input id="accountPassword" type="password" autocomplete="off" required maxlength="256"></label><p id="accountLoginError" class="muted" role="alert"></p></div>
       <div class="dialog-actions"><button id="accountLoginSubmit" class="primary" type="submit">登录</button></div>
     </form>
   </dialog>
@@ -420,7 +421,7 @@
           <div class="user-management-title"><span class="card-icon blue" data-icon="settings"></span><div><h3 id="userManagementTitle">用户与账户</h3><p>PLATFORM USERS · 仅管理员可操作</p></div></div>
           <div class="user-management-heading-actions"><button id="userManagementRead" type="button" class="subtle">重新读取</button><button id="userManagementCreate" type="button" class="primary" disabled>新建用户</button></div>
         </div>
-        <p class="user-management-description">管理登录平台的账户，无需连接无人船。管理员可调参、更新平台和管理用户，访客仅可查看监测；至少保留一位管理员。</p>
+        <p class="user-management-description">管理员拥有全部权限；驾驶员可驾驶、执行任务、调参、升级船端固件、管理录像和更新平台；访客仅可查看监测。用户、设备接入、地图和录像目录等平台设置仅限管理员；至少保留一位管理员。</p>
         <p id="userManagementAccess" class="user-management-access" hidden></p>
         <div id="userManagementContent" hidden>
           <div class="user-management-summary"><strong id="userManagementCount">尚未读取</strong><span>修改后保存在服务器，重启与网页更新后保留</span></div>
@@ -429,7 +430,7 @@
             <h4 id="userEditorTitle">编辑用户</h4>
             <div class="user-management-fields">
               <label for="userUsername">用户名<input id="userUsername" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" required maxlength="64" pattern="[A-Za-z0-9_.\-]{1,64}" placeholder="例如 crew-01"><small>1–64 位英文字母、数字、下划线、点或短横线。</small></label>
-              <label for="userRole">角色<select id="userRole"><option value="guest">访客 · 仅查看监测</option><option value="admin">管理员 · 平台与设备管理</option></select><small>管理员拥有用户管理、设备调参及网页更新权限。</small></label>
+              <label for="userRole">角色<select id="userRole"><option value="guest">访客 · 仅查看监测</option><option value="driver">驾驶员 · 操船、任务与调参</option><option value="admin">管理员 · 全部权限</option></select><small>驾驶员可操作所有无人船，平台设置仅限管理员。</small></label>
               <label for="userPassword">新密码<input id="userPassword" type="password" autocomplete="new-password" minlength="6" maxlength="256" aria-describedby="userPasswordHint" placeholder="编辑时留空可保留原密码"></label>
               <label for="userPasswordConfirm">确认新密码<input id="userPasswordConfirm" type="password" autocomplete="new-password" minlength="6" maxlength="256" aria-describedby="userPasswordHint" placeholder="再次输入新密码"></label>
             </div>
@@ -439,6 +440,12 @@
           </form>
         </div>
         <p id="userManagementStatus" class="user-management-status" role="status" aria-live="polite" data-tone="neutral">点击“重新读取”查看服务器用户。</p>
+      </section>
+      <section id="onlineUsers" class="user-management" aria-labelledby="onlineUsersTitle" hidden>
+        <div class="user-management-heading"><div class="user-management-title"><span class="card-icon teal" data-icon="settings"></span><div><h3 id="onlineUsersTitle">在线用户</h3><p>ONLINE USERS · 仅管理员可查看</p></div></div><div class="user-management-heading-actions"><button id="onlineUsersRead" type="button" class="subtle">刷新在线用户</button></div></div>
+        <div class="user-management-summary"><strong id="onlineUsersCount">尚未读取</strong><span>每 15 秒自动刷新</span></div>
+        <ul id="onlineUsersList" class="user-management-list" aria-label="在线用户列表"></ul>
+        <p id="onlineUsersStatus" class="user-management-status" role="status" aria-live="polite">打开平台设置后自动读取，每 15 秒刷新。</p>
       </section>
       <section id="mqttDeviceSettings" class="mqtt-device-settings" aria-labelledby="mqttDeviceTitle" hidden>
         <div class="mqtt-device-heading">
@@ -500,8 +507,8 @@
     <div class="dialog-head"><div class="title-with-icon"><span class="card-icon teal" data-icon="sliders"></span><div><p class="eyebrow">VESSEL PARAMETERS</p><h2 id="settingsTitle">无人船调参设置</h2></div></div><button id="settingsClose" class="ghost">返回监控<span data-icon="close"></span></button></div>
     <div class="dialog-scroll"><div class="parameter-device-context"><div><span>当前调参对象</span><strong id="parameterDeviceName">未选择无人船</strong></div><span class="chip">单船独立操作</span></div><p id="parameterDeviceNotice" class="parameter-device-notice">请从对应无人船卡片进入，等待实时数据后点击“读取参数”。</p>
       <h3 class="device-settings-heading">无人船电控参数<span>读取、写入与 Flash 保存需要设备在线</span></h3>
-      <fieldset class="parameter-group algorithm-settings"><legend>控制算法<span>仅本次上电有效</span></legend><p id="controlAlgorithmCurrent" class="parameter-group-note" role="status">等待支持算法切换的船端固件上线</p><div class="algorithm-actions"><label for="controlAlgorithmSelect">选择算法</label><select id="controlAlgorithmSelect" disabled><option value="0">原算法：PID＋前视航线</option><option value="1">最优控制：LQR/LQI＋LQR航线</option></select><button id="applyControlAlgorithm" type="button" class="small-button" disabled>应用算法</button></div><p class="parameter-group-note">仅管理员可切换。先结束任务和驾驶接管，保持零指令且两路电机停稳、反馈正常满 1 秒。选择统一作用于船速、航向和下一次航线任务；不写入 Flash，每次上电恢复原算法。PWM 开环保持原有控制。</p><details><summary>新算法如何调节</summary><p class="parameter-group-note">LQR 使用船体模型和误差/输出权重；船速带积分状态抵抗恒定扰动，航向使用角差和角速度，服务器按横向偏差及相对航向跟踪航线。模型和权重独立于原 PID 增益，需要根据水测辨识后修改配置；两套算法共用输出限幅、变化速度、方向映射与超时保护。初始模型为估计值，具体效果需水测验证。</p></details></fieldset>
-      <p id="cloudReadOnlyNotice" class="cloud-readonly">云端调参需要管理员账户和支持该功能的固件；操作结果以设备响应为准。</p>
+      <fieldset class="parameter-group algorithm-settings"><legend>控制算法<span>仅本次上电有效</span></legend><p id="controlAlgorithmCurrent" class="parameter-group-note" role="status">等待支持算法切换的船端固件上线</p><div class="algorithm-actions"><label for="controlAlgorithmSelect">选择算法</label><select id="controlAlgorithmSelect" disabled><option value="0">原算法：PID＋前视航线</option><option value="1">最优控制：LQR/LQI＋LQR航线</option></select><button id="applyControlAlgorithm" type="button" class="small-button" disabled>应用算法</button></div><p class="parameter-group-note">管理员或驾驶员可切换。先结束任务和驾驶接管，保持零指令且两路电机停稳、反馈正常满 1 秒。选择统一作用于船速、航向和下一次航线任务；不写入 Flash，每次上电恢复原算法。PWM 开环保持原有控制。</p><details><summary>新算法如何调节</summary><p class="parameter-group-note">LQR 使用船体模型和误差/输出权重；船速带积分状态抵抗恒定扰动，航向使用角差和角速度，服务器按横向偏差及相对航向跟踪航线。模型和权重独立于原 PID 增益，需要根据水测辨识后修改配置；两套算法共用输出限幅、变化速度、方向映射与超时保护。初始模型为估计值，具体效果需水测验证。</p></details></fieldset>
+      <p id="cloudReadOnlyNotice" class="cloud-readonly">云端调参需要管理员或驾驶员账户和支持该功能的固件；操作结果以设备响应为准。</p>
       <div class="settings-intro"><div class="workflow"><span><b>1</b>读取当前参数</span><i>→</i><span><b>2</b>调整并写入</span><i>→</i><span><b>3</b>调好后存入 Flash</span></div><p>方向修改和 Flash 保存需 CH6 低档、两路停稳且反馈正常满 1 秒。</p></div>
       <p id="parameterStatus" role="status" data-tone="neutral">尚未读取设备参数</p>
       <div id="parameterFields" class="parameter-fields"></div>

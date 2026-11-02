@@ -2,7 +2,9 @@
 'use strict';
 const crypto=require('node:crypto'),{EventEmitter}=require('node:events'),{isIP}=require('node:net');
 const {MAX_USERS,USERNAME,resolveAccountFile,loadAccounts,hashCredential,verifyCredential,saveAccounts}=require('./account-store');
+const {validRole}=require('./account-permissions');
 const hash=value=>crypto.createHash('sha256').update(value).digest();
+const ONLINE_WINDOW_MS=90000;
 function createAccountApi({env=process.env,now=Date.now,maxSessions=128,sessionMs=12*60*60*1000,storeFile}={}){
   const enabled=env.BOAT_ACCOUNTS_ENABLED==='1',events=new EventEmitter(),sessions=new Map(),attempts=new Map();let closed=false,writing=false,loginWork=0;
   const accountFile=enabled?resolveAccountFile(env,storeFile):'',stored=enabled?loadAccounts(accountFile):null;
@@ -26,7 +28,9 @@ function createAccountApi({env=process.env,now=Date.now,maxSessions=128,sessionM
   const keyFrom=req=>{const token=String(req.headers.cookie||'').match(/(?:^|;\s*)boat_account_session=([a-f0-9]{64})(?:;|$)/)?.[1];return token?hash(token).toString('hex'):'';};
   function revoke(key){if(sessions.delete(key))events.emit('invalidate',key);}
   function activeKey(key){const value=sessions.get(key);if(!value)return false;const user=users.find(user=>user.id===value.userId);if(closed||value.expiresAt<=now()||!user||user.username!==value.username||user.role!==value.role){revoke(key);return false;}return true;}
-  const sessionFor=req=>{const key=keyFrom(req);return activeKey(key)?{key,value:sessions.get(key)}:null;};
+  // 在线状态只由浏览器请求或 SSE 心跳刷新；服务器内部授权检查不延长在线时间或登录期限。
+  const touchKey=key=>{if(!activeKey(key))return false;sessions.get(key).lastSeenAt=now();return true;};
+  const sessionFor=req=>{const key=keyFrom(req);return touchKey(key)?{key,value:sessions.get(key)}:null;};
   const isActive=session=>!!session&&activeKey(session.key)&&sessions.get(session.key)===session.value;
   const publicUser=session=>session?{username:session.value.username,role:session.value.role}:null;
   const cookie=(req,token,age)=>'boat_account_session='+token+'; Path=/; HttpOnly; SameSite=Strict; Max-Age='+age+(secure(req)?'; Secure':'');
@@ -45,6 +49,17 @@ function createAccountApi({env=process.env,now=Date.now,maxSessions=128,sessionM
   const visibleUsers=()=>users.map(({id,username,role})=>({id,username,role}));
   const userSnapshot=session=>({users:visibleUsers(),currentUserId:session.value.userId});
   const administrator=session=>!closed&&isActive(session)&&session.value.role==='admin';
+  function onlineSnapshot(){
+    const time=now(),online=new Map();
+    for(const [key,value]of sessions){
+      if(!activeKey(key)||time-value.lastSeenAt>ONLINE_WINDOW_MS)continue;
+      let user=online.get(value.userId);
+      if(!user){user={id:value.userId,username:value.username,role:value.role,sessionCount:0,loginAt:value.loginAt,lastSeenAt:value.lastSeenAt};online.set(value.userId,user);}
+      user.sessionCount++;user.loginAt=Math.min(user.loginAt,value.loginAt);user.lastSeenAt=Math.max(user.lastSeenAt,value.lastSeenAt);
+    }
+    const list=[...online.values()].sort((a,b)=>b.lastSeenAt-a.lastSeenAt||a.username.localeCompare(b.username));
+    return {users:list,userCount:list.length,sessionCount:list.reduce((sum,user)=>sum+user.sessionCount,0),serverTime:time,onlineWindowMs:ONLINE_WINDOW_MS};
+  }
   async function manageUsers(req,res,url){
     const session=sessionFor(req);
     if(!session){json(res,401,{error:'请先登录管理员账户'});return;}
@@ -58,8 +73,8 @@ function createAccountApi({env=process.env,now=Date.now,maxSessions=128,sessionM
     try{
       let input;try{input=await body(req,4096);}catch(error){res.setHeader('Connection','close');req.resume();throw Object.assign(Error('用户请求格式不正确'),{status:error.status});}
       const keys=Object.keys(input);
-      if(keys.some(key=>!['username','role','password'].includes(key))||typeof input.username!=='string'||!USERNAME.test(input.username)||!['admin','guest'].includes(input.role)||
-          (collection&&!Object.hasOwn(input,'password'))||(Object.hasOwn(input,'password')&&(typeof input.password!=='string'||input.password.length<6||input.password.length>256))){throw Object.assign(Error('用户名需为1～64位字母、数字、下划线、点或短横线；密码需6～256字符，角色只能为管理员或访客'),{status:400});}
+      if(keys.some(key=>!['username','role','password'].includes(key))||typeof input.username!=='string'||!USERNAME.test(input.username)||!validRole(input.role)||
+          (collection&&!Object.hasOwn(input,'password'))||(Object.hasOwn(input,'password')&&(typeof input.password!=='string'||input.password.length<6||input.password.length>256))){throw Object.assign(Error('用户名需为1～64位字母、数字、下划线、点或短横线；密码需6～256字符，角色只能为管理员、驾驶员或访客'),{status:400});}
       const previous=match?users.find(user=>user.id===match[1]):null;
       if(match&&!previous)throw Object.assign(Error('用户不存在'),{status:404});
       if(collection&&users.length>=MAX_USERS)throw Object.assign(Error('最多支持64个用户'),{status:409});
@@ -91,8 +106,16 @@ function createAccountApi({env=process.env,now=Date.now,maxSessions=128,sessionM
     if(!url.pathname.startsWith('/api/auth/'))return false;
     if(url.pathname==='/api/auth/config'&&req.method==='GET'){const session=enabled?sessionFor(req):null;json(res,200,{enabled,requiresLogin:enabled&&!session,user:publicUser(session)});return true;}
     if(!enabled||closed){json(res,503,{error:'服务器尚未启用账户登录'});return true;}
-    const userListRead=url.pathname==='/api/auth/users'&&req.method==='GET'&&!req.headers.origin&&(!req.headers['sec-fetch-site']||req.headers['sec-fetch-site']==='same-origin');
+    const userListRead=['/api/auth/users','/api/auth/online'].includes(url.pathname)&&req.method==='GET'&&!req.headers.origin&&(!req.headers['sec-fetch-site']||req.headers['sec-fetch-site']==='same-origin');
     if(!userListRead&&!sameOrigin(req)){json(res,403,{error:'请从本站发起账户操作'});return true;}
+    if(url.pathname==='/api/auth/online'){
+      const session=sessionFor(req);
+      if(!session){json(res,401,{error:'请先登录管理员账户'});return true;}
+      if(!administrator(session)){json(res,403,{error:'仅管理员可以查看在线用户'});return true;}
+      if(req.method!=='GET'){res.setHeader('Allow','GET');json(res,405,{error:'在线用户只支持读取'});return true;}
+      if(url.search){json(res,400,{error:'在线用户列表不接受查询参数'});return true;}
+      json(res,200,onlineSnapshot());return true;
+    }
     if(url.pathname==='/api/auth/users'||url.pathname.startsWith('/api/auth/users/')){await manageUsers(req,res,url);return true;}
     if(url.pathname==='/api/auth/login'&&req.method==='POST'){
       const initialSession=sessionFor(req);
@@ -115,14 +138,14 @@ function createAccountApi({env=process.env,now=Date.now,maxSessions=128,sessionM
       for(const key of sessions.keys())activeKey(key);revoke(keyFrom(req));
       if(sessions.size>=maxSessions){json(res,503,{error:'登录会话已满，请稍后再试'});return true;}
       const token=crypto.randomBytes(32).toString('hex'),key=hash(token).toString('hex');
-      const value={userId:matched.id,username:matched.username,role:matched.role,expiresAt:now()+sessionMs,checked:null};sessions.set(key,value);
+      const loginAt=now(),value={userId:matched.id,username:matched.username,role:matched.role,expiresAt:loginAt+sessionMs,loginAt,lastSeenAt:loginAt,checked:null};sessions.set(key,value);
       res.setHeader('Set-Cookie',cookie(req,token,Math.floor(sessionMs/1000)));json(res,200,{ok:true,user:{username:value.username,role:value.role}});return true;
     }
     if(url.pathname==='/api/auth/session'&&req.method==='DELETE'){revoke(keyFrom(req));res.setHeader('Set-Cookie',cookie(req,'',0));json(res,200,{ok:true});return true;}
     json(res,404,{error:'账户接口不存在'});return true;
   }
   function close(){if(closed)return;closed=true;for(const key of sessions.keys())revoke(key);attempts.clear();}
-  return {enabled,handle,close,sessionFor,isActive,activeKey,sameOrigin,publicUser,
+  return {enabled,handle,close,sessionFor,isActive,activeKey,touchKey,sameOrigin,publicUser,
     onInvalidate(callback){events.on('invalidate',callback);return ()=>events.removeListener('invalidate',callback);},
     getSessionCount:()=>sessions.size};
 }

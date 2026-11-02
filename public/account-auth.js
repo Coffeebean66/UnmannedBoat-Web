@@ -8,12 +8,13 @@
       this.generation = 0; this.message = '正在检查账户配置…'; this.pending = null; this.operation = 0;
     }
     get canMonitor() { return this.ready && (this.enabled === false || !!this.user); }
-    get canManage() { return this.ready && (this.enabled === false || this.user?.role === 'admin'); }
+    get canManage() { return this.ready && (this.enabled === false || ['admin', 'driver'].includes(this.user?.role)); }
+    get canConfigurePlatform() { return this.ready && (this.enabled === false || this.user?.role === 'admin'); }
     state() { return { enabled: this.enabled, ready: this.ready, user: this.user, busy: this.busy,
-      canMonitor: this.canMonitor, canManage: this.canManage, generation: this.generation, message: this.message }; }
+      canMonitor: this.canMonitor, canManage: this.canManage, canConfigurePlatform: this.canConfigurePlatform, generation: this.generation, message: this.message }; }
     notify() { this.dispatchEvent(new CustomEvent('change', { detail: this.state() })); }
     apply(enabled, user) {
-      const next = user && typeof user.username === 'string' && ['admin', 'guest'].includes(user.role)
+      const next = user && typeof user.username === 'string' && ['admin', 'driver', 'guest'].includes(user.role)
         ? { username: user.username, role: user.role } : null;
       const old = JSON.stringify([this.enabled, this.user]);
       this.enabled = enabled; this.ready = true; this.user = enabled ? next : null;
@@ -55,7 +56,7 @@
         if (this.user) { this.apply(true, null); await this.api('session', { method: 'DELETE' }); }
         const result = await this.api('login', { method: 'POST', body: JSON.stringify({ username, password }) });
         if (operation !== this.operation) return;
-        if (!result.user || !['admin', 'guest'].includes(result.user.role)) throw Error('账户响应无效，请重新登录');
+        if (!result.user || !['admin', 'driver', 'guest'].includes(result.user.role)) throw Error('账户响应无效，请重新登录');
         this.message = '登录成功'; this.apply(true, result.user);
       } catch (error) { this.message = error.message; this.apply(true, null); throw error; }
       finally { this.busy = false; this.notify(); }
@@ -74,7 +75,15 @@
       this.message = '账户会话已过期，请重新登录'; this.apply(true, null);
     }
     assertMonitor() { if (!this.canMonitor) throw Error('请先登录监测平台'); }
-    assertManage() { if (!this.canManage) throw Error(this.user ? '访客账户仅可监测，设备调参和平台更新需要管理员权限' : '请先使用管理员账户登录'); }
+    assertManage() { if (!this.canManage) throw Error(this.user ? '访客账户仅可监测，操作无人船需要管理员或驾驶员权限' : '请先使用管理员或驾驶员账户登录'); }
+    assertPlatformManage() { if (!this.canConfigurePlatform) throw Error('平台设置仅供管理员使用'); }
+    async verifyPlatformManage() {
+      this.assertPlatformManage();
+      if (this.enabled === false) return;
+      const generation = this.generation;
+      await this.initialize(); this.assertPlatformManage();
+      if (generation !== this.generation) throw Error('账户身份已变化，请重新操作');
+    }
     async verifyManage() {
       this.assertManage();
       if (this.enabled === false) return;
@@ -102,18 +111,18 @@
     $('accountLoginOpen').hidden = !!state.user;
     $('accountLogout').hidden = !state.user;
     $('accountName').hidden = !state.user;
-    $('accountName').textContent = state.user ? state.user.username + ' · ' + (state.user.role === 'admin' ? '管理员' : '访客') : '';
+    $('accountName').textContent = state.user ? state.user.username + ' · ' + ({ admin: '管理员', driver: '驾驶员', guest: '访客' }[state.user.role]) : '';
     $('accountLoginSubmit').disabled = state.busy;
     $('accountUsername').disabled = state.busy; $('accountPassword').disabled = state.busy;
     $('accountLogout').disabled = state.busy;
     $('accountNotice').hidden = !accountMode || (state.ready && !!state.user);
     $('accountNoticeText').textContent = state.message;
     $('accountRetry').hidden = state.ready;
-    for (const id of ['settingsToggle', 'settingsEntry', 'firmwareToggle', 'platformSettingsToggle', 'sidebarPlatformSettings', 'updateToggle']) if ($(id)) $(id).hidden = !state.canManage;
+    for (const id of ['settingsToggle', 'settingsEntry', 'firmwareToggle', 'updateToggle']) if ($(id)) $(id).hidden = !state.canManage;
+    for (const id of ['platformSettingsToggle', 'sidebarPlatformSettings']) if ($(id)) $(id).hidden = !state.canConfigurePlatform;
     document.querySelector('.settings-callout').hidden = !state.canManage;
-    if (!state.canManage) {
-      $('settingsDialog').close(); $('platformSettingsDialog')?.close(); $('updateDialog').close();
-    }
+    if (!state.canManage) { $('settingsDialog').close(); $('updateDialog').close(); }
+    if (!state.canConfigurePlatform) $('platformSettingsDialog')?.close();
     if (state.user) dialog.close();
     if (state.ready && state.enabled && !state.user && !firstPrompt) { firstPrompt = true; openLogin(); }
   });

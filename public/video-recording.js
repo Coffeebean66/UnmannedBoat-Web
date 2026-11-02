@@ -42,6 +42,7 @@
     _identity() { return JSON.stringify([this.auth?.generation, this.auth?.enabled, this.auth?.ready, this.auth?.user?.username, this.auth?.user?.role]); }
     monitor() { return !this.destroyed && this.authenticated && this.auth?.enabled === true && this.auth?.ready === true && !!this.auth.user && DEVICE.test(this.deviceId); }
     admin() { return !this.destroyed && this.auth?.enabled === true && this.auth?.ready === true && this.auth.user?.role === 'admin'; }
+    operator() { return !this.destroyed && this.auth?.enabled === true && this.auth?.ready === true && ['admin', 'driver'].includes(this.auth.user?.role); }
     notice(message, tone = 'neutral') { this.nodes.recordingStatus.textContent = message; this.nodes.recordingStatus.dataset.tone = tone; }
     settingsNotice(message, tone = 'neutral') { this.nodes.recordingSettingsStatus.textContent = message; this.nodes.recordingSettingsStatus.dataset.tone = tone; }
     _cancel(kind) { const channel = this.channels[kind]; ++channel.generation; channel.cancel?.(); channel.busy = false; }
@@ -72,14 +73,14 @@
     close() { this.opened = false; this._cancel('config'); this.config = null; this.nodes.recordingDirectory.value = ''; this.render(); }
     state() { return { deviceId: this.deviceId, visible: this.visible, armed: this.snapshot?.armed === true, recording: this.snapshot?.recording === true, clips: this.snapshot?.segments.length || 0, playingId: this.playingId }; }
     render() {
-      const n = this.nodes, monitor = this.monitor(), admin = this.admin(), busy = this.channels.boat.busy, configBusy = this.channels.config.busy;
+      const n = this.nodes, monitor = this.monitor(), admin = this.admin(), operator = this.operator(), busy = this.channels.boat.busy, configBusy = this.channels.config.busy;
       n.recordingDevice.textContent = this.deviceId || '未选择无人船';
-      n.recordingStart.hidden = !admin; n.recordingStop.hidden = !admin;
+      n.recordingStart.hidden = !operator; n.recordingStop.hidden = !operator;
       n.recordingStart.disabled = !monitor || busy || this.snapshot?.enabled !== true || this.snapshot.armed;
       n.recordingStop.disabled = !monitor || busy || this.snapshot?.enabled !== true || !this.snapshot.armed;
       n.recordingRefresh.disabled = !monitor || busy;
       n.recordingList.setAttribute('aria-busy', String(busy));
-      for (const button of this.deleteButtons) { button.hidden = !admin; button.disabled = !admin || !monitor || !this.visible || busy; }
+      for (const button of this.deleteButtons) { button.hidden = !operator; button.disabled = !operator || !monitor || !this.visible || busy; }
       n.recordingCount.textContent = this.snapshot ? this.snapshot.segments.length + ' 段录像' : '尚未读取';
       n.recordingEmpty.hidden = !!this.snapshot?.segments.length;
       n.recordingEmpty.textContent = this.snapshot?.enabled === false ? '服务器录像尚未启用' : this.snapshot ? '暂无录像，开始录像后按片段自动保存。' : '选择无人船后读取已保存的录像。';
@@ -121,7 +122,7 @@
     }
     async _run(kind, method, url, body, accept, beforeRequest = null) {
       const channel = this.channels[kind], adminOperation = kind === 'config' || method !== 'GET';
-      if (this.destroyed || channel.busy || kind === 'boat' && (!this.visible || !this.monitor()) || kind === 'config' && (!this.opened || !this.admin()) || adminOperation && !this.admin()) return false;
+      if (this.destroyed || channel.busy || kind === 'boat' && (!this.visible || !this.monitor()) || kind === 'config' && (!this.opened || !this.admin()) || adminOperation && !this.operator()) return false;
       const operation = ++channel.generation, identity = this._identity(), boat = this.deviceId;
       const current = () => !this.destroyed && operation === channel.generation && identity === this._identity() &&
         (kind === 'boat' ? this.visible && this.monitor() && boat === this.deviceId : this.opened && this.admin());
@@ -153,12 +154,12 @@
       return this._run('boat', 'GET', BASE + '/boats/' + encodeURIComponent(this.deviceId), null, data => this.applyBoat(data));
     }
     command(action) {
-      if (!['start', 'stop'].includes(action) || !this.admin() || this.snapshot?.enabled !== true || (action === 'start') === this.snapshot.armed) return Promise.resolve(false);
+      if (!['start', 'stop'].includes(action) || !this.operator() || this.snapshot?.enabled !== true || (action === 'start') === this.snapshot.armed) return Promise.resolve(false);
       this.notice(action === 'start' ? '正在请求服务器开始录像…' : '正在停止录像并保存最后一个片段…');
       return this._run('boat', 'POST', BASE + '/boats/' + encodeURIComponent(this.deviceId) + '/' + action, {}, data => this.applyBoat(data));
     }
     deleteClip(id) {
-      if (!this.admin() || !this.monitor() || !this.visible || this.channels.boat.busy || this.snapshot?.enabled !== true || !CLIP.test(id)) return Promise.resolve(false);
+      if (!this.operator() || !this.monitor() || !this.visible || this.channels.boat.busy || this.snapshot?.enabled !== true || !CLIP.test(id)) return Promise.resolve(false);
       const item = this.snapshot.segments.find(item => item.id === id); if (!item) return Promise.resolve(false);
       const boat = this.deviceId, time = new Date(item.start).toLocaleString('zh-CN', { hour12: false });
       const message = '确认永久删除这段录像？\n\n无人船：' + boat + '\n开始时间：' + time + '\n时长：' + item.duration.toFixed(1) + ' 秒\n\n删除后无法恢复，不影响其他录像。';
@@ -186,7 +187,7 @@
       if (data.error) this.notice(String(data.error).slice(0, 300), 'error');
       else if (data.armed && data.receiving) this.notice('服务器录像已开启 · 正在接收视频，关闭网页仍会继续', 'success');
       else if (data.armed) this.notice('录像已开启，等待船端视频 · 视频恢复后自动续录', 'warning');
-      else this.notice('录像已停止 · 已保存的片段可回放或下载，管理员可删除');
+      else this.notice('录像已停止 · 已保存的片段可回放或下载，管理员或驾驶员可删除');
       if (data.persistent === false) this.nodes.recordingStatus.textContent += ' · 设置未持久化，服务重启后需重新开启录像';
     }
     _renderList() {
@@ -202,7 +203,7 @@
         play.addEventListener('click', () => this.playClip(item.id));
         const download = this.document.createElement('a'); download.href = item.downloadUrl; download.className = 'recording-download'; download.textContent = '下载'; download.setAttribute('download', '');
         actions.append(play, download);
-        if (this.admin()) {
+        if (this.operator()) {
           const boat = this.deviceId, remove = this.document.createElement('button');
           remove.type = 'button'; remove.className = 'small-button recording-delete'; remove.textContent = '删除';
           remove.disabled = !this.monitor() || !this.visible || this.channels.boat.busy;

@@ -9,7 +9,7 @@
   function validateUserForm({ username, role, password, confirmation }, creating) {
     username = String(username || '').trim();
     if (!USERNAME.test(username)) throw Error('用户名应为 1–64 位英文字母、数字、下划线、点或短横线。');
-    if (!['admin', 'guest'].includes(role)) throw Error('请选择管理员或访客角色。');
+    if (!['admin', 'driver', 'guest'].includes(role)) throw Error('请选择管理员、驾驶员或访客角色。');
     if (typeof password !== 'string' || typeof confirmation !== 'string') throw Error('密码输入无效，请重新填写。');
     if (creating && !password) throw Error('请为新用户设置密码。');
     if (password && (password.length < 6 || password.length > 256)) throw Error('密码应为 6–256 个字符，空格会原样保留。');
@@ -78,7 +78,7 @@
       n.userManagementContent.hidden = !admin;
       n.userManagementAccess.hidden = admin;
       n.userManagementAccess.textContent = legacy
-        ? '当前未启用统一账户登录。请先在服务器启用管理员/访客账户，再登录管理员管理用户。'
+        ? '当前未启用统一账户登录。请先在服务器启用账户，再登录管理员管理用户。'
         : this.denied ? '服务器未授权此账户管理用户，请重新登录。' : '用户管理仅供已登录的管理员使用。';
       n.userManagementRead.disabled = !admin || this.busy;
       n.userManagementCreate.disabled = !admin || this.busy || !this.loaded || this.users.length >= 64;
@@ -98,7 +98,7 @@
         const name = this.document.createElement('strong'); name.textContent = user.username;
         const meta = this.document.createElement('div'); meta.className = 'user-management-meta';
         const role = this.document.createElement('span'); role.className = 'user-management-role';
-        role.dataset.role = user.role; role.textContent = user.role === 'admin' ? '管理员' : '访客'; meta.append(role);
+        role.dataset.role = user.role; role.textContent = { admin: '管理员', driver: '驾驶员', guest: '访客' }[user.role]; meta.append(role);
         if (user.id === this.currentUserId) {
           const current = this.document.createElement('span'); current.className = 'user-management-current'; current.textContent = '当前账户'; meta.append(current);
         }
@@ -185,7 +185,7 @@
       if (!data || !Array.isArray(data.users) || !data.users.length || data.users.length > 64 || typeof data.currentUserId !== 'string') throw Error('用户列表响应无效，请重新读取。');
       const ids = new Set(), names = new Set();
       const users = data.users.map(user => {
-        if (!user || typeof user.id !== 'string' || typeof user.username !== 'string' || !USER_ID.test(user.id) || !USERNAME.test(user.username) || !['admin', 'guest'].includes(user.role) || ids.has(user.id) || names.has(user.username)) throw Error('用户列表响应无效，请重新读取。');
+        if (!user || typeof user.id !== 'string' || typeof user.username !== 'string' || !USER_ID.test(user.id) || !USERNAME.test(user.username) || !['admin', 'driver', 'guest'].includes(user.role) || ids.has(user.id) || names.has(user.username)) throw Error('用户列表响应无效，请重新读取。');
         ids.add(user.id); names.add(user.username); return { id: user.id, username: user.username, role: user.role };
       });
       const current = users.find(user => user.id === data.currentUserId);
@@ -212,7 +212,7 @@
           if (!this._current(operation, generation)) return false;
         }
         this._applyList(data);
-        this._notice(saved ? '用户已保存，已重新读取服务器列表。' : '已读取用户列表。管理员可管理平台，访客仅可查看监测。', saved ? 'success' : 'neutral');
+        this._notice(saved ? '用户已保存，已重新读取服务器列表。' : '已读取用户列表。管理员管理平台；驾驶员操作无人船；访客仅可监测。', saved ? 'success' : 'neutral');
         return true;
       } catch (error) {
         if (error.cancelled || operation !== this.operation || this.destroyed) return false;

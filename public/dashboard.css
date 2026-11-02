@@ -278,7 +278,9 @@ footer { padding-top:15px; font-size:8px; color:var(--faint); }
 html[data-account-state="pending"] #settingsToggle,html[data-account-state="pending"] #sidebarSettings,html[data-account-state="pending"] #settingsEntry,html[data-account-state="pending"] #updateToggle,
 html[data-account-state="anonymous"] #settingsToggle,html[data-account-state="anonymous"] #sidebarSettings,html[data-account-state="anonymous"] #settingsEntry,html[data-account-state="anonymous"] #updateToggle,
 html[data-account-state="guest"] #settingsToggle,html[data-account-state="guest"] #sidebarSettings,html[data-account-state="guest"] #settingsEntry,html[data-account-state="guest"] #updateToggle,
-html:not([data-account-state="legacy"]):not([data-account-state="admin"]) .settings-callout { display:none!important; }
+html:not([data-account-state="legacy"]):not([data-account-state="admin"]):not([data-account-state="driver"]) .settings-callout { display:none!important; }
+html:not([data-account-state="legacy"]):not([data-account-state="admin"]) #platformSettingsToggle,
+html:not([data-account-state="legacy"]):not([data-account-state="admin"]) #sidebarPlatformSettings { display:none!important; }
 .account-controls { display:flex; align-items:center; gap:6px; min-width:0; }
 .account-controls[hidden],.account-controls [hidden],.account-notice[hidden] { display:none!important; }
 .account-name { font-size:10px; color:var(--muted); max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

@@ -1,5 +1,6 @@
 /* 服务器原生录像：网页只发送控制指令，MediaMTX 独立落盘，不占用浏览器内存。 */
 'use strict';
+const {canOperate}=require('./account-permissions');
 const http = require('node:http'), fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const { createMqttDeviceClient } = require('./mqtt-device-api');
 const { READER } = require('./video-media-api');
@@ -85,7 +86,8 @@ function createVideoRecordingApi({ env = process.env, accounts, file, client = c
   const active = owner => !closed && accounts?.enabled === true && accounts.isActive(owner);
   const ownBoat = (input, id) => Object.hasOwn(input.boats, id) ? input.boats[id] : null;
   const admin = owner => active(owner) && owner.value.role === 'admin';
-  const assertActive = (owner, res, mutation = false) => { if (!(mutation ? admin(owner) : active(owner)) || res?.destroyed) throw fault(401, '登录会话已失效，请重新登录'); };
+  const operator = owner => active(owner) && canOperate(owner.value);
+  const assertActive = (owner, res, mutation = false) => { if (!(mutation ? operator(owner) : active(owner)) || res?.destroyed) throw fault(401, '登录会话已失效，请重新登录'); };
   const assertUsable = () => { if (!enabled) throw fault(503, '服务器尚未启用原生录像，请按录像教程更新视频管理组件'); if (loadError) throw fault(503, loadError); };
   const json = (res, status, value) => { if (res.destroyed || res.writableEnded) return; res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
   const configSnapshot = owner => ({ enabled, persistent: !!configFile, segmentSeconds: SEGMENT_SECONDS, retentionDays: RETENTION_DAYS,
@@ -335,7 +337,7 @@ function createVideoRecordingApi({ env = process.env, accounts, file, client = c
         const id = match[1]; await ensureBoat(id); assertActive(owner, res);
         if (match[3]) {
           if (req.method === 'DELETE') {
-            if (!admin(owner)) throw fault(403, '仅管理员可以删除录像');
+            if (!operator(owner)) throw fault(403, '仅管理员或驾驶员可以删除录像');
             if (url.search || req.headers['transfer-encoding'] || Number(req.headers['content-length'] || 0) !== 0)
               throw fault(400, '删除录像不接受查询参数或请求内容');
             json(res, 200, await deleteClip(id, match[3], owner, res)); return true;
@@ -347,7 +349,7 @@ function createVideoRecordingApi({ env = process.env, accounts, file, client = c
         if (url.search) throw fault(400, '录像指令不接受查询参数');
         if (!match[2] && req.method === 'GET') { json(res, 200, await boatSnapshot(id, owner, res)); return true; }
         if (match[2] && req.method === 'POST') {
-          if (!admin(owner)) throw fault(403, '仅管理员可以开始或停止录像');
+          if (!operator(owner)) throw fault(403, '仅管理员或驾驶员可以开始或停止录像');
           const input = await readBody(req, bodyTimeoutMs); if (Object.keys(input).length) throw fault(400, '录像指令不能包含额外参数');
           json(res, 200, await changeArmed(id, match[2] === 'start', owner, res)); return true;
         }

@@ -10,6 +10,7 @@
   const compass=new BoatCompassView($('boatCompass'));
   const mapSettings=new BoatMapSettingsPanel();
   const users=new BoatUserManagementPanel({toast});
+  const onlineUsers=new BoatOnlineUsersPanel();
   const mqttDevices=new BoatMqttDeviceSettingsPanel();
   const videoDevices=new BoatVideoDeviceSettingsPanel();
   const videoView=new BoatVideoView();
@@ -374,7 +375,7 @@
     if(c.connected) {
       if(state.deviceId!==c.id){track.clear();state.lastUpdateAt=null;}
       state.deviceId=c.id;
-      set('connectionText','云端实时遥测 · '+c.name+(window.BoatAuth?.user?.role==='guest'?' · 访客只读监测':link.readOnly?' · 当前设备只读':' · 管理员可远程调参'));
+      set('connectionText','云端实时遥测 · '+c.name+(window.BoatAuth?.user?.role==='guest'?' · 访客只读监测':link.readOnly?' · 当前设备只读':' · 可远程调参'));
       if(state.trackDisplayEnabled)track.start();
     } else {
       set('connectionText',c.message||'已断开');
@@ -405,7 +406,7 @@
   on('mapCenter',()=>{if(!map?.ready)toast('地图尚未就绪，请查看地图底部提示');else if(lastLocation)map.setView(lastLocation,16);else toast('尚无有效定位');});
   $('mapFollow').onchange=()=>{if($('mapFollow').checked&&lastLocation&&map?.ready)map.setView(lastLocation,16);};
   function parameterAccess() {
-    return {canManage:!!window.BoatAuth?.canManage,canUpgradeFirmware:window.BoatAuth?.enabled===true&&window.BoatAuth?.ready===true&&window.BoatAuth?.user?.role==='admin',parameterBusy:params.busy||!!link.pending||driver.active||driver.pending};
+    return {canManage:!!window.BoatAuth?.canManage,canUpgradeFirmware:window.BoatAuth?.enabled===true&&window.BoatAuth?.ready===true&&['admin','driver'].includes(window.BoatAuth?.user?.role),parameterBusy:params.busy||!!link.pending||driver.active||driver.pending};
   }
   function syncParameterAccess() {
     const access=parameterAccess(),selected=!!(cloud.authenticated&&cloud.selectedId);
@@ -442,7 +443,7 @@
     if(!await selecting||request!==videoOpenSequence||generation!==cloud.generation||cloud.selectedId!==id||!cloud.wanted||accountGeneration!==window.BoatAuth?.generation)return;
     window.BoatWorkspace?.navigate('video');
   }
-  const openPlatformSettings=()=>{window.BoatAuth?.assertManage();$('platformSettingsDialog').showModal();users.open();mqttDevices.open();videoDevices.open();videoRecording.open();mapSettings.open();};
+  const openPlatformSettings=()=>{window.BoatAuth?.assertPlatformManage();$('platformSettingsDialog').showModal();users.open();onlineUsers.open();mqttDevices.open();videoDevices.open();videoRecording.open();mapSettings.open();};
   on('settingsToggle',openSettings);
   on('firmwareToggle',()=>{if(driver.active||driver.pending)throw Error('请先停船并退出电脑操控');firmware.open(cloud.selectedId);});
   on('settingsEntry',openSettings);
@@ -451,8 +452,8 @@
   on('platformSettingsToggle',openPlatformSettings);
   on('sidebarPlatformSettings',openPlatformSettings);
   on('platformSettingsClose',()=>$('platformSettingsDialog').close());
-  $('platformSettingsDialog').addEventListener('close',()=>{users.close();mqttDevices.close();videoDevices.close();videoRecording.close();mapSettings.close();});
-  window.addEventListener('pagehide',()=>{users.destroy();mqttDevices.destroy();videoDevices.destroy();firmware.destroy();},{once:true});
+  $('platformSettingsDialog').addEventListener('close',()=>{users.close();onlineUsers.close();mqttDevices.close();videoDevices.close();videoRecording.close();mapSettings.close();});
+  window.addEventListener('pagehide',()=>{users.destroy();onlineUsers.destroy();mqttDevices.destroy();videoDevices.destroy();firmware.destroy();},{once:true});
   for(const [id,kind] of [['readParameters','read'],['writeParameters','write'],['saveFlash','flash']])on(id,async()=>{
     if(!$('settingsDialog').open||$('settingsDialog').dataset.deviceId!==cloud.selectedId)throw Error('调参对象已变化，请从对应无人船重新进入');
     try{await params.command(kind);}finally{syncParameterAccess();}
@@ -524,12 +525,12 @@
   function renderSourceAccess(){
     const guest=window.BoatAuth?.user?.role==='guest';
     if(!cloud.selectedId){
-      set('sourceHint',guest?'船队总览同时监测所有船舶；选择一艘查看详情。访客可监测，调参需要管理员。':'选择船卡查看单船详情，或点击该船的“调参设置”独立调参；平台设置管理用户、接入账号与地图。');
+      set('sourceHint',guest?'船队总览同时监测所有船舶；选择一艘查看详情。调参需要管理员或驾驶员。':'选择船卡查看单船详情，或点击该船的“调参设置”独立调参。');
       set('sourceDescription','MQTT 云端 · 尚未选择详情船舶');
       set('cloudReadOnlyNotice','请先选择并连接需要调参的无人船，再读取当前船的参数。平台设置与船端调参分别管理。');
       return;
     }
-    set('sourceHint',guest?'访客账户可查看遥测、地图、轨迹和船载视频；设备调参需要管理员账户。':cloud.readOnly?cloud.parameterReadOnlyReason:'云端调参已就绪：管理员可读取、写入参数，调试完成后手动保存到 Flash。');
+    set('sourceHint',guest?'访客可查看遥测、地图、轨迹和船载视频；调参需要管理员或驾驶员。':cloud.readOnly?cloud.parameterReadOnlyReason:'云端调参已就绪：可读取、写入参数，调试完成后手动保存到 Flash。');
     set('sourceDescription',cloud.readOnly?'MQTT 云端 · 只读监测':'MQTT 云端 · 可远程调参');
     set('cloudReadOnlyNotice',cloud.readOnly?cloud.parameterReadOnlyReason+'；已保留的本地草稿仍可保存预设或导出。':'当前通过云端操作设备参数，成功提示以 STM32 响应为准。超时或断连后，写入可能已经生效，请先读取确认再重试。Flash 保存仍需满足停机保护。');
   }

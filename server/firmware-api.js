@@ -1,5 +1,6 @@
-/* 管理员同源二进制上传入口；固件只在有界内存中暂存，不把服务器密钥交给浏览器。 */
+/* 管理员/驾驶员同源上传入口；固件仅在有界内存暂存，不把服务器密钥交给浏览器。 */
 'use strict';
+const {canOperate}=require('./account-permissions');
 const protocol = require('./firmware-protocol');
 const { FirmwareService, DEVICE } = require('./firmware-service');
 const PREFIX = '/api/firmware';
@@ -32,7 +33,7 @@ function createFirmwareApi({ env = process.env, accounts, bridge, service, uploa
   const usable = () => { if (!enabled()) throw fault(503, reason()); };
   const authorize = (owner, req, res) => {
     if (closed || !accounts.isActive(owner) || req.aborted || res.destroyed) throw fault(401, '登录会话或上传连接已失效，请重新登录');
-    if (owner.value.role !== 'admin') throw fault(403, '仅管理员可以升级单片机固件');
+    if (!canOperate(owner.value)) throw fault(403, '仅管理员或驾驶员可以升级单片机固件');
   };
   const json = (res, status, value) => { if (res.destroyed || res.writableEnded) return; res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
   return {
@@ -41,7 +42,7 @@ function createFirmwareApi({ env = process.env, accounts, bridge, service, uploa
       if (!url.pathname.startsWith(PREFIX + '/')) return false;
       try {
         if (!accounts?.enabled || closed) throw fault(503, reason());
-        const owner = accounts.sessionFor(req); if (!owner) throw fault(401, '请先登录平台管理员账户'); authorize(owner, req, res);
+        const owner = accounts.sessionFor(req); if (!owner) throw fault(401, '请先登录管理员或驾驶员账户'); authorize(owner, req, res);
         const read = req.method === 'GET';
         const browserRead = read && !req.headers.origin && (!req.headers['sec-fetch-site'] || req.headers['sec-fetch-site'] === 'same-origin');
         if (!browserRead && !accounts.sameOrigin(req)) throw fault(403, '请从本站发起固件升级请求');

@@ -18,6 +18,7 @@ function setup() {
       const credentials = JSON.parse(options.body);
       if (credentials.username === 'operator' && credentials.password === 'admin-test-secret') user = { username: 'operator', role: 'admin' };
       else if (credentials.username === 'observer' && credentials.password === 'guest-test-secret') user = { username: 'observer', role: 'guest' };
+      else if (credentials.username === 'pilot' && credentials.password === 'driver-test-secret') user = { username: 'pilot', role: 'driver' };
       else return response(401, { error: '账户或密码错误' });
       return response(200, { ok: true, user });
     }
@@ -56,6 +57,16 @@ async function connected(h) {
   link.live = true; return link;
 }
 const parameterCalls = h => h.calls.filter(call => call.url === '/api/cloud/parameters');
+
+test('驾驶员可操作设备但不能打开或验证平台设置，降级后撤销设备操作权限', async () => {
+  const h = setup(); await h.auth.initialize(); await h.auth.login('pilot', 'driver-test-secret');
+  assert.equal(h.auth.canManage, true); assert.equal(h.auth.canMonitor, true); assert.equal(h.auth.canConfigurePlatform, false);
+  assert.throws(() => h.auth.assertPlatformManage(), /平台设置/); await assert.rejects(h.auth.verifyPlatformManage(), /平台设置/);
+  await h.auth.verifyManage(); const link = await connected(h); assert.equal(link.readOnly, false);
+  await link.request('read'); assert.equal(parameterCalls(h).length, 1);
+  await h.auth.logout(); assert.equal(h.auth.canManage, false); assert.equal(link.connected, false);
+  await h.loginAdmin(); assert.equal(h.auth.canConfigurePlatform, true); await h.auth.verifyPlatformManage();
+});
 
 test('账户配置未确认和网络故障严格禁用权限，只有明确 enabled:false 才开放 legacy', async () => {
   const h = setup(); assert.equal(h.auth.canManage, false); assert.equal(h.auth.canMonitor, false);

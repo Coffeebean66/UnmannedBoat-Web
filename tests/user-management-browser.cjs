@@ -89,10 +89,11 @@ async function main() {
     await send('Page.navigate', { url });
     await until('!!window.boatMonitor&&BoatAuth.ready&&document.getElementById("accountLoginDialog").open');
     await login('operator', 'browser-admin-test-only');
-    await until('document.getElementById("cloudDevice").value==="boat-mqtt-test"&&!document.getElementById("connectButton").disabled');
-    await evaluate('document.getElementById("connectButton").click()'); await until('boatMonitor.link.connected');
+    await until('document.getElementById("cloudDevice").value==="boat-mqtt-test"&&(boatMonitor.link.connected||!document.getElementById("connectButton").disabled)');
+    await evaluate('if(!boatMonitor.link.wanted)document.getElementById("connectButton").click()'); await until('boatMonitor.link.connected');
     await evaluate('document.getElementById("platformSettingsToggle").click()');
     await until('document.getElementById("userManagementList").children.length===2&&!document.getElementById("userManagementCreate").disabled');
+    await until('document.getElementById("onlineUsersList").children.length===1');
     assert.equal(server.boatCloudApi.getClientCount(), 2);
     const connectionCount = await evaluate('window.testConnections');
 
@@ -103,12 +104,21 @@ async function main() {
     assert.equal(await evaluate('document.getElementById("userPassword").value'), '');
     await fill('crew-01', 'guest', 'crew-initial-password'); await save(); await saved();
     await evaluate('document.getElementById("userManagementCreate").click()'); await fill('skipper-02', 'admin', 'skipper-admin-password'); await save(); await saved();
-    assert.equal(await evaluate('document.getElementById("userManagementList").children.length'), 4);
+    await evaluate('document.getElementById("userManagementCreate").click()'); await fill('pilot-03', 'driver', 'pilot-driver-password'); await save(); await saved();
+    assert.equal(await evaluate('document.getElementById("userManagementList").children.length'), 5);
+    for (const [username, password] of [['pilot-03','pilot-driver-password'],['pilot-03','pilot-driver-password'],['observer','browser-guest-test-only']]) {
+      const response = await fetch(url + '/api/auth/login', { method: 'POST', headers: { origin: url, 'content-type': 'application/json', 'x-real-ip': '192.0.2.123' }, body: JSON.stringify({username,password}) });
+      assert.equal(response.status,200);
+    }
+    await evaluate('document.getElementById("onlineUsersRead").click()');
+    await until('document.getElementById("onlineUsersList").children.length===3');
+    assert.equal(await evaluate('document.getElementById("onlineUsersCount").textContent'), '3 位用户在线 · 4 个会话');
+    assert.equal(await evaluate('[...document.querySelectorAll("#onlineUsersList li")].find(row=>row.querySelector("strong").textContent==="pilot-03").textContent.includes("2 个在线会话")'),true);
     await edit('crew-01'); await fill('watcher-01', 'guest', 'watcher-new-password'); await save(); await saved();
     assert.equal(await evaluate('boatMonitor.link.connected'), true); assert.equal(await evaluate('window.testConnections'), connectionCount);
     assert.equal(server.boatCloudApi.getClientCount(), 2);
     const storage = fs.readFileSync(storeFile, 'utf8');
-    for (const password of ['browser-admin-test-only', 'crew-initial-password', 'watcher-new-password', 'skipper-admin-password']) assert.ok(!storage.includes(password), 'passwords are never stored in plaintext');
+    for (const password of ['browser-admin-test-only', 'crew-initial-password', 'watcher-new-password', 'skipper-admin-password','pilot-driver-password']) assert.ok(!storage.includes(password), 'passwords are never stored in plaintext');
     await layout(1440, 'dark', 'user-management-desktop');
     await edit('watcher-01'); await layout(1440, 'dark', 'user-management-edit');
     await layout(1440, 'light', 'user-management-desktop-light');
@@ -127,6 +137,20 @@ async function main() {
     await until('!BoatAuth.busy&&document.getElementById("accountLoginError").textContent.length>0');
     assert.equal(await evaluate('!!BoatAuth.user'), false);
     await login('captain-01', 'captain-new-password'); await logout();
+    await login('pilot-03', 'pilot-driver-password');
+    await until('document.getElementById("cloudDevice").value==="boat-mqtt-test"');
+    assert.equal(await evaluate('BoatAuth.canManage&&!BoatAuth.canConfigurePlatform'),true);
+    assert.equal(await evaluate('document.getElementById("platformSettingsToggle").hidden'),true);
+    assert.equal(await evaluate('document.getElementById("sidebarPlatformSettings").hidden'),true);
+    assert.equal(await evaluate('document.getElementById("updateToggle").hidden'),false);
+    assert.equal(await evaluate('document.getElementById("firmwareToggle").hidden'),false);
+    assert.equal(await evaluate('fetch("/api/auth/online").then(response=>response.status)'),403);
+    await evaluate('BoatWorkspace.navigate("driving")');await until('BoatWorkspace.current==="driving"');
+    assert.equal(await evaluate('document.getElementById("driverEnable").hidden'),false);
+    await shot('driver-role-driving');
+    await evaluate('BoatWorkspace.navigate("missions")');await until('BoatWorkspace.current==="missions"');
+    await evaluate('document.getElementById("platformSettingsToggle").click()');assert.equal(await evaluate('document.getElementById("platformSettingsDialog").open'),false);
+    await logout();
     await evaluate('document.getElementById("accountUsername").value="watcher-01";document.getElementById("accountPassword").value="crew-initial-password";document.getElementById("accountLoginForm").requestSubmit()');
     await until('!BoatAuth.busy&&document.getElementById("accountLoginError").textContent.length>0');
     assert.equal(await evaluate('!!BoatAuth.user'), false);
@@ -137,11 +161,11 @@ async function main() {
     assert.equal(await evaluate('BoatAuth.user.role'), 'guest');
     await logout(); await login('skipper-02', 'skipper-admin-password');
     await evaluate('document.getElementById("platformSettingsToggle").click()');
-    await until('document.getElementById("userManagementList").children.length===4');
+    await until('document.getElementById("userManagementList").children.length===5');
     assert.equal(await evaluate('document.getElementById("userManagement").hidden'), false);
     assert.equal(await evaluate('[...Object.values(localStorage),...Object.values(sessionStorage)].some(value=>/captain-new-password|watcher-new-password|skipper-admin-password|crew-initial-password/.test(String(value)))'), false);
     assert.deepEqual(errors, []);
-    console.log('Chrome user management passed: real local auth/store/SSE, admin creation and user edits, password confirmation, self-session revocation and relogin, guest403, refreshed new-user login, 1440/375/320px dark/light layouts.');
+    console.log('Chrome user management passed: three roles, driver driving/missions/OTA/update access, protected platform settings, merged online users, real auth/store/SSE, self-session revocation, guest403, 1440/375/320px dark/light layouts.');
   } finally {
     socket?.close(); browser.kill(); server.closeAllConnections?.(); await new Promise(resolve => server.close(resolve));
     if (path.dirname(run) === output && path.basename(run).startsWith('user-management-state-')) fs.rmSync(run, { recursive: true, force: true });

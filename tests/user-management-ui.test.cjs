@@ -59,7 +59,7 @@ test('用户表单校验用户名、角色、确认密码，编辑留空不发�
 });
 
 test('访客、未登录、legacy及配置未知不能调用用户管理接口', async () => {
-  for (const options of [{ role: 'guest' }, { role: null }, { enabled: false, role: null }, { ready: false }]) {
+  for (const options of [{ role: 'guest' }, { role: 'driver' }, { role: null }, { enabled: false, role: null }, { ready: false }]) {
     const h = setup(options); assert.equal(await h.panel.open(), false); assert.equal(await h.panel.read(), false);
     assert.equal(h.panel.create(), false); h.edit(); assert.equal(await h.panel.save(), false); assert.equal(h.calls.length, 0); assert.equal(h.auth.verifications, 0);
     assert.equal(h.node('userManagementContent').hidden, true);

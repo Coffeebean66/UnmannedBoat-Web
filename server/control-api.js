@@ -1,7 +1,8 @@
-/* 只接受同源管理员驾驶请求，所有租约归属绑定账户会话和浏览器实例。 */
+/* 只接受同源管理员/驾驶员请求，所有租约归属绑定账户会话和浏览器实例。 */
 'use strict';
 const {ControlService,DEVICE}=require('./control-service');
 const P=require('./control-protocol');
+const {canOperate}=require('./account-permissions');
 const fault=(status,message)=>Object.assign(Error(message),{status});
 function readJson(req,limit=1024){
   if(!/^application\/json(?:\s*;|$)/i.test(String(req.headers['content-type']||'')))return Promise.reject(fault(415,'驾驶请求必须使用JSON'));
@@ -21,9 +22,9 @@ function createControlApi({bridge,accounts,service,serviceOptions={}}={}){
   const unsubscribe=accounts?.onInvalidate?.(key=>manager.releaseOwner(key))||(()=>{});
   const json=(res,status,value)=>{if(res.destroyed||res.writableEnded)return;res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
   function authorize(req,res,owner){
-    if(!accounts?.enabled||closed)throw fault(503,'网页操控需要启用平台管理员账户');
-    if(!owner||!accounts.isActive(owner)||req.aborted||res.destroyed)throw fault(401,'请登录有效的管理员账户');
-    if(owner.value.role!=='admin')throw fault(403,'仅管理员可以接管无人船');
+    if(!accounts?.enabled||closed)throw fault(503,'网页操控需要启用平台账户');
+    if(!owner||!accounts.isActive(owner)||req.aborted||res.destroyed)throw fault(401,'请登录有效的管理员或驾驶员账户');
+    if(!canOperate(owner.value))throw fault(403,'仅管理员或驾驶员可以接管无人船');
   }
   return {
     manager,

@@ -1,5 +1,6 @@
 /* 网页更新管理入口：只创建固定格式请求，特权更新由独立 systemd worker 执行。 */
 'use strict';
+const {canOperate}=require('./account-permissions');
 const fs=require('node:fs'),path=require('node:path'),https=require('node:https'),crypto=require('node:crypto');
 const {isIP}=require('node:net');
 const REPOSITORY=Object.freeze({url:'https://github.com/Coffeebean66/UnmannedBoat-Web',branch:'main'});
@@ -90,8 +91,8 @@ function createUpdateApi({env=process.env,current=readCurrentRelease(),now=Date.
   const address=req=>local(req)&&isIP(req.headers['x-real-ip']||'')?req.headers['x-real-ip']:(req.socket.remoteAddress||'unknown');
   const sameOrigin=req=>accountMode?accounts.sameOrigin(req):req.headers.origin===configuredOrigin&&(!req.headers['sec-fetch-site']||req.headers['sec-fetch-site']==='same-origin');
   const sessionKey=req=>{const token=String(req.headers.cookie||'').match(/(?:^|;\s*)boat_update_session=([a-f0-9]{64})(?:;|$)/)?.[1];return token?digest(token).toString('hex'):'';};
-  const sessionFor=req=>{if(accountMode){const session=accounts.sessionFor(req);return session?.value.role==='admin'?session:null;}const key=sessionKey(req),value=sessions.get(key);if(!value)return null;if(value.expiresAt<=now()){sessions.delete(key);return null;}return {key,value};};
-  const sessionActive=session=>!closed&&(accountMode?accounts.isActive(session)&&session.value.role==='admin':sessions.get(session.key)===session.value&&session.value.expiresAt>now());
+  const sessionFor=req=>{if(accountMode){const session=accounts.sessionFor(req);return canOperate(session?.value)?session:null;}const key=sessionKey(req),value=sessions.get(key);if(!value)return null;if(value.expiresAt<=now()){sessions.delete(key);return null;}return {key,value};};
+  const sessionActive=session=>!closed&&(accountMode?accounts.isActive(session)&&canOperate(session.value):sessions.get(session.key)===session.value&&session.value.expiresAt>now());
   const cookie=(req,token,age)=>COOKIE+'='+token+'; Path=/api/update; HttpOnly; SameSite=Strict; Max-Age='+age+(secure(req)?'; Secure':'');
   function readiness(){
     if(closed||env.BOAT_UPDATE_ENABLED!=='1')return {enabled:false,reason:'服务器尚未启用网页更新'};

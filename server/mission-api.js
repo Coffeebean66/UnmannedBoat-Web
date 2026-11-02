@@ -1,16 +1,17 @@
-/* 航线查询供已登录账户使用，保存/启动/停止仅允许同源管理员。 */
+/* 航线查询供已登录账户使用，保存/启动/停止允许同源管理员和驾驶员。 */
 'use strict';
 const {MissionStore,fault,ID}=require('./mission-store');
 const {MissionService}=require('./mission-service');
 const {readJson}=require('./control-api');
 const {DEVICE}=require('./control-service');
+const {canOperate}=require('./account-permissions');
 function createMissionApi({bridge,control,accounts,env=process.env,store,service,storeOptions={},serviceOptions={}}={}){
   const library=store||new MissionStore({env,...storeOptions}),manager=service||new MissionService({bridge,control,store:library,...serviceOptions});let closed=false;
   const json=(res,status,value)=>{if(res.destroyed||res.writableEnded)return;res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
   function authorize(req,res,session,write){
     if(closed||!accounts?.enabled)throw fault(503,'航线任务需要启用平台账户登录');
     if(!session||!accounts.isActive(session)||req.aborted||res.destroyed)throw fault(401,'请先登录监测平台');
-    if(write&&session.value.role!=='admin')throw fault(403,'仅管理员可以编辑或执行航线任务');
+    if(write&&!canOperate(session.value))throw fault(403,'仅管理员或驾驶员可以编辑或执行航线任务');
     const browserRead=!write&&!req.headers.origin&&(!req.headers['sec-fetch-site']||req.headers['sec-fetch-site']==='same-origin');
     if(!browserRead&&!accounts.sameOrigin(req))throw fault(403,'请从本站操作航线任务');
   }

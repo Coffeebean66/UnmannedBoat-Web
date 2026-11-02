@@ -1,4 +1,4 @@
-/* 浏览器只在管理员主动接管并收到船端确认后发送运动；不在本机保存接管凭据。 */
+/* 浏览器只在管理员/驾驶员主动接管并收到船端确认后发送运动；不保存接管凭据。 */
 (() => {
   'use strict';
   const MODES=['PWM 油门','船速闭环','航向闭环'];
@@ -15,7 +15,7 @@
       this.keys=new Set();this.remote=null;this.leaseId='';this.sequence=0;this.active=false;this.pending=false;this.testMode=false;
       this.request=null;this.polling=false;this.generation=0;this.destroyed=false;this.lastPoll=0;this.lastPulse=performance.now();
       this.inputRequests=new Map();this.lastInputSentAt=-Infinity;this.lastInputSignature='';this.lastInputResponseAt=0;this.lastAcceptedSequence=0;
-      this.message='选择在线无人船，由管理员启用操控后使用键盘驾驶。';this.stopReason='';this.tone='';this.actualHeading=null;
+      this.message='选择在线无人船，由管理员或驾驶员启用操控后使用键盘驾驶。';this.stopReason='';this.tone='';this.actualHeading=null;
       this.lastMode=Number(this.nodes.driverMode.value);
       this.normalMode=this.lastMode;
       this.handlers=[];
@@ -61,14 +61,14 @@
       this.listen(window,'boat-selection-change',event=>{
         if(event.detail?.selectedId!==this.context.deviceId)this.stop('无人船已切换，已停止原船操控');
       });
-      if(auth)this.listen(auth,'change',()=>{if(!this.admin())this.stop('管理员身份已失效，已停船并退出操控');this.render();});
+      if(auth)this.listen(auth,'change',()=>{if(!this.admin())this.stop('驾驶权限已失效，已停船并退出操控');this.render();});
       this.timer=window.setInterval(()=>this.pulse(),100);
       this.headingMode();this.render();
     }
     listen(target,event,handler){target.addEventListener(event,handler);this.handlers.push([target,event,handler]);}
     text(id,value){const text=String(value??'--');if(this.nodes[id].textContent!==text)this.nodes[id].textContent=text;}
     visible(){return window.BoatWorkspace?.current==='driving'&&!this.document.hidden;}
-    admin(){return this.auth?.enabled===true&&this.auth?.ready===true&&this.auth?.user?.role==='admin';}
+    admin(){return this.auth?.enabled===true&&this.auth?.ready===true&&['admin','driver'].includes(this.auth?.user?.role);}
     permitted(){return this.visible()&&this.admin()&&this.context.connected&&this.context.authenticated&&DEVICE.test(this.context.deviceId)&&!this.context.parameterBusy;}
     editing(target){return !!(target?.isContentEditable||target?.closest?.('input,select,textarea,[contenteditable="true"],dialog[open]'));}
     held(direction){return [...this.keys].some(code=>KEYS[code]===direction);}
@@ -304,7 +304,7 @@
       this.nodes.driverRelease.disabled=!this.active&&!this.pending;this.nodes.driverEmergency.disabled=!this.active&&!this.pending;
       let message=this.message;
       if(!this.active&&!this.pending){
-        if(!this.admin())message='驾驶画面可查看；仅登录的管理员可启用电脑操控。';
+        if(!this.admin())message='仅登录的管理员或驾驶员可启用电脑操控。';
         else if(!this.context.deviceId)message='请先选择需要操控的无人船。';
         else if(!this.context.connected)message='无人船未在线；等待实时连接后才能接管。';
         else if(this.context.parameterBusy)message='调参或固件升级正在进行，请完成后再接管。';

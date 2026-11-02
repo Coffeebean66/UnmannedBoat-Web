@@ -47,6 +47,16 @@ function setup(hash = '', includeFleet = false, authState = {}) {
   };
 }
 
+test('驾驶员可进入驾驶和任务界面，降为访客后立即离开并隐藏入口',()=>{
+  for(const destination of ['driving','missions']){
+    const s=setup('#'+destination,true,{user:{username:'pilot',role:'driver'}});
+    assert.equal(s.window.BoatWorkspace.current,destination);
+    assert.ok(s.links.filter(link=>['#driving','#missions'].includes(link.hash)).every(link=>!link.hidden));
+    s.setAuth({user:{username:'pilot',role:'guest'}});assert.equal(s.window.BoatWorkspace.current,'fleet');
+    assert.ok(s.links.filter(link=>['#driving','#missions'].includes(link.hash)).every(link=>link.hidden));
+  }
+});
+
 test('首次恢复独立页面或修正无效片段，不额外增加历史记录、不抢焦点',()=>{
   for (const [hash,view] of [['#analysis','analysis'],['','overview'],['#missing','overview']]) {
     const s=setup(hash);
