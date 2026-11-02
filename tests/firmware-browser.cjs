@@ -6,15 +6,16 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function main() {
   const root = path.resolve(__dirname, '..'), output = path.join(root, '.test-output'); fs.mkdirSync(output, { recursive: true });
   const server = createFixtureServer(), original = server.listeners('request')[0], calls = [], deviceId = 'boat-mqtt-test';
-  let supported = false, normalReady = true, forceSupport = false, forceReady = false, currentJob = null, upload = null;
+  let supported = false, normalReady = true, forceSupport = false, forceReady = false, currentJob = null, upload = null, abMode = false, abConfirmed = true;
   const snapshot = () => ({ deviceId, supported, online: true,
-    capability: supported ? { ready: normalReady, state: 'idle', ...(forceSupport ? { forceSupported: true, forceReady } : {}) } : null, job: currentJob });
+    capability: supported ? { ready: normalReady, state: 'idle', ...(forceSupport ? { forceSupported: true, forceReady } : {}),
+      ...(abMode ? { v: 2, activeSlot: 'B', confirmed: abConfirmed, rollbackCount: 1 } : {}) } : null, job: currentJob });
   server.removeListener('request', original);
   server.on('request', async (req, res) => {
     if (!req.url.startsWith('/api/firmware/')) return original(req, res);
     calls.push({ method: req.method, url: req.url }); const chunks = []; for await (const chunk of req) chunks.push(chunk);
     const bytes = Buffer.concat(chunks), json = data => { res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(data)); };
-    if (req.url.endsWith('/config')) return json({ enabled: true, forceSupported: true, maxSize: 655360, chunkSize: 256 });
+    if (req.url.endsWith('/config')) return json({ enabled: true, forceSupported: true, maxSize: 655360, chunkSize: 256, abSupported: true, maxUploadSize: 1310880 });
     if (req.method === 'POST' && req.url.endsWith('/cancel')) currentJob = { ...currentJob, state: 'cancelled', cancelable: false };
     else if (req.method === 'POST') {
       upload = { bytes, name: decodeURIComponent(req.headers['x-firmware-name']), forceHeader: req.headers['x-firmware-force'], type: req.headers['content-type'], url: req.url };
@@ -116,6 +117,23 @@ async function main() {
     assert.equal(await evaluate('window.__firmwareConfirmations.at(-1).includes("强制")&&window.__firmwareConfirmations.at(-1).includes('+JSON.stringify(deviceId)+')'), true, 'Forced OTA requires its own vessel-specific confirmation');
     assert.equal(await evaluate('document.getElementById("firmwareStatus").textContent.includes("强制")'), true, 'Active forced job is explicitly identified');
     assert.equal(await evaluate('["firmwareStart","firmwareForceStart"].every(id=>document.getElementById(id).disabled)'), true, 'Neither upload action can overlap a forced task');
+    currentJob = null; abMode = true; normalReady = true;
+    await evaluate('document.getElementById("firmwareRefresh").click()');
+    await until('document.getElementById("firmwareCapability").textContent.includes("A/B OTA")');
+    await selectFirmware(); assert.equal(await evaluate('document.getElementById("firmwareStart").disabled'), true);
+    await evaluate('(()=>{const transfer=new DataTransfer();transfer.items.add(new File([new Uint8Array(209200)],"dual.boatota",{type:"application/octet-stream"}));const n=document.getElementById("firmwareFile");n.files=transfer.files;n.dispatchEvent(new Event("change"));})()');
+    assert.equal(await evaluate('document.getElementById("firmwareStart").disabled'), false);
+    abConfirmed = false; normalReady = forceReady = false;
+    await evaluate('document.getElementById("firmwareRefresh").click()');
+    await until('document.getElementById("firmwareStatus").textContent.includes("试运行")');
+    assert.equal(await evaluate('document.getElementById("firmwareStart").disabled'), true);
+    await shot('firmware-ab-trial-320');
+    currentJob = { id: 'ab-test', deviceId, name: 'dual.boatota', size: 104512, sha256: 'b'.repeat(64), state: 'rolled_back', progress: 100,
+      receivedBytes: 104512, cancelable: false, error: '新固件试运行未通过健康确认，单片机已自动回滚到旧版本' };
+    abConfirmed = true;
+    await evaluate('document.getElementById("firmwareRefresh").click()');
+    await until('document.getElementById("firmwarePhase").textContent==="已自动回滚"');
+    await shot('firmware-ab-rollback-320');
     await evaluate('BoatAuth.logout()'); await until('!document.getElementById("firmwareDialog").open');
     await evaluate('BoatAuth.login("observer","browser-guest-test-only")');
     await until('document.querySelector(".fleet-card")');

@@ -34,7 +34,7 @@ class FirmwareService {
     return { deviceId: id, supported: this.fresh(cap), online: this.fresh(cap), capability,
       job: job ? { id: job.id, deviceId: id, name: job.name, size: job.size, sha256: job.sha256, state: job.state, force: job.force,
         receivedBytes: job.receivedBytes, progress: Math.floor(job.receivedBytes * 100 / job.size), error: job.error,
-        startedAt: job.startedAt, updatedAt: job.updatedAt, cancelable: ACTIVE.has(job.state) && !job.commitSent } : null };
+        startedAt: job.startedAt, updatedAt: job.updatedAt, targetSlot: job.targetSlot || null, cancelable: ACTIVE.has(job.state) && !job.commitSent } : null };
   }
   acceptCapability({ deviceId, payload, retained } = {}) {
     if (this.closed || retained || typeof deviceId !== 'string' || !DEVICE.test(deviceId)) return false;
@@ -45,7 +45,11 @@ class FirmwareService {
     this.caps.set(deviceId, { ...cap, receivedAt: this.now() });
     const job = this.jobs.get(deviceId);
     if (job && ACTIVE.has(job.state)) {
-      if (job.commitSent && cap.bootId !== job.bootId && cap.imageSha256 === job.sha256) this.finish(job, 'succeeded', null);
+      if (job.ab && job.commitSent && cap.v === 2 && cap.bootId !== job.bootId && cap.confirmed &&
+          cap.rollbackCount > job.rollbackCount && cap.activeSlot !== job.targetSlot)
+        this.finish(job, 'rolled_back', cap.rollbackReason === 2 ? '新固件校验失败，单片机已自动回滚到旧版本' : '新固件试运行未通过健康确认，单片机已自动回滚到旧版本');
+      else if (job.commitSent && cap.bootId !== job.bootId && cap.imageSha256 === job.sha256 &&
+          (!job.ab || cap.v === 2 && cap.confirmed && cap.activeSlot === job.targetSlot)) this.finish(job, 'succeeded', null);
       else if (job.state !== 'installing' && (cap.session !== job.session || cap.bootId !== job.bootId || job.commitSent && cap.state === 'installing')) {
         if (job.commitSent) this.awaitInstallation(job, '安装指令已发出，正在等待重启后的固件摘要确认');
         else this.finish(job, 'failed', '单片机会话已变化，请重新读取状态；未确认的升级不会显示成功');
@@ -71,14 +75,16 @@ class FirmwareService {
       throw fault(503, force ? '该船尚未提供可用的强制OTA能力；请确认在线运行支持强制升级的OTA固件' : '该船未在线提供可用OTA能力；需先有线安装Bootloader及OTA固件，并确认电机停稳');
     if (this.isActive(id)) throw fault(409, '该船已有固件升级任务');
     if ([...this.jobs.values()].filter(job => ACTIVE.has(job.state)).length >= this.maxActive) throw fault(429, '同时升级的船只已达上限，请稍后再试');
-    const info = protocol.validateImage(image), signed = protocol.manifest(image, this.key);
-    if (image.length > cap.maxSize) throw fault(400, '固件超过该设备允许大小');
+    const selected = protocol.selectImage(image, cap), { image: selectedImage, ...info } = selected;
+    const signed = protocol.manifest(selectedImage, this.key, cap);
+    if (selectedImage.length > cap.maxSize) throw fault(400, '固件超过该设备允许大小');
     this.bridge.claimFirmware(id);
     while (this.jobs.size >= this.maxJobs && !this.jobs.has(id)) {
       const old = [...this.jobs.values()].filter(job => !ACTIVE.has(job.state)).sort((a, b) => a.updatedAt - b.updatedAt)[0];
       if (!old) { this.bridge.releaseFirmware(id); throw fault(429, '升级任务目录已满'); } this.jobs.delete(old.deviceId);
     }
-    const job = { id: crypto.randomBytes(16).toString('hex'), deviceId: id, name, ...info, force, image: Buffer.from(image), manifest: signed,
+    const job = { id: crypto.randomBytes(16).toString('hex'), deviceId: id, name, ...info, force, image: Buffer.from(selectedImage), manifest: signed,
+      ab: cap.v === 2, rollbackCount: cap.rollbackCount || 0,
       state: 'queued', receivedBytes: 0, error: null, startedAt: this.now(), updatedAt: this.now(), session: cap.session, bootId: cap.bootId,
       commitSent: false, pending: null, installTimer: null };
     this.jobs.set(id, job); setImmediate(() => this.run(job)); return this.snapshot(id);

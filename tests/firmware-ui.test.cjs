@@ -36,6 +36,21 @@ function fixture({ enabled = true, supported = true, ready = true, online = true
 }
 function job(id, state, extra = {}) { return { id: 'test', deviceId: id, name: 'boat-ota.bin', size: 1024, sha256: 'a'.repeat(64), state, receivedBytes: 512, progress: 50, error: null, cancelable: ['queued', 'transferring'].includes(state), ...extra }; }
 
+test('A/B设备只选择双镜像包，展示试运行与自动回滚且不误报完成', async () => {
+  const f = fixture(); Object.assign(f.config, { abSupported: true, maxUploadSize: 1310880 });
+  Object.assign(f.snapshots.get('boat-01').capability, { v: 2, activeSlot: 'A', confirmed: true, rollbackCount: 0 });
+  await f.panel.open('boat-01'); f.select('single.bin'); assert.equal(f.nodes.firmwareStart.disabled, true);
+  f.select('too-small.boatota', 671); assert.equal(f.nodes.firmwareStart.disabled, true);
+  f.select('too-large.boatota', 1310881); assert.equal(f.nodes.firmwareStart.disabled, true);
+  f.select('dual.boatota', 209000); assert.equal(f.nodes.firmwareStart.disabled, false);
+  assert.match(f.nodes.firmwareCapability.textContent, /当前 A 区/);
+  Object.assign(f.snapshots.get('boat-01').capability, { activeSlot: 'B', confirmed: false, ready: false, forceReady: false });
+  await f.panel.refresh(); assert.equal(f.nodes.firmwareStart.disabled, true); assert.match(f.nodes.firmwareStatus.textContent, /试运行/);
+  f.snapshots.get('boat-01').job = job('boat-01', 'rolled_back', { error: '试运行失败，已自动回滚', cancelable: false });
+  await f.panel.refresh(); assert.equal(f.nodes.firmwarePhase.textContent, '已自动回滚'); assert.match(f.nodes.firmwareStatus.textContent, /自动回滚/);
+  f.panel.destroy();
+});
+
 test('管理员按船上传二进制，只在设备就绪且文件有效时允许升级', async () => {
   const f = fixture(); await f.panel.open('boat-02');
   assert.equal(f.nodes.firmwareDevice.textContent, 'boat-02'); assert.equal(f.nodes.firmwareStart.disabled, true);

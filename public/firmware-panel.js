@@ -4,7 +4,7 @@
   const DEVICE = /^[A-Za-z0-9_-]{1,64}$/, BASE = '/api/firmware';
   const ACTIVE = new Set(['queued', 'transferring', 'verifying', 'installing']);
   const STATES = { queued: '等待单片机准备', transferring: '传输固件', verifying: '校验下载内容', installing: '等待重启验证',
-    succeeded: '升级完成', failed: '升级失败', cancelled: '已取消', unknown: '尚未确认升级结果' };
+    succeeded: '升级完成', failed: '升级失败', rolled_back: '已自动回滚', cancelled: '已取消', unknown: '尚未确认升级结果' };
   const cancelled = () => Object.assign(Error('固件请求已取消'), { cancelled: true });
   class BoatFirmwarePanel {
     constructor(options = {}) {
@@ -104,7 +104,11 @@
       });
     }
     file() { return this.nodes.firmwareFile.files?.[0] || null; }
-    fileValid() { const file = this.file(); return !!(file && /\.bin$/i.test(file.name) && file.size >= 256 && file.size <= (this.config?.maxSize || 655360)); }
+    fileValid() {
+      const file = this.file(), ab = this.snapshot?.capability?.v === 2;
+      return !!(file && (ab ? this.config?.abSupported && /\.boatota$/i.test(file.name) : /\.bin$/i.test(file.name)) &&
+        file.size >= (ab ? 672 : 256) && file.size <= (ab ? this.config?.maxUploadSize || 1310880 : this.config?.maxSize || 655360));
+    }
     ready(force = false) {
       const cap = this.snapshot?.capability;
       return !!(this.config?.enabled && this.snapshot?.supported && this.snapshot.online &&
@@ -133,23 +137,26 @@
     describe() {
       const job = this.snapshot?.job;
       if (job) {
-        const text = job.state === 'succeeded' ? '已确认单片机重启，运行固件摘要与本次上传一致。' : job.state === 'installing' ? '下载已完成，正在等待单片机重启并确认新固件，请保持供电。' :
+        const text = job.state === 'succeeded' ? (job.targetSlot ? '新固件已通过健康确认，当前运行在 ' + job.targetSlot + ' 区，摘要与本次上传一致。' : '已确认单片机重启，运行固件摘要与本次上传一致。') : job.state === 'installing' ? (this.snapshot?.capability?.v === 2 && !this.snapshot.capability.confirmed ? '新固件正在试运行，推进保持中位；连续健康10秒后确认，60秒未确认则回滚，请保持供电。' : '下载已完成，正在等待单片机重启并确认新固件，请保持供电。') :
           job.state === 'unknown' ? '尚未收到新固件的重启确认，请检查船端状态后重新读取。下载达到 100% 不代表安装成功。' :
-          job.state === 'failed' ? job.error || '升级失败，请检查船端状态后重新开始。' : job.state === 'cancelled' ? '固件传输已取消。再次运行电机前需重新满足停机解锁条件。' : STATES[job.state] + '，任务在服务器后台继续。';
-        this.notice((job.force ? '强制 OTA · ' : '') + text, job.state === 'succeeded' ? 'success' : ['failed', 'unknown'].includes(job.state) ? 'error' : 'neutral');
+          ['failed', 'rolled_back'].includes(job.state) ? job.error || '升级失败，请检查船端状态后重新开始。' : job.state === 'cancelled' ? '固件传输已取消。再次运行电机前需重新满足停机解锁条件。' : STATES[job.state] + '，任务在服务器后台继续。';
+        this.notice((job.force ? '强制 OTA · ' : '') + text, job.state === 'succeeded' ? 'success' : ['failed', 'unknown', 'rolled_back'].includes(job.state) ? 'error' : 'neutral');
       } else if (!this.config?.enabled) this.notice(this.config?.reason || '服务器尚未启用无线升级，请按接入教程配置。');
       else if (!this.snapshot?.supported) this.notice('尚未收到这艘船的有效 OTA 能力，请确认船端在线。首次需有线烧入 Bootloader 和 OTA 应用。');
       else if (!this.snapshot.online) this.notice('这艘无人船当前离线，保持船端通电联网后重新读取。');
+      else if (this.snapshot.capability?.v === 2 && !this.snapshot.capability.confirmed) this.notice('新固件正在试运行，推进保持中位；控制与通信连续正常10秒后确认，60秒内未通过则自动回滚。');
       else if (!this.snapshot.capability?.ready && this.ready(true)) this.notice('普通升级的外设停机条件未满足；若外设未通电，可选择固件后点击“强制 OTA 升级”。单片机已确认 PWM 归零并允许维护。');
       else if (!this.snapshot.capability?.ready) this.notice('普通升级需 CH6 低档、两路电机停稳且反馈正常满 1 秒；外设未通电时请查看下方强制 OTA 状态。');
-      else this.notice('设备已就绪。选择为此工程构建的 OTA 应用 .bin，然后点击“上传并升级”。');
+      else this.notice(this.snapshot.capability?.v === 2 ? 'A/B设备已就绪。选择双镜像.boatota包；平台自动发送到未运行区，健康确认后完成升级。' : '设备已就绪。选择为此工程构建的 OTA 应用 .bin，然后点击“上传并升级”。');
     }
     render() {
       const n = this.nodes, admin = this.admin(), job = this.snapshot?.job, file = this.file();
       n.firmwareDevice.textContent = this.deviceId || '未选择无人船';
-      n.firmwareCapability.textContent = this.snapshot?.supported ? '支持 OTA · 应用地址 0x08020000 · 最大 640 KiB' : '等待设备上报升级能力';
+      const cap = this.snapshot?.capability, ab = cap?.v === 2;
+      n.firmwareCapability.textContent = this.snapshot?.supported ? ab ? 'A/B OTA · 当前 ' + cap.activeSlot + ' 区 · ' + (cap.confirmed ? '已确认' : '试运行') + ' · 自动回滚 ' + cap.rollbackCount + ' 次' : '支持 OTA · 应用地址 0x08020000 · 最大 640 KiB' : '等待设备上报升级能力';
+      n.firmwareFile.accept = ab ? '.boatota,application/octet-stream' : '.bin,application/octet-stream';
       n.firmwareFile.disabled = !admin || this.busy || !!(job && ACTIVE.has(job.state));
-      n.firmwareFileInfo.textContent = file ? file.name + ' · ' + (file.size / 1024).toFixed(1) + ' KiB' + (this.fileValid() ? '' : ' · 请选择 256 字节至 640 KiB 的 .bin') : '上传 OTA 构建的应用 .bin，不能选择 Bootloader、.hex 或原直烧固件。';
+      n.firmwareFileInfo.textContent = file ? file.name + ' · ' + (file.size / 1024).toFixed(1) + ' KiB' + (this.fileValid() ? '' : ab ? ' · 请选择完整.boatota双镜像包' : ' · 请选择 256 字节至 640 KiB 的 .bin') : ab ? '上传tools/build-ota-ab.ps1生成的.boatota包，自动选择A/B目标区。' : '上传 OTA 构建的应用 .bin，不能选择 Bootloader、.hex 或原直烧固件。';
       n.firmwareStart.disabled = !admin || this.busy || !this.ready() || !this.fileValid();
       n.firmwareForceStart.disabled = !admin || this.busy || !this.ready(true) || !this.fileValid();
       n.firmwareForceHint.textContent = !this.config?.enabled ? '强制 OTA 需要服务器启用升级服务。' : !this.snapshot?.supported || !this.snapshot.online ? '强制 OTA 仍需单片机通电联网，并上报有效升级能力。' :

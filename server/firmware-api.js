@@ -21,7 +21,7 @@ function readBytes(req, limit, timeoutMs) {
 function firmwareName(value) {
   if (typeof value !== 'string' || value.length > 768) throw fault(400, '请提供固件.bin文件名');
   let name; try { name = decodeURIComponent(value); } catch (_) { throw fault(400, '固件文件名编码不正确'); }
-  if (name.length < 5 || name.length > 180 || !/\.bin$/i.test(name) || /[\x00-\x1f\x7f/\\]/.test(name) || name.startsWith('.')) throw fault(400, '请选择普通.bin固件文件，不要包含目录或控制字符');
+  if (name.length < 5 || name.length > 180 || !/\.(bin|boatota)$/i.test(name) || /[\x00-\x1f\x7f/\\]/.test(name) || name.startsWith('.')) throw fault(400, '请选择.bin或.boatota固件文件，不要包含目录或控制字符');
   return name;
 }
 function createFirmwareApi({ env = process.env, accounts, bridge, service, uploadTimeoutMs = 20000, maxUploads = 2, serviceOptions = {} } = {}) {
@@ -50,7 +50,7 @@ function createFirmwareApi({ env = process.env, accounts, bridge, service, uploa
         if (url.pathname === PREFIX + '/config') {
           if (!read) throw fault(405, '固件配置只支持GET');
           json(res, 200, { enabled: enabled(), reason: reason(), maxSize: protocol.MAX_SIZE, chunkSize: protocol.CHUNK_SIZE,
-            boardId: protocol.BOARD_ID, applicationAddress: protocol.APPLICATION_ADDRESS, forceSupported: true }); return true;
+            boardId: protocol.BOARD_ID, applicationAddress: protocol.APPLICATION_ADDRESS, maxUploadSize: protocol.MAX_UPLOAD_SIZE, abSupported: true, forceSupported: true }); return true;
         }
         const match = /^\/api\/firmware\/boats\/([A-Za-z0-9_-]{1,64})(?:\/(cancel))?$/.exec(url.pathname);
         if (!match || !DEVICE.test(match[1])) throw fault(404, '固件接口不存在');
@@ -76,7 +76,7 @@ function createFirmwareApi({ env = process.env, accounts, bridge, service, uploa
         if (manager.isActive(id)) throw fault(409, '该船已有固件升级任务');
         uploads.add(id);
         try {
-          const image = await readBytes(req, protocol.MAX_SIZE, uploadTimeoutMs);
+          const image = await readBytes(req, /\.boatota$/i.test(name) ? protocol.MAX_UPLOAD_SIZE : protocol.MAX_SIZE, uploadTimeoutMs);
           try { authorize(owner, req, res); usable(); json(res, 202, manager.start(id, name, image, { force })); }
           finally { image.fill(0); }
         } finally { uploads.delete(id); }

@@ -210,6 +210,7 @@ server {
     ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
+    client_max_body_size 2m;
     location / {
         proxy_pass http://127.0.0.1:$port;
         proxy_http_version 1.1;
