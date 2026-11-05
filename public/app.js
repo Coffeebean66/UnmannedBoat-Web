@@ -263,9 +263,9 @@
     mapVectors.render(M.mapVelocity.prepareMapVelocity(x.boat?.frame,x.boat?.at||0,x.velocity?.frame,x.velocity?.at||0,now,link.connected));
     renderCompass(now);
     const imu=M.imuDisplay.prepareImuDisplay(x.imu?.frame,x.imu?.at||0,now,link.connected);
-    // 驾驶左上读数与原监测卡共用有效期判断，断流后一起清空，避免显示旧定位。
+    // 驾驶遥测与图传 HUD 共用有效期判断，断流后一起清空，避免显示旧定位或姿态。
     driver.setTelemetry({...b,actualHeading:Number.isFinite(driverHeading)?driverHeading.toFixed(2):'--',
-      latitude:v.latitude,longitude:v.longitude,fixStatus:v.fixStatus,fixValid:v.fixFresh,imuStatus:imu.status,imuValid:imu.fresh});
+      latitude:v.latitude,longitude:v.longitude,fixStatus:v.fixStatus,fixValid:v.fixFresh,imuStatus:imu.status,imuValid:imu.fresh,imu});
     for(const key of ['roll','pitch','yaw','gyroX','gyroY','gyroZ'])set(key,imu[key]);
     for(const [id,key] of Object.entries({imuStatus:'status',imuSequence:'sequence',imuAge:'ageText',imuAlignment:'alignmentText',imuHeadingUpdate:'headingUpdateText'}))set(id,imu[key]);
     // 角速度与欧拉角独立有效，部分数据可用时以黄色提示。
@@ -594,7 +594,7 @@
     viewResizeFrame=requestAnimationFrame(()=>{
       if($('map').clientWidth&&$('map').clientHeight)map.invalidateSize();
       const rect=viewer.canvas.getBoundingClientRect();
-      viewer.visible=!viewer.canvas.closest('details:not([open])')&&rect.width>0&&rect.height>0&&rect.bottom>0&&rect.top<innerHeight;
+      viewer.visible=!viewer.canvas.closest('details:not([open])')&&(!viewer.canvas.closest('[data-driver-part-hidden="true"]')||driver.layout?.editing)&&rect.width>0&&rect.height>0&&rect.bottom>0&&rect.top<innerHeight;
       if(viewer.visible){viewer.resize();viewer.catchUp();viewer.schedule(true);}
       render();
     });

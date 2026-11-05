@@ -73,6 +73,13 @@ async function main(){
     await evaluate('window.scrollTo(0,0)');await shot('missions-desktop-dark');
     await evaluate('document.getElementById("missionGoto").click()');await until('BoatMissions.run()?.status==="completed"');assert.equal(f.mission.snapshot('boat-01').stopConfirmed,true);
     await evaluate('document.getElementById("missionStart").click()');await until('BoatMissions.run()?.status==="running"');
+    await evaluate('BoatWorkspace.navigate("driving",{focus:false})');
+    await until('document.getElementById("driverMissionState").dataset.status==="running"');
+    assert.equal(await evaluate('document.getElementById("driverMissionName").textContent'),'湖区巡检 A','Driving summarizes the current vessel server mission');
+    assert.equal(await evaluate('document.getElementById("driverMissionProgress").textContent===(BoatMissions.run().targetIndex+1)+" / "+BoatMissions.run().pointCount'),true);
+    assert.equal(await evaluate('document.getElementById("driverMissionLoop").textContent'),'1 / 2 圈');
+    const staleMission=await evaluate('(()=>{BoatMissions.statusError="同步失败";BoatMissions.render();const state=document.getElementById("driverMissionState").textContent;BoatMissions.statusError="";BoatMissions.render();return state;})()');
+    assert.equal(staleMission,'状态过期','A failed mission status query is never shown as current');
     assert.equal(f.mission.snapshot('boat-01').algorithm,1);assert.ok(f.mission.jobs.get('boat-01').optimal);
     assert.match(await evaluate('document.getElementById("missionAlgorithm").textContent'),/最优控制/);
     await evaluate('BoatWorkspace.navigate("navigation",{focus:false});document.getElementById("mapFollow").checked=false');
@@ -98,6 +105,7 @@ async function main(){
     await evaluate('boatMonitor.map.switchProvider("osm")');
     f.feed('boat-02');
     await evaluate('boatMonitor.selectBoat("boat-02",false)');await until('BoatMissions.deviceId==="boat-02"');
+    assert.equal(await evaluate('document.getElementById("driverMissionName").textContent'),'暂无运行中的任务','Selecting a different boat clears the driving mission summary');
     assert.equal(await evaluate('boatMonitor.mapMission.markers.length'),0,'Another vessel never inherits the original mission route');
     assert.equal(f.mission.active('boat-01'),true);
     await evaluate('boatMonitor.selectBoat("boat-01",false)');await until('boatMonitor.mapMission.markers.length===3');

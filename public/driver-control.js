@@ -8,7 +8,8 @@
   class BoatDriverControl {
     constructor({document=window.document,fetch=window.fetch.bind(window),auth=window.BoatAuth,toast=()=>{}}={}) {
       this.document=document;this.fetch=fetch;this.auth=auth;this.toast=toast;
-      this.nodes=Object.fromEntries(['view-driving','driverBoatName','driverState','driverEnable','driverRelease','driverEmergency','driverTestMode','driverTestNotice','driverTestAck','driverNotice','driverActualSpeed','driverTargetSpeed','driverActualHeading','driverActualMode','driverInput','driverLatitude','driverLongitude','driverFixStatus','driverImuStatus','driverModelPreview','driverMode','driverLimit','driverLimitValue','driverHeading','driverHoldHeading','driverVideoExpand','driverMapExpand','driverOverlayOpacity','driverOverlayOpacityValue','driverFocusTools','driverDetailsPanel','driverDetailsToggle','driverDetailsClose','driverDisplayOptions','driverControlOptions','driverInstrumentToggle'].map(id=>[id,document.getElementById(id)]));
+      this.nodes=Object.fromEntries(['view-driving','driverBoatName','driverLinkStatus','driverState','driverEnable','driverRelease','driverEmergency','driverTestMode','driverTestNotice','driverTestAck','driverNotice','driverActualSpeed','driverTargetSpeed','driverActualHeading','driverActualMode','driverInput','driverLatitude','driverLongitude','driverFixStatus','driverImuStatus','driverModelPreview','driverMode','driverLimit','driverLimitValue','driverHeading','driverHoldHeading','driverVideoExpand','driverMapExpand','driverOverlayOpacity','driverOverlayOpacityValue','driverFocusTools','driverDetailsPanel','driverDetailsToggle','driverDetailsClose','driverDisplayOptions','driverControlOptions','driverInstrumentToggle'].map(id=>[id,document.getElementById(id)]));
+      this.hud=new window.BoatDriverHud({document});
       const random=new Uint8Array(8);window.crypto.getRandomValues(random);
       this.clientId=Array.from(random,value=>value.toString(16).padStart(2,'0')).join('');
       this.context={deviceId:'',connected:false,authenticated:false,canManage:false,parameterBusy:false};
@@ -74,6 +75,11 @@
         if(event.detail?.selectedId!==this.context.deviceId)this.stop('无人船已切换，已停止原船操控');
       });
       if(auth)this.listen(auth,'change',()=>{if(!this.admin())this.stop('驾驶权限已失效，已停船并退出操控');this.render();});
+      this.layout=new window.BoatDriverLayout({document,onEditingChange:editing=>{
+        if(editing){this.keys.clear();this.stop('已进入布局编辑，已停船并退出操控');}
+        else if(this.stopReason==='已进入布局编辑，已停船并退出操控'){this.stopReason='';this.message='布局已保存，点击启用操控继续驾驶。';}
+        this.render();
+      },onReset:()=>{this.setOverlayOpacity(90);this.setInstrumentsVisible(true);}});
       this.timer=window.setInterval(()=>this.pulse(),100);
       this.headingMode();this.render();
     }
@@ -81,7 +87,7 @@
     text(id,value){const text=String(value??'--');if(this.nodes[id].textContent!==text)this.nodes[id].textContent=text;}
     visible(){return window.BoatWorkspace?.current==='driving'&&!this.document.hidden;}
     admin(){return this.auth?.enabled===true&&this.auth?.ready===true&&['admin','driver'].includes(this.auth?.user?.role);}
-    permitted(){return this.visible()&&this.admin()&&this.context.connected&&this.context.authenticated&&DEVICE.test(this.context.deviceId)&&!this.context.parameterBusy;}
+    permitted(){return this.visible()&&this.admin()&&this.context.connected&&this.context.authenticated&&DEVICE.test(this.context.deviceId)&&!this.context.parameterBusy&&!this.layout?.editing;}
     editing(target){return !!(target?.isContentEditable||target?.closest?.('input,select,textarea,[contenteditable="true"],dialog[open]'));}
     held(direction){return [...this.keys].some(code=>KEYS[code]===direction);}
     state(){return {deviceId:this.context.deviceId,active:this.active,pending:this.pending,testMode:this.testMode,leaseId:this.leaseId,sequence:this.sequence,keys:[...this.keys],remote:this.remote};}
@@ -105,6 +111,7 @@
       this.render();
     }
     setTelemetry(value={}) {
+      this.hud.setTelemetry(value);
       this.text('driverActualSpeed',value.actual);this.text('driverTargetSpeed',value.target);
       this.text('driverActualHeading',value.actualHeading);this.text('driverActualMode',value.modeText);
       this.text('driverLatitude',value.latitude);this.text('driverLongitude',value.longitude);
@@ -229,6 +236,7 @@
       this.lastPoll=0;this.render();
     }
     keyDown(event) {
+      if(event.code==='Escape'&&this.layout?.editing){event.preventDefault();this.layout.setEditing(false);return;}
       if(event.code==='Escape'&&this.visible()){
         if(!this.nodes.driverDetailsPanel.hidden){event.preventDefault();this.setDetailsOpen(false,true);return;}
         for(const id of ['driverDisplayOptions','driverControlOptions'])if(this.nodes[id].open){event.preventDefault();this.nodes[id].open=false;this.nodes[id].querySelector('summary').focus({preventScroll:true});return;}
@@ -275,15 +283,16 @@
     setMediaFocus(name) {
       const panel=this.nodes['view-driving'];
       if(name)panel.dataset.focus=name;else delete panel.dataset.focus;
-      // 放大时保留另一媒体的小窗；还原后回到图传为主、地图在右上的驾驶台。
+      // 放大时保留另一媒体的小窗；还原后恢复左右分栏驾驶台。
       panel.dataset.primary=name||'video';
       if(name)this.document.documentElement.dataset.driverFocus='true';else delete this.document.documentElement.dataset.driverFocus;
       for(const [type,id]of [['video','driverVideoExpand'],['map','driverMapExpand']]){
         const active=panel.dataset.focus===type;this.nodes[id].setAttribute('aria-pressed',String(active));
-        this.text(id,active?'还原布局':type==='video'?(name==='map'?'放大图传':'全屏图传'):'放大地图');
+        this.text(id,active?'还原布局':type==='video'?'放大图传':'放大地图');
       }
       this.nodes.driverFocusTools.hidden=false;
       this.updateOverlayInteraction();
+      this.layout?.refresh();
       window.dispatchEvent(new CustomEvent('boat-driver-layout-change'));
     }
     setOverlayOpacity(value) {
@@ -292,14 +301,16 @@
       this.nodes['view-driving'].style.setProperty('--driver-overlay-opacity',(opacity/100).toFixed(2));
       this.nodes['view-driving'].dataset.overlayHidden=String(opacity===0);
       this.updateOverlayInteraction();
+      this.layout?.refresh();
       this.text('driverOverlayOpacityValue',opacity+'%');
       try{window.localStorage?.setItem('boat-driver-overlay-opacity',String(opacity));}catch(_){}
     }
     setDetailsOpen(open,restoreFocus=false) {
       this.nodes.driverDetailsPanel.hidden=!open;
       this.nodes.driverDetailsToggle.setAttribute('aria-expanded',String(open));
-      if(!open)this.nodes.driverModelPreview.open=false;
+      if(!open&&this.nodes.driverDetailsPanel.contains(this.nodes.driverModelPreview))this.nodes.driverModelPreview.open=false;
       if(restoreFocus)this.nodes.driverDetailsToggle.focus({preventScroll:true});
+      this.layout?.refresh();
       window.dispatchEvent(new CustomEvent('boat-driver-layout-change'));
     }
     setInstrumentsVisible(visible) {
@@ -308,6 +319,7 @@
       this.nodes.driverInstrumentToggle.setAttribute('aria-pressed',String(visible));
       this.text('driverInstrumentToggle',visible?'仪表：显示':'仪表：隐藏');
       try{window.localStorage?.setItem('boat-driver-instruments-visible',String(visible));}catch(_){}
+      this.layout?.refresh();
       window.dispatchEvent(new CustomEvent('boat-driver-layout-change'));
     }
     updateOverlayInteraction() {
@@ -319,6 +331,8 @@
     render() {
       if(this.destroyed)return;
       this.text('driverBoatName',this.context.deviceId||'未选择无人船');
+      this.nodes.driverLinkStatus.dataset.connected=String(this.context.connected);
+      this.text('driverLinkStatus',this.context.connected?'实时遥测已连接':'等待实时连接');
       const state=this.active?(this.testMode?'test':'active'):this.pending?'pending':'idle';this.nodes.driverState.dataset.state=state;
       this.text('driverState',this.active?(this.testMode?'测试场景 · 已接管':'电脑已接管'):this.pending?'等待船端确认':this.remote?.state===2?'停船保护':'监测待机');
       this.nodes.driverEnable.disabled=!this.permitted()||this.active||this.pending||!this.remote?.ready||(this.testMode&&!this.remote?.testSupported)||(Number(this.nodes.driverMode.value)===2&&!Number.isFinite(this.actualHeading));
@@ -335,7 +349,8 @@
       this.nodes.driverRelease.disabled=!this.active&&!this.pending;this.nodes.driverEmergency.disabled=!this.active&&!this.pending;
       let message=this.message;
       if(!this.active&&!this.pending){
-        if(!this.admin())message='仅登录的管理员或驾驶员可启用电脑操控。';
+        if(this.layout?.editing)message='布局编辑中；完成后重新启用操控。';
+        else if(!this.admin())message='仅登录的管理员或驾驶员可启用电脑操控。';
         else if(!this.context.deviceId)message='请先选择需要操控的无人船。';
         else if(!this.context.connected)message='无人船未在线；等待实时连接后才能接管。';
         else if(this.context.parameterBusy)message='调参或固件升级正在进行，请完成后再接管。';
@@ -348,7 +363,7 @@
       this.text('driverNotice',message);this.nodes.driverNotice.dataset.tone=this.tone;
       this.renderKeys();
     }
-    destroy(){if(this.destroyed)return;this.stop('驾驶界面已关闭，已请求停船');this.setMediaFocus('');this.destroyed=true;window.clearInterval(this.timer);for(const [target,event,handler]of this.handlers)target.removeEventListener(event,handler);this.handlers=[];}
+    destroy(){if(this.destroyed)return;this.stop('驾驶界面已关闭，已请求停船');this.setMediaFocus('');this.layout?.destroy();this.destroyed=true;window.clearInterval(this.timer);for(const [target,event,handler]of this.handlers)target.removeEventListener(event,handler);this.handlers=[];}
   }
   window.BoatDriverControl=BoatDriverControl;
 })();

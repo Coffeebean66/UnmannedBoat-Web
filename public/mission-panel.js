@@ -185,6 +185,15 @@
       const algorithm=run?.active?run.algorithm:window.boatMonitor?.link?.devices?.find(d=>d.id===this.deviceId)?.controlAlgorithm?.id;
       $('missionAlgorithm').textContent='任务算法：'+(algorithm===1?'最优控制 · LQR航线＋船速LQI/航向LQR':algorithm===0?'原算法 · 前视航线＋PID':'等待船端状态；旧固件沿用原算法');
       $('missionPhase').textContent=run?.status==='running'?({route:'沿线航行',returning:'返回起点',goto:'前往起点'}[run.phase]||'沿线航行'):(labels[run?.status]||'--');
+      // 驾驶台展示服务器的真实执行状态；查询失败时保留数据并明确标为状态过期。
+      const driverRun=this.admin?run:null;
+      $('driverMissionState').textContent=this.statusError?'状态过期':labels[driverRun?.status]||'待命';
+      $('driverMissionState').dataset.status=this.statusError?'stale':driverRun?.status||'idle';
+      $('driverMissionName').textContent=driverRun?.routeName||'暂无运行中的任务';
+      $('driverMissionProgress').textContent=driverRun?(driverRun.targetIndex+1)+' / '+driverRun.pointCount:'--';
+      $('driverMissionDistance').textContent=Number.isFinite(driverRun?.distanceM)?driverRun.distanceM.toFixed(1)+' m':'--';
+      $('driverMissionPhase').textContent=driverRun?.status==='running'?({route:'沿线航行',returning:'返回起点',goto:'前往起点'}[driverRun.phase]||'沿线航行'):(labels[driverRun?.status]||'--');
+      $('driverMissionLoop').textContent=driverRun?.action==='start'?(driverRun.loopEnabled?driverRun.currentLoop+' / '+driverRun.loopCount+' 圈':'单次'):'--';
       this.renderRunningBar();
       window.dispatchEvent(new CustomEvent('boat-mission-change',{detail:this.navigationState()}));
       if(this.storageError)this.notice(this.storageError,true);

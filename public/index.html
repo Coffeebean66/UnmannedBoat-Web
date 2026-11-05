@@ -26,6 +26,7 @@
   <link rel="stylesheet" href="firmware.css">
   <link rel="stylesheet" href="driver-control.css">
   <link rel="stylesheet" href="mission-panel.css">
+  <link rel="stylesheet" href="driver-layout.css">
   <script defer src="vendor/leaflet/leaflet.js"></script>
   <script defer src="vendor/hls/hls.min.js"></script>
   <script defer src="vendor/mpegts/mpegts.js"></script>
@@ -54,6 +55,8 @@
   <script defer src="video-view.js"></script>
   <script defer src="video-recording.js"></script>
   <script defer src="firmware-panel.js"></script>
+  <script defer src="driver-layout.js"></script>
+  <script defer src="driver-hud.js"></script>
   <script defer src="driver-control.js"></script>
   <script defer src="mission-panel.js"></script>
   <script defer src="app.js"></script>
@@ -105,7 +108,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">MARINE CONTROL <span>v1.45.1</span></div>
+      <div class="sidebar-version">MARINE CONTROL <span>v1.47.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -314,24 +317,46 @@
       </div>
       </section>
       <section id="view-driving" class="workspace-view driving-workspace" data-workspace-view="driving" data-primary="video" aria-labelledby="viewTitle" hidden>
+        <div class="driver-workspace-bar"><div><span class="driver-live-dot"></span><strong>驾驶控制台</strong><span class="driver-workspace-caption">VESSEL CONTROL</span></div><span id="driverLinkStatus" class="driver-link-status" data-connected="false">等待实时连接</span></div>
         <article class="driver-navigation-data" aria-label="实时航行数据" data-driver-overlay>
-          <div class="driver-vessel"><i data-icon="boat"></i><strong id="driverBoatName">未选择无人船</strong><span>实时航行</span></div>
+          <div class="driver-vessel"><i data-icon="activity"></i><strong>航行遥测</strong><span id="driverBoatName">未选择无人船</span></div>
           <div class="driver-telemetry" aria-label="驾驶实时读数"><div><span>实际船速</span><strong id="driverActualSpeed">--</strong><small>m/s</small></div><div><span>目标船速</span><strong id="driverTargetSpeed">--</strong><small>m/s</small></div><div><span>船头航向</span><strong id="driverActualHeading">--</strong><small>°</small></div></div>
           <div class="driver-source-status"><span id="driverFixStatus">等待定位</span><span id="driverImuStatus">等待 IMU</span></div>
         </article>
         <article class="driver-console" aria-label="驾驶操控控制台">
-          <div class="driver-console-heading"><h2 class="sr-only">驾驶操控</h2><span id="driverState" class="driver-state" data-state="idle">监测待机</span><div class="driver-actions"><button id="driverEnable" type="button" class="primary" disabled>启用操控</button><button id="driverRelease" type="button" class="ghost" disabled>停船退出</button><button id="driverEmergency" type="button" class="driver-emergency" disabled><span data-icon="power"></span>急停 · SPACE</button></div><details id="driverControlOptions" class="driver-control-options"><summary title="测试场景与键盘说明"><i data-icon="settings"></i><span>操作设置</span></summary><div class="driver-control-options-panel"><strong>驾驶选项</strong><button id="driverTestMode" type="button" class="driver-test-mode" aria-pressed="false" title="真实 PWM 开环，跳过电调反馈和停稳检查；先停止操控才能切换" hidden disabled>测试场景：关</button><p class="driver-option-hint">测试场景使用真实 PWM 输出。</p><p class="driver-help">W/S 前进后退，A/D 左右转向，方向键同样有效；松键归零，空格急停。航向模式下 A/D 调整目标航向，松键后仍可能自动转向，急停或退出操控才撤去全部输出。切换模式先归零；失焦、离开驾驶页或断连停船并退出操控。</p></div></details></div>
+          <div class="driver-console-heading"><h2><i data-icon="monitor"></i>驾驶指令</h2><span id="driverState" class="driver-state" data-state="idle">监测待机</span><details id="driverControlOptions" class="driver-control-options"><summary title="测试场景与键盘说明"><i data-icon="settings"></i><span>操作设置</span></summary><div class="driver-control-options-panel"><strong>驾驶选项</strong><button id="driverTestMode" type="button" class="driver-test-mode" aria-pressed="false" title="真实 PWM 开环，跳过电调反馈和停稳检查；先停止操控才能切换" hidden disabled>测试场景：关</button><p class="driver-option-hint">测试场景使用真实 PWM 输出。</p><p class="driver-help">W/S 前进后退，A/D 左右转向，方向键同样有效；松键归零，空格急停。航向模式下 A/D 调整目标航向，松键后仍可能自动转向，急停或退出操控才撤去全部输出。切换模式先归零；失焦、离开驾驶页或断连停船并退出操控。</p></div></details></div>
           <p id="driverNotice" class="driver-notice" role="status" aria-live="polite">选择在线无人船，由管理员或驾驶员启用操控后使用键盘驾驶。</p>
           <button id="driverMissionStop" type="button" class="mission-danger" hidden>停止服务器航线任务 · SPACE</button>
           <p id="driverTestNotice" class="driver-test-notice" role="status" hidden>测试场景 · 真实 PWM 输出 · 电调反馈 / RTK / IMU 可离线。<span id="driverTestAck">尚未接管</span></p>
           <div class="driver-inputs"><label><span class="sr-only">控制模式</span><select id="driverMode" aria-label="控制模式"><option value="0">PWM 油门</option><option value="1" selected>船速闭环</option><option value="2">航向闭环</option></select></label><label class="driver-limit">运动幅度 <input id="driverLimit" type="range" min="5" max="100" step="5" value="20" aria-label="键盘运动幅度百分比"><output id="driverLimitValue" for="driverLimit">20%</output></label><label class="driver-heading">目标航向<input id="driverHeading" type="number" min="0" max="359.99" step="1" value="0" inputmode="decimal"><span>°</span></label><button id="driverHoldHeading" type="button" class="small-button">取当前航向</button><div class="driver-keyboard" aria-label="W/S 前进后退，A/D 左右转向，按住运动，松开归零"><kbd data-driver-key="KeyW">W</kbd><kbd data-driver-key="KeyA">A</kbd><kbd data-driver-key="KeyS">S</kbd><kbd data-driver-key="KeyD">D</kbd></div></div>
+          <div class="driver-command-footer"><span>按住运动 · 松键归零</span><div class="driver-actions"><button id="driverEnable" type="button" class="primary" disabled>启用操控</button><button id="driverRelease" type="button" class="ghost" disabled>停船退出</button></div></div>
           <p class="driver-keyboard-hint">建议使用带实体键盘的电脑；手机端可查看驾驶画面。</p>
         </article>
         <div class="driver-media-grid">
-          <section class="driver-region driver-region-video" data-driver-region="video" aria-label="驾驶图传画面"><div class="driver-region-toolbar"><span><i data-icon="video"></i>前方视野 <small>LIVE VIDEO</small></span><button id="driverVideoExpand" type="button" class="small-button" aria-pressed="false">全屏图传</button></div><div class="workspace-slot" data-workspace-slot="driving-video"></div></section>
+          <section class="driver-region driver-region-video" data-driver-region="video" aria-label="驾驶图传画面">
+            <div class="driver-region-toolbar"><span><i data-icon="video"></i>前方视野 <small>LIVE VIDEO</small></span><button id="driverVideoExpand" type="button" class="small-button" aria-pressed="false">放大图传</button></div><div class="workspace-slot" data-workspace-slot="driving-video"></div>
+          </section>
           <section class="driver-region driver-region-map" data-driver-region="map" aria-label="驾驶导航地图"><div class="driver-region-toolbar"><span><i data-icon="map"></i>船位与航迹 <small>NAVIGATION</small></span><button id="driverMapExpand" type="button" class="small-button" aria-pressed="false">放大地图</button></div><div class="workspace-slot" data-workspace-slot="driving-map"></div></section>
         </div>
+        <div id="driverHud" class="driver-hud" aria-label="图传航行 HUD" data-driver-overlay>
+              <div class="driver-hud-top"><span>横滚 <b id="driverHudRollValue">--</b>°</span><span id="driverHudAttitudeStatus">等待姿态</span><span>俯仰 <b id="driverHudPitchValue">--</b>°</span></div>
+              <svg class="driver-hud-attitude" viewBox="0 0 600 360" aria-hidden="true">
+                <defs><clipPath id="driverHudPitchClip"><rect x="190" y="74" width="220" height="200"/></clipPath></defs>
+                <g class="driver-hud-roll-scale"><path d="M225 63 A95 95 0 0 1 375 63 M229 48 l7 10 M254 30 l5 12 M277 23 l3 12 M300 20 v14 M323 23 l-3 12 M346 30 l-5 12 M371 48 l-7 10"/><path id="driverHudRollPointer" d="M294 43 L300 34 L306 43 Z"/></g>
+                <g clip-path="url(#driverHudPitchClip)"><g id="driverHudRoll"><g id="driverHudPitch"></g></g></g>
+                <path class="driver-hud-reticle" d="M245 180 h34 l9 8 h24 l9 -8 h34 M300 169 v-5 M300 191 v5"/>
+              </svg>
+              <div class="driver-hud-speed"><span>实际船速</span><strong id="driverHudSpeed">--</strong><small>m/s</small><span>目标 <b id="driverHudTarget">--</b> m/s</span></div>
+              <div class="driver-hud-heading"><span>真北船头航向</span><strong><b id="driverHudHeadingValue">--</b><small>°</small></strong><svg viewBox="0 0 300 45" aria-hidden="true"><g id="driverHudHeadingTicks"></g><path d="M145 1 L150 8 L155 1 Z"/></svg></div>
+              <div id="driverHudPosition" class="driver-hud-position">WGS84 · 等待有效定位</div>
+        </div>
         <div class="driver-instrument-grid" data-driver-overlay><div class="workspace-slot" data-workspace-slot="driving-sensors"></div></div>
+        <aside class="driver-mission-summary" aria-label="当前船只任务状态">
+          <div class="driver-mission-heading"><span><i data-icon="map"></i>任务状态</span><strong id="driverMissionState" data-status="idle">待命</strong></div>
+          <p id="driverMissionName">暂无运行中的任务</p>
+          <dl><div><dt>目标航点</dt><dd id="driverMissionProgress">--</dd></div><div><dt>距航点</dt><dd id="driverMissionDistance">--</dd></div><div><dt>航行阶段</dt><dd id="driverMissionPhase">--</dd></div><div><dt>循环进度</dt><dd id="driverMissionLoop">--</dd></div></dl>
+          <a href="#missions" data-view-link>打开航线任务 <i data-icon="arrow"></i></a>
+        </aside>
         <aside id="driverDetailsPanel" class="driver-details-panel" aria-labelledby="driverDetailsTitle" hidden>
           <div class="driver-details-heading"><h3 id="driverDetailsTitle">航行详情</h3><button id="driverDetailsClose" type="button" class="small-button" aria-label="收起航行详情">收起</button></div>
           <div class="driver-position"><div><span>纬度 · WGS84</span><b id="driverLatitude">--</b></div><div><span>经度 · WGS84</span><b id="driverLongitude">--</b></div></div>
@@ -342,7 +367,19 @@
         <div id="driverFocusTools" class="driver-focus-tools">
           <button id="driverDetailsToggle" type="button" class="small-button" aria-expanded="false" aria-controls="driverDetailsPanel"><i data-icon="activity"></i>航行详情</button>
           <details id="driverDisplayOptions" class="driver-display-options"><summary><i data-icon="settings"></i>显示设置</summary><div class="driver-display-options-panel"><button id="driverInstrumentToggle" type="button" class="small-button" aria-pressed="true">仪表：显示</button><label for="driverOverlayOpacity" title="0% 隐藏 HUD，操控与急停保持可见">HUD 可见度 <output id="driverOverlayOpacityValue" for="driverOverlayOpacity">90%</output></label><input id="driverOverlayOpacity" type="range" min="0" max="100" step="5" value="90" aria-label="驾驶 HUD 可见度，0为隐藏100为完全显示"></div></details>
+          <button id="driverLayoutToggle" type="button" class="driver-layout-launch" aria-expanded="false" aria-controls="driverLayoutEditor" title="拖动模块并设置单独透明度">布局编辑</button>
         </div>
+        <div class="driver-emergency-dock"><button id="driverEmergency" type="button" class="driver-emergency" disabled><span data-icon="power"></span>急停 · SPACE</button></div>
+        <aside id="driverLayoutEditor" class="driver-layout-editor" aria-labelledby="driverLayoutTitle" hidden>
+          <div class="driver-layout-heading"><h3 id="driverLayoutTitle">布局编辑</h3><button id="driverLayoutDone" type="button" class="small-button">完成</button></div>
+          <p>拖动各部分的蓝色手柄；方向键微调，Shift 加速。编辑时暂停驾驶，完成后重新启用操控。</p>
+          <label for="driverLayoutModule">当前部分</label><select id="driverLayoutModule"></select>
+          <label for="driverPartOpacity">不透明度 <output id="driverPartOpacityValue" for="driverPartOpacity">100%</output></label><input id="driverPartOpacity" type="range" min="0" max="100" step="5" value="100">
+          <p id="driverLayoutHint" class="driver-layout-hint" role="status"></p>
+          <button id="driverLayoutFloat" type="button" class="small-button" hidden>移出详情，独立显示</button>
+          <div class="driver-layout-reset"><button id="driverLayoutResetPart" type="button" class="small-button">恢复此项</button><button id="driverLayoutResetAll" type="button" class="small-button">恢复全部布局</button></div>
+          <span class="driver-layout-saved">自动保存在当前浏览器 · 桌面 / 手机分别保存</span>
+        </aside>
       </section>
       <section id="view-navigation" class="workspace-view navigation-workspace" data-workspace-view="navigation" aria-labelledby="viewTitle" hidden>
         <div class="workspace-slot" data-workspace-slot="navigation-map"></div>
