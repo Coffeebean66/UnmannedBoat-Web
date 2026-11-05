@@ -80,6 +80,9 @@
     if (panel && slot && panel.parentElement !== slot) slot.append(panel);
   }
   function mountShared(view) {
+    // 驾驶页使用已有的播放工具，避免原生视频进度条横跨整个 HUD。
+    const video = document.getElementById('boatVideo');
+    if (video) video.controls = view !== 'driving';
     if (view === 'overview') {
       mount(shared.navigation,'overview-map');
       mount(shared.attitude,'overview-attitude');

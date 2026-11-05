@@ -8,7 +8,7 @@
   class BoatDriverControl {
     constructor({document=window.document,fetch=window.fetch.bind(window),auth=window.BoatAuth,toast=()=>{}}={}) {
       this.document=document;this.fetch=fetch;this.auth=auth;this.toast=toast;
-      this.nodes=Object.fromEntries(['view-driving','driverBoatName','driverState','driverEnable','driverRelease','driverEmergency','driverTestMode','driverTestNotice','driverTestAck','driverNotice','driverActualSpeed','driverTargetSpeed','driverActualHeading','driverActualMode','driverInput','driverLatitude','driverLongitude','driverFixStatus','driverImuStatus','driverModelPreview','driverMode','driverLimit','driverLimitValue','driverHeading','driverHoldHeading','driverVideoExpand','driverMapExpand','driverOverlayOpacity','driverOverlayOpacityValue','driverFocusTools'].map(id=>[id,document.getElementById(id)]));
+      this.nodes=Object.fromEntries(['view-driving','driverBoatName','driverState','driverEnable','driverRelease','driverEmergency','driverTestMode','driverTestNotice','driverTestAck','driverNotice','driverActualSpeed','driverTargetSpeed','driverActualHeading','driverActualMode','driverInput','driverLatitude','driverLongitude','driverFixStatus','driverImuStatus','driverModelPreview','driverMode','driverLimit','driverLimitValue','driverHeading','driverHoldHeading','driverVideoExpand','driverMapExpand','driverOverlayOpacity','driverOverlayOpacityValue','driverFocusTools','driverDetailsPanel','driverDetailsToggle','driverDetailsClose','driverDisplayOptions','driverControlOptions','driverInstrumentToggle'].map(id=>[id,document.getElementById(id)]));
       const random=new Uint8Array(8);window.crypto.getRandomValues(random);
       this.clientId=Array.from(random,value=>value.toString(16).padStart(2,'0')).join('');
       this.context={deviceId:'',connected:false,authenticated:false,canManage:false,parameterBusy:false};
@@ -36,6 +36,16 @@
       if(Number.isFinite(savedOpacity))this.nodes.driverOverlayOpacity.value=String(Math.max(0,Math.min(100,Math.round(savedOpacity/5)*5)));
       this.setOverlayOpacity(this.nodes.driverOverlayOpacity.value);
       this.listen(this.nodes.driverOverlayOpacity,'input',()=>this.setOverlayOpacity(this.nodes.driverOverlayOpacity.value));
+      this.listen(this.nodes.driverDetailsToggle,'click',()=>this.setDetailsOpen(this.nodes.driverDetailsPanel.hidden));
+      this.listen(this.nodes.driverDetailsClose,'click',()=>this.setDetailsOpen(false,true));
+      let instrumentsVisible=true;
+      try{instrumentsVisible=window.localStorage?.getItem('boat-driver-instruments-visible')!=='false';}catch(_){}
+      this.setInstrumentsVisible(instrumentsVisible);
+      this.listen(this.nodes.driverInstrumentToggle,'click',()=>this.setInstrumentsVisible(this.nodes['view-driving'].dataset.instrumentsHidden==='true'));
+      // 收起非必要弹层不改接管租约；点回主画面时也不再遮挡地图和图传。
+      this.listen(document,'pointerdown',event=>{
+        for(const id of ['driverDisplayOptions','driverControlOptions'])if(!this.nodes[id].contains(event.target))this.nodes[id].open=false;
+      });
       this.listen(this.nodes.driverHeading,'change',()=>{this.headingValue(true);this.sendInput();});
       this.listen(this.nodes.driverHoldHeading,'click',()=>{
         if(!Number.isFinite(this.actualHeading))return this.toast('等待有效的真北船头航向');
@@ -55,6 +65,8 @@
         if(event.detail?.view!=='driving'){
           this.stop('已离开驾驶界面，已停船并退出操控');
           this.setMediaFocus('');
+          this.setDetailsOpen(false);
+          this.nodes.driverDisplayOptions.open=this.nodes.driverControlOptions.open=false;
         }
         this.render();if(event.detail?.view==='driving'){this.lastPoll=0;this.poll();}
       });
@@ -217,6 +229,10 @@
       this.lastPoll=0;this.render();
     }
     keyDown(event) {
+      if(event.code==='Escape'&&this.visible()){
+        if(!this.nodes.driverDetailsPanel.hidden){event.preventDefault();this.setDetailsOpen(false,true);return;}
+        for(const id of ['driverDisplayOptions','driverControlOptions'])if(this.nodes[id].open){event.preventDefault();this.nodes[id].open=false;this.nodes[id].querySelector('summary').focus({preventScroll:true});return;}
+      }
       if(event.code==='Escape'&&this.nodes['view-driving'].hasAttribute('data-focus')){event.preventDefault();this.setMediaFocus('');return;}
       if(!this.active||!this.permitted())return;
       if(event.code==='Space'){event.preventDefault();this.stop('急停已触发；需要重新启用操控',true);return;}
@@ -279,11 +295,26 @@
       this.text('driverOverlayOpacityValue',opacity+'%');
       try{window.localStorage?.setItem('boat-driver-overlay-opacity',String(opacity));}catch(_){}
     }
+    setDetailsOpen(open,restoreFocus=false) {
+      this.nodes.driverDetailsPanel.hidden=!open;
+      this.nodes.driverDetailsToggle.setAttribute('aria-expanded',String(open));
+      if(!open)this.nodes.driverModelPreview.open=false;
+      if(restoreFocus)this.nodes.driverDetailsToggle.focus({preventScroll:true});
+      window.dispatchEvent(new CustomEvent('boat-driver-layout-change'));
+    }
+    setInstrumentsVisible(visible) {
+      this.nodes['view-driving'].dataset.instrumentsHidden=String(!visible);
+      this.document.querySelector('.driver-instrument-grid').hidden=!visible;
+      this.nodes.driverInstrumentToggle.setAttribute('aria-pressed',String(visible));
+      this.text('driverInstrumentToggle',visible?'仪表：显示':'仪表：隐藏');
+      try{window.localStorage?.setItem('boat-driver-instruments-visible',String(visible));}catch(_){}
+      window.dispatchEvent(new CustomEvent('boat-driver-layout-change'));
+    }
     updateOverlayInteraction() {
       const panel=this.nodes['view-driving'];
-      // 默认驾驶台也使用浮层，0% 时读数与三维预览均不进入 Tab 焦点顺序。
+      // 0% 时 HUD 不进入 Tab 顺序；主动展开的详情和驾驶提示仍可使用。
       const hidden=panel.dataset.overlayHidden==='true';
-      for(const node of panel.querySelectorAll('[data-driver-overlay],.driver-notice'))node.inert=hidden;
+      for(const node of panel.querySelectorAll('[data-driver-overlay]'))node.inert=hidden;
     }
     render() {
       if(this.destroyed)return;
