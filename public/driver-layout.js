@@ -1,7 +1,8 @@
 /* 只保存显示偏好，不保存船只接管凭据；共享仪表离开驾驶页后恢复原样。 */
 (() => {
   'use strict';
-  const STORAGE='boat-driver-layout-v2',LEGACY_STORAGE='boat-driver-layout-v1';
+  // 新控制台单独保存布局，旧驾驶页的位置和透明度不覆盖照片对应的默认排布。
+  const STORAGE='boat-driver-console-layout-v1';
   const clamp=(value,min,max)=>Math.max(min,Math.min(max,value));
   const PARTS=[
     ['navigation','航行读数','.driver-navigation-data'],
@@ -20,7 +21,7 @@
   ];
   class BoatDriverLayout {
     constructor({document=window.document,onEditingChange=()=>{},onReset=()=>{}}={}) {
-      this.document=document;this.root=document.getElementById('view-driving');
+      this.document=document;this.root=document.getElementById('view-driving');this.stage=document.getElementById('driverStage');
       this.onEditingChange=onEditingChange;this.onReset=onReset;this.editing=false;this.selected='navigation';
       this.handlers=[];this.parts=[];this.frame=0;this.drag=null;this.destroyed=false;
       this.ui=Object.fromEntries(['driverLayoutToggle','driverLayoutEditor','driverLayoutDone','driverLayoutModule','driverPartOpacity','driverPartOpacityValue','driverLayoutHint','driverLayoutFloat','driverLayoutResetPart','driverLayoutResetAll'].map(id=>[id,document.getElementById(id)]));
@@ -73,19 +74,17 @@
     load(){
       const profiles={};
       try{
-        const text=window.localStorage.getItem(STORAGE)||window.localStorage.getItem(LEGACY_STORAGE);if(!text||text.length>30000)return profiles;
-        const value=JSON.parse(text);if(![1,2].includes(value.version))return profiles;
+        const text=window.localStorage.getItem(STORAGE);if(!text||text.length>30000)return profiles;
+        const value=JSON.parse(text);if(value.version!==1)return profiles;
         for(const key of ['desktop:dock','desktop:video','desktop:map','mobile:dock','mobile:video','mobile:map']){
-          // 新默认分栏沿用透明度；旧坐标保留给放大画面，避免遮住新的停靠区域。
-          const migrated=value.version===1&&key.endsWith(':dock');
-          const sourceProfile=value.profiles?.[migrated?key.replace(':dock',':video'):key];
+          const sourceProfile=value.profiles?.[key];
           if(!sourceProfile||typeof sourceProfile!=='object')continue;
           const profile=profiles[key]={};
           for(const [id,,,min=0,floating=false]of PARTS){
             const source=sourceProfile[id];if(!source||typeof source!=='object')continue;
             const entry=profile[id]={};
             if(typeof source.opacity==='number'&&Number.isFinite(source.opacity))entry.opacity=clamp(source.opacity,min,100);
-            if(!migrated&&typeof source.x==='number'&&Number.isFinite(source.x)&&typeof source.y==='number'&&Number.isFinite(source.y)){
+            if(typeof source.x==='number'&&Number.isFinite(source.x)&&typeof source.y==='number'&&Number.isFinite(source.y)){
               entry.x=clamp(source.x,0,1);entry.y=clamp(source.y,0,1);
             }
             if(floating&&source.floating===true)entry.floating=true;
@@ -94,7 +93,7 @@
       }catch(_){/* 存储不可用或旧数据损坏时使用默认布局。 */}
       return profiles;
     }
-    save(){try{window.localStorage.setItem(STORAGE,JSON.stringify({version:2,profiles:this.profiles}));}catch(_){} }
+    save(){try{window.localStorage.setItem(STORAGE,JSON.stringify({version:1,profiles:this.profiles}));}catch(_){} }
     notify(){window.dispatchEvent(new CustomEvent('boat-driver-layout-change'));}
     schedule(){if(!this.frame&&!this.destroyed)this.frame=window.requestAnimationFrame(()=>{this.frame=0;this.refresh();});}
     setEditing(enabled){
@@ -116,7 +115,7 @@
       for(const part of this.parts.filter(part=>part.floating)){
         const floating=active&&this.entry(part.id).floating===true;
         part.node.classList.toggle('driver-layout-floating',floating);
-        if(floating&&part.node.parentElement!==this.root){this.root.append(part.node);if(part.id==='model')part.node.open=true;}
+        if(floating&&part.node.parentElement!==this.stage){this.stage.append(part.node);if(part.id==='model')part.node.open=true;}
         else if(!floating&&part.node.parentNode!==part.home.parentNode){
           part.home.after(part.node);if(part.id==='model')part.node.open=false;
         }
@@ -131,7 +130,7 @@
         for(const part of this.parts){part.node.style.removeProperty('--driver-part-opacity');delete part.node.dataset.driverPartHidden;part.node.inert=false;}
         return;
       }
-      const canvas=this.root.getBoundingClientRect();if(!canvas.width||!canvas.height)return;
+      const canvas=this.stage.getBoundingClientRect();if(!canvas.width||!canvas.height)return;
       for(const overlay of this.root.querySelectorAll('[data-driver-overlay]'))overlay.inert=!this.editing&&this.root.dataset.overlayHidden==='true';
       const depth=node=>{let result=0;for(let p=node.parentElement;p;p=p.parentElement)result++;return result;};
       for(const part of [...this.parts].sort((a,b)=>depth(a.node)-depth(b.node))){
@@ -172,7 +171,7 @@
       event.preventDefault();this.position(drag.part,drag.box.left+event.clientX-drag.startX,drag.box.top+event.clientY-drag.startY);this.schedule();
     }
     position(part,left,top){
-      const canvas=this.root.getBoundingClientRect(),box=part.node.getBoundingClientRect(),entry=this.entry(part.id);
+      const canvas=this.stage.getBoundingClientRect(),box=part.node.getBoundingClientRect(),entry=this.entry(part.id);
       const width=Math.max(0,canvas.width-box.width),height=Math.max(0,canvas.height-box.height);
       entry.x=width?clamp((left-canvas.left)/width,0,1):0;entry.y=height?clamp((top-canvas.top)/height,0,1):0;
     }

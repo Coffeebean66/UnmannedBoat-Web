@@ -15,7 +15,7 @@
   };
   const panels = new Map([...document.querySelectorAll('[data-workspace-view]')].map(panel => [panel.dataset.workspaceView,panel]));
   if (!panels.has('overview')) return;
-  const links = [...document.querySelectorAll('.side-nav a,.mobile-nav a')];
+  const links = [...document.querySelectorAll('.side-nav a,.mobile-nav a,.driver-rail a')];
   const restrictedViews = new Set(['driving','missions']);
   const boatNav = document.getElementById('singleBoatNav');
   const boatNavName = document.getElementById('singleBoatNavName');

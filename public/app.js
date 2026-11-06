@@ -16,7 +16,8 @@
   const videoView=new BoatVideoView();
   const videoRecording=new BoatVideoRecordingPanel();
   const firmware=new BoatFirmwarePanel();
-  const driver=new BoatDriverControl({toast});
+  // 驾驶导航先释放接管，再同步参数入口门槛，避免点击仍处于旧的 disabled 状态。
+  const driver=new BoatDriverControl({toast,onOpenSettings:()=>{syncParameterAccess();$('settingsEntry').click();}});
   const fleet=new BoatFleetLink(cloud);
   const fleetView=new BoatFleetView({onSelect:id=>selectBoat(id),onConfigure:id=>openBoatSettings(id).catch(error=>toast(error.message)),onVideo:id=>openBoatVideo(id).catch(error=>toast(error.message)),onFirmware:id=>{if(driver.active||driver.pending)return toast('请先停船并退出电脑操控');firmware.open(id);}});
   const fleetMapView=new BoatFleetMapView({onSelect:id=>selectBoat(id)});
@@ -83,6 +84,7 @@
   }
   function renderMotor(frame,received,now) {
     const current=link.connected&&frame&&now-received<1000;
+    const displayed=[];
     for(let i=1;i<=2;i++) {
       const m=frame?.motors[i-1],age=m?.feedbackAgeMs==null?null:m.feedbackAgeMs+Math.max(0,now-received);
       const valid=!!(current&&m.received&&m.displayValid&&age!=null&&age<1000);
@@ -95,12 +97,14 @@
         Capacity:valid?m.capacityMah:'--',ElectricalRpm:valid?m.electricalRpm:'--',
         Age:m?.received&&age!=null?Math.round(age):'--',Sequence:frame?m.telemetrySequence:'--'
       };
+      displayed.push(values);
       for(const [key,value] of Object.entries(values))set('motor'+i+key,value);
       $('motor'+i+'Dial').style.strokeDasharray=Number.isFinite(pwm)?(Math.min(100,Math.abs(pwm))*1.65).toFixed(1)+' 220':'0 220';
       set('motor'+i+'State',!link.connected?'未连接':!m?'等待电调数据':!current?'链路超时':!valid?'遥测无效/过期':!m.feedbackFresh||age>=100?'反馈超时':Math.abs(m.appliedPwmPercent)>=1||m.mechanicalRpm>=50?'运行中':'待机');
     }
     set('sbusStatus',!current?'遥控 --':frame.sbusFailsafe?'遥控失控保护':frame.sbusLinkValid?'遥控在线':'遥控失联');
     set('statusSequence',frame?.sequence);set('deviceUptime',current?(frame.timestampMs/1000).toFixed(1)+' s':'--');
+    return displayed;
   }
   function renderChartSummary(now) {
     const b=state.latest.boat,heading=state.chartMode==='heading';
@@ -263,9 +267,10 @@
     mapVectors.render(M.mapVelocity.prepareMapVelocity(x.boat?.frame,x.boat?.at||0,x.velocity?.frame,x.velocity?.at||0,now,link.connected));
     renderCompass(now);
     const imu=M.imuDisplay.prepareImuDisplay(x.imu?.frame,x.imu?.at||0,now,link.connected);
+    const driverMotors=renderMotor(x.status?.frame,x.status?.at||0,now);
     // 驾驶遥测与图传 HUD 共用有效期判断，断流后一起清空，避免显示旧定位或姿态。
     driver.setTelemetry({...b,actualHeading:Number.isFinite(driverHeading)?driverHeading.toFixed(2):'--',
-      latitude:v.latitude,longitude:v.longitude,fixStatus:v.fixStatus,fixValid:v.fixFresh,imuStatus:imu.status,imuValid:imu.fresh,imu});
+      latitude:v.latitude,longitude:v.longitude,fixStatus:v.fixStatus,fixValid:v.fixFresh,imuStatus:imu.status,imuValid:imu.fresh,imu,motors:driverMotors});
     for(const key of ['roll','pitch','yaw','gyroX','gyroY','gyroZ'])set(key,imu[key]);
     for(const [id,key] of Object.entries({imuStatus:'status',imuSequence:'sequence',imuAge:'ageText',imuAlignment:'alignmentText',imuHeadingUpdate:'headingUpdateText'}))set(id,imu[key]);
     // 角速度与欧拉角独立有效，部分数据可用时以黄色提示。
@@ -273,7 +278,6 @@
     $('sensorImuState').dataset.partial=String(imu.sourceFresh&&!imu.fresh&&(imu.gyroFresh||imu.eulerFresh));
     viewer.setTelemetry(imu);
     horizon.setTelemetry(imu);
-    renderMotor(x.status?.frame,x.status?.at||0,now);
     const stats=link.parser.getStats();
     for(const [id,key] of Object.entries({parsedFrames:'framesReceived',crcErrors:'crcErrors',bufferedBytes:'bufferedBytes',bytesReceived:'bytesReceived'}))set(id,stats[key]);
     renderDeviceSummary(stats);
@@ -490,6 +494,7 @@
     // 切船通常不会改变船队目录，选中项也必须随当前详情对象更新。
     if(selected&&!Array.from(select.options).some(option=>option.value===selected))select.add(new Option(selected+' · 等待上线',selected));
     if(selected)select.value=selected;
+    driver.setDevices(s.devices,selected,s.authenticated);
     // 船队连接与单船详情独立，详情接收中也可直接切船。
     select.disabled=!s.enabled||!s.authenticated;
     $('cloudRefresh').disabled=!s.enabled||!s.authenticated;

@@ -6,10 +6,11 @@
   const DEVICE=/^[A-Za-z0-9_-]{1,64}$/,LEASE=/^[0-9a-f]{16}$/;
   const INPUT_PERIOD_MS=100,RESPONSE_TIMEOUT_MS=600,MAX_INPUT_REQUESTS=4;
   class BoatDriverControl {
-    constructor({document=window.document,fetch=window.fetch.bind(window),auth=window.BoatAuth,toast=()=>{}}={}) {
+    constructor({document=window.document,fetch=window.fetch.bind(window),auth=window.BoatAuth,toast=()=>{},onOpenSettings=()=>document.getElementById('settingsEntry')?.click()}={}) {
       this.document=document;this.fetch=fetch;this.auth=auth;this.toast=toast;
       this.nodes=Object.fromEntries(['view-driving','driverBoatName','driverLinkStatus','driverState','driverEnable','driverRelease','driverEmergency','driverTestMode','driverTestNotice','driverTestAck','driverNotice','driverActualSpeed','driverTargetSpeed','driverActualHeading','driverActualMode','driverInput','driverLatitude','driverLongitude','driverFixStatus','driverImuStatus','driverModelPreview','driverMode','driverLimit','driverLimitValue','driverHeading','driverHoldHeading','driverVideoExpand','driverMapExpand','driverOverlayOpacity','driverOverlayOpacityValue','driverFocusTools','driverDetailsPanel','driverDetailsToggle','driverDetailsClose','driverDisplayOptions','driverControlOptions','driverInstrumentToggle'].map(id=>[id,document.getElementById(id)]));
       this.hud=new window.BoatDriverHud({document});
+      for(const id of ['driverDeviceSelect','driverOperator','driverConnectionToggle','driverAccount','driverLogout','driverSystemSettings','driverCommonOutput','driverMotorRpm','driverMotorVoltage','driverAttitudeAngles','driverMapLayer','driverMapFollow'])this.nodes[id]=document.getElementById(id);
       const random=new Uint8Array(8);window.crypto.getRandomValues(random);
       this.clientId=Array.from(random,value=>value.toString(16).padStart(2,'0')).join('');
       this.context={deviceId:'',connected:false,authenticated:false,canManage:false,parameterBusy:false};
@@ -32,15 +33,41 @@
         this.lastMode=mode;this.keys.clear();this.renderKeys();this.headingMode();this.sendInput();this.render();
       });
       this.listen(this.nodes.driverLimit,'input',()=>{this.text('driverLimitValue',this.nodes.driverLimit.value+'%');this.sendInput();});
+      // 控制台入口复用平台的选船、登录与设置流程，不建立第二条设备连接。
+      this.listen(this.nodes.driverDeviceSelect,'change',()=>{
+        const select=document.getElementById('cloudDevice');select.value=this.nodes.driverDeviceSelect.value;select.dispatchEvent(new Event('change'));
+      });
+      this.listen(this.nodes.driverConnectionToggle,'click',()=>{
+        const id=!this.context.authenticated?'cloudLoginOpen':!document.getElementById('disconnectButton').disabled?'disconnectButton':'connectButton';
+        document.getElementById(id)?.click();
+      });
+      for(const button of document.querySelectorAll('[data-driver-proxy]'))this.listen(button,'click',()=>{
+        if(['settingsEntry','platformSettingsToggle','accountLoginOpen','accountLogout'].includes(button.dataset.driverProxy))this.stop('已打开账户或设置，已停船并退出操控');
+        if(button.dataset.driverProxy==='settingsEntry')return onOpenSettings();
+        document.getElementById(button.dataset.driverProxy)?.click();
+      });
+      for(const button of document.querySelectorAll('[data-driver-mode]'))this.listen(button,'click',()=>{
+        if(this.nodes.driverMode.disabled)return;
+        this.nodes.driverMode.value=button.dataset.driverMode;this.nodes.driverMode.dispatchEvent(new Event('change'));
+      });
+      this.listen(document.getElementById('driverMapCenter'),'click',()=>document.getElementById('mapCenter').click());
+      this.listen(document.getElementById('driverMapFocus'),'click',()=>this.focusMedia('map'));
+      this.listen(this.nodes.driverMapFollow,'click',()=>{
+        const follow=document.getElementById('mapFollow');follow.checked=!follow.checked;follow.dispatchEvent(new Event('change'));this.render();
+      });
+      this.listen(this.nodes.driverMapLayer,'change',()=>{
+        const map=window.boatMonitor?.map;if(!map)return;
+        map.switchProvider(this.nodes.driverMapLayer.value).catch(error=>this.toast(error.message)).finally(()=>this.render());
+      });
       let savedOpacity;
-      try{const storedOpacity=window.localStorage?.getItem('boat-driver-overlay-opacity');if(storedOpacity!==null)savedOpacity=Number(storedOpacity);}catch(_){}
+      try{const storedOpacity=window.localStorage?.getItem('boat-driver-console-hud-opacity');if(storedOpacity!==null)savedOpacity=Number(storedOpacity);}catch(_){}
       if(Number.isFinite(savedOpacity))this.nodes.driverOverlayOpacity.value=String(Math.max(0,Math.min(100,Math.round(savedOpacity/5)*5)));
       this.setOverlayOpacity(this.nodes.driverOverlayOpacity.value);
       this.listen(this.nodes.driverOverlayOpacity,'input',()=>this.setOverlayOpacity(this.nodes.driverOverlayOpacity.value));
       this.listen(this.nodes.driverDetailsToggle,'click',()=>this.setDetailsOpen(this.nodes.driverDetailsPanel.hidden));
       this.listen(this.nodes.driverDetailsClose,'click',()=>this.setDetailsOpen(false,true));
-      let instrumentsVisible=true;
-      try{instrumentsVisible=window.localStorage?.getItem('boat-driver-instruments-visible')!=='false';}catch(_){}
+      let instrumentsVisible=false;
+      try{instrumentsVisible=window.localStorage?.getItem('boat-driver-console-instruments')==='true';}catch(_){}
       this.setInstrumentsVisible(instrumentsVisible);
       this.listen(this.nodes.driverInstrumentToggle,'click',()=>this.setInstrumentsVisible(this.nodes['view-driving'].dataset.instrumentsHidden==='true'));
       // 收起非必要弹层不改接管租约；点回主画面时也不再遮挡地图和图传。
@@ -79,7 +106,7 @@
         if(editing){this.keys.clear();this.stop('已进入布局编辑，已停船并退出操控');}
         else if(this.stopReason==='已进入布局编辑，已停船并退出操控'){this.stopReason='';this.message='布局已保存，点击启用操控继续驾驶。';}
         this.render();
-      },onReset:()=>{this.setOverlayOpacity(90);this.setInstrumentsVisible(true);}});
+      },onReset:()=>{this.setOverlayOpacity(100);this.setInstrumentsVisible(false);}});
       this.timer=window.setInterval(()=>this.pulse(),100);
       this.headingMode();this.render();
     }
@@ -118,7 +145,22 @@
       this.text('driverFixStatus',value.fixStatus);this.text('driverImuStatus',value.imuStatus);
       this.nodes.driverFixStatus.dataset.valid=String(value.fixValid===true);
       this.nodes.driverImuStatus.dataset.valid=String(value.imuValid===true);
+      this.text('driverCommonOutput',value.common);
+      const motors=value.motors||[];
+      this.text('driverMotorRpm',motors.map(m=>m.Rpm).concat(['--','--']).slice(0,2).join(' / '));
+      this.text('driverMotorVoltage',motors.map(m=>m.Voltage).concat(['--','--']).slice(0,2).join(' / '));
+      this.text('driverAttitudeAngles',value.imu?.eulerFresh?[value.imu.rollDegrees,value.imu.pitchDegrees].map(n=>Number.isFinite(n)?n.toFixed(1):'--').join(' / '):'-- / --');
       this.actualHeading=typeof value.actualHeading==='string'&&value.actualHeading.trim()!==''&&value.actualHeading!=='--'?Number(value.actualHeading):Number.isFinite(value.actualHeading)?value.actualHeading:null;
+    }
+    setDevices(devices=[],selected='',authenticated=false) {
+      const select=this.nodes.driverDeviceSelect,signature=JSON.stringify([devices.map(d=>[d.id,!!d.online]),selected,authenticated]);
+      if(select.dataset.devices===signature)return;
+      select.dataset.devices=signature;select.replaceChildren();
+      if(!devices.length)select.add(new Option(authenticated?'等待设备上线':'请先登录云端',''));
+      for(const device of devices)select.add(new Option(device.id+' · '+(device.online?'在线':'离线'),device.id));
+      if(selected&&!devices.some(d=>d.id===selected))select.add(new Option(selected+' · 等待上线',selected));
+      if(selected)select.value=selected;
+      select.disabled=!authenticated;
     }
     async api(body,{timeout=1200,keepalive=false,controller=new AbortController()}={}) {
       const timer=window.setTimeout(()=>controller.abort(),timeout);
@@ -276,6 +318,7 @@
       const enabled=Number(this.nodes.driverMode.value)===2;
       this.nodes.driverHeading.disabled=!enabled;this.nodes.driverHoldHeading.disabled=!enabled;
       this.nodes.driverHeading.closest('label').dataset.disabled=String(!enabled);
+      this.nodes['view-driving'].dataset.mode=this.nodes.driverMode.value;
     }
     focusMedia(name) {
       this.setMediaFocus(this.nodes['view-driving'].dataset.focus===name?'':name);
@@ -283,12 +326,14 @@
     setMediaFocus(name) {
       const panel=this.nodes['view-driving'];
       if(name)panel.dataset.focus=name;else delete panel.dataset.focus;
+      panel.scrollTop=0;
       // 放大时保留另一媒体的小窗；还原后恢复左右分栏驾驶台。
       panel.dataset.primary=name||'video';
       if(name)this.document.documentElement.dataset.driverFocus='true';else delete this.document.documentElement.dataset.driverFocus;
       for(const [type,id]of [['video','driverVideoExpand'],['map','driverMapExpand']]){
         const active=panel.dataset.focus===type;this.nodes[id].setAttribute('aria-pressed',String(active));
-        this.text(id,active?'还原布局':type==='video'?'放大图传':'放大地图');
+        const label=active?'还原布局':type==='video'?'放大图传':'放大地图';
+        this.nodes[id].title=label;this.nodes[id].setAttribute('aria-label',label);
       }
       this.nodes.driverFocusTools.hidden=false;
       this.updateOverlayInteraction();
@@ -303,7 +348,7 @@
       this.updateOverlayInteraction();
       this.layout?.refresh();
       this.text('driverOverlayOpacityValue',opacity+'%');
-      try{window.localStorage?.setItem('boat-driver-overlay-opacity',String(opacity));}catch(_){}
+      try{window.localStorage?.setItem('boat-driver-console-hud-opacity',String(opacity));}catch(_){}
     }
     setDetailsOpen(open,restoreFocus=false) {
       this.nodes.driverDetailsPanel.hidden=!open;
@@ -318,7 +363,7 @@
       this.document.querySelector('.driver-instrument-grid').hidden=!visible;
       this.nodes.driverInstrumentToggle.setAttribute('aria-pressed',String(visible));
       this.text('driverInstrumentToggle',visible?'仪表：显示':'仪表：隐藏');
-      try{window.localStorage?.setItem('boat-driver-instruments-visible',String(visible));}catch(_){}
+      try{window.localStorage?.setItem('boat-driver-console-instruments',String(visible));}catch(_){}
       this.layout?.refresh();
       window.dispatchEvent(new CustomEvent('boat-driver-layout-change'));
     }
@@ -333,6 +378,26 @@
       this.text('driverBoatName',this.context.deviceId||'未选择无人船');
       this.nodes.driverLinkStatus.dataset.connected=String(this.context.connected);
       this.text('driverLinkStatus',this.context.connected?'实时遥测已连接':'等待实时连接');
+      this.text('driverOperator',this.auth?.user?this.auth.user.username+' · '+({admin:'管理员',driver:'驾驶员',guest:'访客'}[this.auth.user.role]):'未登录');
+      this.nodes.driverAccount.title=this.auth?.user?'切换登录账户':'登录平台';
+      this.nodes.driverLogout.hidden=!this.auth?.user;
+      this.nodes.driverSystemSettings.hidden=this.auth?.user?.role!=='admin';
+      const canDisconnect=!this.document.getElementById('disconnectButton').disabled;
+      const connectionLabel=canDisconnect?'断开无人船':'连接无人船';
+      this.nodes.driverConnectionToggle.title=connectionLabel;this.nodes.driverConnectionToggle.setAttribute('aria-label',connectionLabel);
+      this.nodes.driverConnectionToggle.disabled=this.context.authenticated&&this.document.getElementById(canDisconnect?'disconnectButton':'connectButton').disabled;
+      this.nodes['view-driving'].dataset.controlActive=String(this.active||this.pending);
+      for(const button of this.document.querySelectorAll('[data-driver-mode]')){
+        button.setAttribute('aria-pressed',String(button.dataset.driverMode===this.nodes.driverMode.value));button.disabled=this.testMode;
+      }
+      this.nodes.driverMapFollow.setAttribute('aria-pressed',String(this.document.getElementById('mapFollow').checked));
+      const map=window.boatMonitor?.map;
+      if(map){
+        this.nodes.driverMapLayer.disabled=map.switching;
+        if(this.nodes.driverMapLayer.value!==map.provider)this.nodes.driverMapLayer.value=map.provider;
+        this.nodes.driverMapLayer.querySelector('[value="amap"]').disabled=map.config?.configured!==true;
+        this.nodes.driverMapLayer.querySelector('[value="tianditu"]').disabled=map.config?.tianditu?.configured!==true;
+      }
       const state=this.active?(this.testMode?'test':'active'):this.pending?'pending':'idle';this.nodes.driverState.dataset.state=state;
       this.text('driverState',this.active?(this.testMode?'测试场景 · 已接管':'电脑已接管'):this.pending?'等待船端确认':this.remote?.state===2?'停船保护':'监测待机');
       this.nodes.driverEnable.disabled=!this.permitted()||this.active||this.pending||!this.remote?.ready||(this.testMode&&!this.remote?.testSupported)||(Number(this.nodes.driverMode.value)===2&&!Number.isFinite(this.actualHeading));

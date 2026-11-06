@@ -9,6 +9,9 @@
       this.document=document;
       this.nodes=Object.fromEntries(['driverHud','driverHudRollValue','driverHudPitchValue','driverHudAttitudeStatus','driverHudRollPointer','driverHudRoll','driverHudPitch','driverHudSpeed','driverHudTarget','driverHudHeadingValue','driverHudHeadingTicks','driverHudPosition'].map(id=>[id,document.getElementById(id)]));
       this.ticks=[];
+      for(const id of ['driverHudRollMarker','driverHudSpeedTicks','driverHudRpmTicks','driverHudRpm','driverHudOutput','driverHudOutputFill'])this.nodes[id]=document.getElementById(id);
+      this.speedTicks=this.createTape(this.nodes.driverHudSpeedTicks,9,38,100,23);
+      this.rpmTicks=this.createTape(this.nodes.driverHudRpmTicks,7,22,75,20);
       for(let angle=-90;angle<=90;angle+=10){
         const y=180+angle*4,major=angle===0;
         this.svg('path',{d:major?'M215 '+y+' H385':'M250 '+y+' h34 m32 0 h34',class:angle<0?'driver-hud-negative':''},this.nodes.driverHudPitch);
@@ -28,6 +31,26 @@
       if(text!==undefined)node.textContent=text;
       parent.append(node);return node;
     }
+    createTape(parent,count,x,center,spacing) {
+      const ticks=[];
+      for(let i=0;i<count;i++){
+        const y=center+(i-Math.floor(count/2))*spacing;
+        this.svg('path',{d:'M'+x+' '+y+' h9'},parent);
+        const label=this.svg('text',{x:x===38?x-5:x+14,y:y+3,'text-anchor':x===38?'end':'start'},parent,'');
+        ticks.push(label);
+      }
+      this.svg('path',{d:'M'+x+' '+(center-Math.floor(count/2)*spacing)+' V'+(center+Math.floor(count/2)*spacing)},parent);
+      return ticks;
+    }
+    setTape(parent,ticks,value,step,digits=0) {
+      parent.style.visibility=value===null?'hidden':'';
+      if(value===null)return;
+      const base=Math.round(value/step)*step;
+      for(let i=0;i<ticks.length;i++){
+        const label=(base+(Math.floor(ticks.length/2)-i)*step).toFixed(digits);
+        if(ticks[i].textContent!==label)ticks[i].textContent=label;
+      }
+    }
     text(id,value){const text=String(value??'--');if(this.nodes[id].textContent!==text)this.nodes[id].textContent=text;}
     attribute(node,name,value){if(node.getAttribute(name)!==value)node.setAttribute(name,value);}
     setTelemetry(value={}) {
@@ -41,9 +64,18 @@
       this.attribute(this.nodes.driverHudRoll,'transform',attitude?'rotate('+(-roll)+' 300 180)':'');
       this.attribute(this.nodes.driverHudPitch,'transform',attitude?'translate(0 '+(-pitch*4)+')':'');
       this.attribute(this.nodes.driverHudRollPointer,'transform',attitude?'rotate('+roll+' 300 120)':'');
+      this.attribute(this.nodes.driverHudRollMarker,'transform',attitude?'translate('+Math.max(-70,Math.min(70,roll*1.5))+' 0)':'');
       for(const [id,key]of [['driverHudSpeed','actual'],['driverHudTarget','target']]){
         const speed=number(value[key]);this.text(id,speed===null?'--':speed.toFixed(2));
       }
+      this.setTape(this.nodes.driverHudSpeedTicks,this.speedTicks,number(value.actual),.5,1);
+      const motors=value.motors||[],rpm=motors.slice(0,2).map(m=>number(m.Rpm));
+      this.setTape(this.nodes.driverHudRpmTicks,this.rpmTicks,rpm[0]??null,500);
+      this.text('driverHudRpm',[rpm[0],rpm[1]].map(n=>n==null?'--':Math.round(n)).join(' / '));
+      const output=number(value.common);
+      this.text('driverHudOutput',output===null?'--':output.toFixed(0));
+      const height=(output===null?0:Math.min(100,Math.abs(output)))+'%';
+      if(this.nodes.driverHudOutputFill.style.height!==height)this.nodes.driverHudOutputFill.style.height=height;
       const rawHeading=number(value.actualHeading),heading=rawHeading===null?null:((rawHeading%360)+360)%360;
       this.nodes.driverHudHeadingTicks.hidden=heading===null;
       this.nodes.driverHudHeadingTicks.style.display=heading===null?'none':'';
