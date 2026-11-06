@@ -88,7 +88,7 @@
       if(!this.map?.ready)return;const lines=[];
       this.routes.forEach((saved,i)=>{
         const route=i===this.index&&preview?preview:saved,color=this.color(i),path=this.geometry(route,i);
-        if(path.points.length>1)lines.push({points:path.points,color,width:i===this.index?5:3,className:'mission-queue-route-line',routeIndex:i});
+        if(path.points.length>1)lines.push(...BoatModules.missionPath.routeLines(route,{color,width:i===this.index?5:3,className:'mission-queue-route-line',routeIndex:i}));
         if(route.loopEnabled)lines.push({points:[route.points.at(-1),route.points[0]],color,width:2,dashed:true,className:'mission-queue-loop-line'});
         const nextIndex=(i+1)%this.routes.length,next=this.routes[i+1]||(this.owner.queue.loopEnabled?this.routes[0]:null);
         if(next){const end=route.loopEnabled?route.points[0]:route.points.at(-1),start=nextIndex===this.index&&preview?preview.points[0]:next.points[0];
@@ -147,6 +147,12 @@
       };
       route.points.forEach((point,i)=>{const row=document.createElement('li'),title=document.createElement('strong');row.className='mission-queue-point-row';row.dataset.pointIndex=String(i);title.textContent=(i+1)+' · '+(i===0?'起点':i===route.points.length-1?'终点':'航点');row.append(title);
         coordinate(row,point,'latitude','航点 '+(i+1)+' 纬度',85);coordinate(row,point,'longitude','航点 '+(i+1)+' 经度',180);
+        if(i>0){
+          const label=document.createElement('label');label.textContent='航段 '+i+' → '+(i+1)+' 轨迹';
+          const select=document.createElement('select');select.disabled=!valid();select.dataset.queueSegmentRecord=String(i-1);select.setAttribute('aria-label','任务组航段 '+i+' 到 '+(i+1)+' 轨迹记录');
+          select.append(new Option('实线 · 记录','record'),new Option('虚线 · 不记录','skip'));select.value=route.segments?.[i-1]?.record===false?'skip':'record';
+          select.onchange=()=>{if(!valid())return;const segments=route.points.slice(1).map((_,j)=>({...route.segments?.[j]||{type:'line'}}));if(select.value==='skip')segments[i-1].record=false;else delete segments[i-1].record;if(segments.some(s=>s.type==='curve'||s.record===false))route.segments=segments;else delete route.segments;this.owner.changed();this.owner.notice('已修改任务组副本的记录航段，请保存队列；原航线不变。');};label.append(select);row.append(label);
+        }
         const segment=route.segments?.[i-1];if(segment?.type==='curve'){coordinate(row,segment.control,'latitude','弯点 '+i+' 纬度',85);coordinate(row,segment.control,'longitude','弯点 '+i+' 经度',180);}list.append(row);
       });
     }

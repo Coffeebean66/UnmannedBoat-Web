@@ -212,13 +212,14 @@
     updateMapAvailability(view.fixFresh);
     renderTrack(view.fixFresh);
   }
-  function renderTrack(fresh) {
-    const driving=window.BoatWorkspace?.current==='driving',displayMode=driving?'driving':'monitor';
+  function renderTrack(fresh=state.trackFixFresh) {
+    state.trackFixFresh=fresh;
+    const driving=window.BoatWorkspace?.current==='driving',missionOnly=window.BoatMissionTracks?.isShowing(map),displayMode=(driving?'driving':'monitor')+(missionOnly?':mission':'');
     if(map?.ready&&(trackRevision!==track.revision||trackDisplayMode!==displayMode)) {
-      const lines=track.polylines();map.setTrackLines(driving?lines.map(line=>({...line,color:'#00bcd9'})):lines);
+      const lines=missionOnly?[]:track.polylines();map.setTrackLines(driving?lines.map(line=>({...line,color:'#00bcd9'})):lines);
       trackRevision=track.revision;trackDisplayMode=displayMode;
     }
-    set('trackStatus',(track.active?(fresh?'更新本页轨迹':'显示云端历史'):'本页轨迹已暂停')+' · '+track.pointCount+'点'+(track.truncated?' · 已裁剪最早轨迹':''));
+    set('trackStatus',missionOnly?'显示任务分段实测轨迹 · 虚线航段不记录':(track.active?(fresh?'更新本页轨迹':'显示云端历史'):'本页轨迹已暂停')+' · '+track.pointCount+'点'+(track.truncated?' · 已裁剪最早轨迹':''));
     $('trackStart').textContent=track.active?'停止追踪':'开始追踪';
   }
   function renderDeviceSummary(stats) {
@@ -411,6 +412,7 @@
   on('chartClear',()=>{cancelHistory();state.history=[];state.historyEnd=null;render();});
   on('trackStart',()=>{state.trackDisplayEnabled=!track.active;track.active?track.stop():track.start();const x=state.latest.velocity;position(x?.frame,x?.at||0,performance.now());render();});
   on('trackClear',()=>{cancelHistory();state.liveTrackPoints=[];track.clear();render();});
+  window.addEventListener('boat-mission-track-change',()=>renderTrack());
   on('mapVectorsToggle',()=>mapVectors.toggle());
   on('compassToggle',()=>{setCompassVisibility(!compassVisible,true);renderCompass(performance.now());});
   on('mapProviderToggle',async()=>{

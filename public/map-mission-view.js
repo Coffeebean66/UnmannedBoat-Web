@@ -60,7 +60,7 @@ class MapMissionView {
     const text = !allowed ? '' : state.stale ? '任务状态同步中断，恢复后更新路线' : !run ? '当前无人船暂无执行中任务' :
       !valid ? '正在同步当前任务路线…' : (run.queue ? run.queue.name+' · 航线 '+(run.queue.routeIndex+1)+' / '+run.queue.routeCount+(run.action==='start'?' · 第 '+run.queue.currentLoop+' / '+run.queue.loopCount+' 轮':'')+' · ' : '') + (run.routeName || route.name || '当前任务') + ' · ' + phase +
       (run.loopEnabled ? ' · 第 ' + run.currentLoop + ' / ' + run.loopCount + ' 圈' : '') +
-      ' · ' + (this.visible ? '蓝色虚线为任务路线，橙色为返回 / 转场线' + (this.pointsVisible ? '' : '；航点已隐藏') : '路线已隐藏，任务继续执行');
+      ' · ' + (this.visible ? '蓝色实线为可记录航段，虚线不记录；橙色为返回 / 转场线' + (this.pointsVisible ? '' : '；航点已隐藏') : '路线已隐藏，任务继续执行');
     if (this.status.textContent !== text) this.status.textContent = text;
     // 只在航线/当前航点变化时重绘，避免每次状态轮询重建全部地图对象。
     const current = run?.status === 'running' && !state.stale ? run.targetIndex : -1;
@@ -71,10 +71,9 @@ class MapMissionView {
     this.drawKey = key;
     this.clear();
     if (!show) return;
-    let path;
-    try { path=window.BoatModules.missionPath.compile(route).points; }
+    let lines;
+    try { lines=window.BoatModules.missionPath.routeLines(route,{color:'#467dff',width:3,behind:true,className:'map-mission-line'}); }
     catch (_) { this.status.textContent='当前任务曲线无效，请刷新任务状态'; return; }
-    const lines = points.length>1?[{ points:path, color: '#467dff', width: 3, dashed: true, behind: true, className: 'map-mission-line' }]:[];
     if (returning) lines.push({ points: [points.at(-1), points[0]], color: '#d5952b', width: 3,
       dashed: true, behind: true, className: 'map-mission-line map-mission-return' });
     if (transfer && Number.isFinite(transfer.latitude) && Number.isFinite(transfer.longitude)) lines.push({points:[transfer,points[0]],color:'#d5952b',width:3,dashed:true,behind:true,className:'map-mission-line map-mission-transfer'});

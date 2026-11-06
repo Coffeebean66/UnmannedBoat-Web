@@ -26,7 +26,7 @@ function compileSegment(start,end,definition={type:'line'}){
   }else points.push(end);
   const cumulative=[0];
   for(let i=1;i<points.length;i++)cumulative.push(cumulative.at(-1)+N.distance(points[i-1],points[i]));
-  return {points,cumulative,lengthM:cumulative.at(-1),curved};
+  return {points,cumulative,lengthM:cumulative.at(-1),curved,record:definition.record!==false};
 }
 function compile(route){
   const points=route.points.length?[route.points[0]]:[],segments=[];let lengthM=0;
@@ -54,4 +54,14 @@ function guide(position,segment,lookAheadM){
   const aim=at(segment,best.alongM+lookAheadM),remainingM=Math.max(0,segment.lengthM-best.alongM);
   return {...best,heading:N.bearing(position,aim),distanceM:Math.hypot(remainingM,best.away),remainingM,lengthM:segment.lengthM,aim};
 }
-module.exports={defaultControl,compileSegment,compile,at,guide};
+// 按记录属性合并相邻航段；保留曲线采样，所有地图共用实线/虚线含义。
+function routeLines(route,style={}){
+  const lines=[];
+  for(const segment of compile(route).segments){
+    const dashed=!segment.record,last=lines.at(-1);
+    if(last&&last.dashed===dashed)last.points.push(...segment.points.slice(1));
+    else lines.push({...style,points:[...segment.points],dashed});
+  }
+  return lines;
+}
+module.exports={defaultControl,compileSegment,compile,at,guide,routeLines};

@@ -36,11 +36,18 @@ function fixture(initial, saved, brokenStorage = false, savedPoints) {
     clickPoints(id='mapMissionPointsToggle') { nodes[id].events.get('click')(); } };
 }
 
-test('当前任务显示独立虚线路线、编号航点、当前目标和循环返回线', () => {
+test('按航段记录开关绘制实线和虚线，隐藏航点后仍保留分段样式',()=>{
+  const state=active();state.route.segments=[{type:'line',record:false},{type:'line'}];
+  const f=fixture(state);assert.deepEqual(f.layers.get('mission').map(line=>line.dashed),[true,false,true]);
+  f.clickPoints();assert.deepEqual(f.layers.get('mission').map(line=>line.dashed),[true,false,true]);
+  assert.match(f.nodes.mapMissionStatus.textContent,/虚线不记录/);assert.equal(f.view.markers.length,0);
+});
+
+test('当前任务显示独立实线路线、编号航点、当前目标和循环返回线', () => {
   const f = fixture(active());
   assert.deepEqual(f.layers.get('mission')[0].points, points);
   assert.deepEqual(f.layers.get('mission')[1].points, [points.at(-1), points[0]]);
-  assert.equal(f.layers.get('mission')[0].dashed, true);
+  assert.equal(f.layers.get('mission')[0].dashed, false);
   assert.equal(f.view.markers.length, 3);
   assert.match(f.view.markers[1].options.html, /data-current="true"/);
   assert.equal(f.nodes.mapMissionInfo.dataset.visible, 'true');

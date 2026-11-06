@@ -45,13 +45,17 @@ function normalizeRoute(input){
   if(Object.hasOwn(input,'segments')){
     if(!Array.isArray(input.segments)||input.segments.length!==points.length-1)throw fault(400,'航段数量须等于航点数减一');
     segments=input.segments.map((segment,index)=>{
-      if(!plain(segment)||!['line','curve'].includes(segment.type)||Object.keys(segment).length!==(segment.type==='line'?1:2))throw fault(400,'航段须为直线或含弯曲控制点的曲线');
-      if(segment.type==='line')return {type:'line'};
+      const keys=segment?.type==='curve'?['type','control','record']:['type','record'];
+      if(!plain(segment)||!['line','curve'].includes(segment.type)||Object.keys(segment).some(key=>!keys.includes(key)))throw fault(400,'航段须为直线或含弯曲控制点的曲线');
+      if(Object.hasOwn(segment,'record')&&typeof segment.record!=='boolean')throw fault(400,'航段记录开关须为布尔值');
+      // 省略记录开关表示实线，兼容既有航线；只有“不记录”需要显式保存。
+      const recording=segment.record===false?{record:false}:{};
+      if(segment.type==='line')return {type:'line',...recording};
       const control=normalizePoint(segment.control),start=points[index],end=points[index+1],projection=nav.guide(control,start,end,0);
       if(distance(start,control)>20000||distance(end,control)>20000||projection.alongM<-.01||projection.alongM>projection.lengthM+.01)throw fault(400,'弯曲控制点须位于航段两端之间，且距两端均不超过 20 千米；大弯请增加航点');
-      return {type:'curve',control};
+      return {type:'curve',control,...recording};
     });
-    if(!segments.some(s=>s.type==='curve'))segments=undefined;
+    if(!segments.some(s=>s.type==='curve'||s.record===false))segments=undefined;
   }
   for(let i=1;i<points.length;i++){const d=distance(points[i-1],points[i]);if(d<0.5||d>20000)throw fault(400,'相邻航点距离须为 0.5 米—20 千米');}
   let geometry;

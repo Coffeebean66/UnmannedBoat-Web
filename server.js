@@ -79,7 +79,7 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
   };
   const server=key&&cert?https.createServer({key,cert},handler):http.createServer(handler);
   const originalClose=server.close.bind(server);
-  server.close=(callback)=>{missionApi.close();controlApi.close();firmwareApi.close();const recordingClosed=videoRecordingApi.close();const mediaClosed=videoMediaApi.close();mqttDeviceApi.close();mapApi.close();accounts.close();updateApi.close();api.close();const historyClosed=bridge.stop();return originalClose((...args)=>{Promise.allSettled([mediaClosed,recordingClosed,historyClosed]).then(()=>callback?.(...args));});};
+  server.close=(callback)=>{const missionsClosed=missionApi.close();controlApi.close();firmwareApi.close();const recordingClosed=videoRecordingApi.close();const mediaClosed=videoMediaApi.close();mqttDeviceApi.close();mapApi.close();accounts.close();updateApi.close();api.close();const historyClosed=bridge.stop();return originalClose((...args)=>{Promise.allSettled([missionsClosed,mediaClosed,recordingClosed,historyClosed]).then(()=>callback?.(...args));});};
   server.boatCloud=bridge;server.boatCloudApi=api;server.boatUpdateApi=updateApi;server.boatRelease=current;server.boatAccounts=accounts;
   server.boatRecordingApi=videoRecordingApi;
   server.boatFirmwareApi=firmwareApi;

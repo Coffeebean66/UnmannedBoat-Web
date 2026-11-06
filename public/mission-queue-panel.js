@@ -20,6 +20,7 @@
       $('missionQueueSave').onclick=()=>this.perform(()=>this.save());
       $('missionQueueDelete').onclick=()=>this.perform(()=>this.remove());
       for(const [id,action]of [['missionQueueGoto','queueGoto'],['missionQueueStart','queueStart']])$(id).onclick=()=>this.perform(()=>this.execute(action));
+      $('missionQueueStartRecord').onclick=()=>this.perform(()=>this.execute('queueStart',true));
       for(const [id,action]of [['missionQueuePause','pause'],['missionQueueResume','resume']])$(id).onclick=()=>this.perform(()=>this.m.submitNavigation(action));
       $('missionQueueStop').onclick=()=>{const run=this.m.run();if(run?.queue)this.m.stop(run).catch(error=>this.notice(error.message,true));};
       window.addEventListener('boat-mission-change',()=>this.sync());
@@ -70,12 +71,13 @@
       if(generation!==m.generation)return;
       m.queues=m.queues.filter(q=>q.id!==queue.id);this.queue=this.blank();this.dirty=false;this.remember();this.fill();this.render();this.notice('任务队列已删除，原航线仍可使用。');
     }
-    async execute(action){
+    async execute(action,recordTrack=false){
       if(this.dirty)throw Error('请先保存修改后的任务队列');
       const m=this.m,generation=m.generation;
-      const run=await m.submitQueue(action,{queueId:this.queue.id});
+      const run=await m.submitQueue(action,{queueId:this.queue.id,recordTrack});
       if(generation!==m.generation)return run;
-      this.notice(action==='queueGoto'?'正在前往首条航线起点，到达后停止。':'队列已交给服务器，关闭网页后继续执行。');
+      if(recordTrack)window.BoatMissionTracks?.selectLatest();
+      this.notice(recordTrack?'任务组已提交，按各副本实线航段记录，虚线、转场和返回段不记录。':action==='queueGoto'?'正在前往首条航线起点，到达后停止。':'队列已交给服务器，关闭网页后继续执行。');
       return run;
     }
     render(){
@@ -98,6 +100,7 @@
       $('missionQueueDelete').disabled=editingLocked||!q.id;
       const unavailable=locked||active||this.dirty||!q.id||!valid||!!m.storageError||!!m.statusError;
       $('missionQueueGoto').disabled=$('missionQueueStart').disabled=unavailable;
+      $('missionQueueStartRecord').disabled=unavailable||!!m.trackStorage?.storageError||!m.trackStorage;
       $('missionQueuePause').disabled=locked||!own||!active||run.status==='stopping';
       $('missionQueueResume').disabled=locked||!own||!paused||!run.resumable||!!m.statusError;
       $('missionQueueStop').disabled=!m.admin||!own||(!active&&!paused)||run.status==='stopping'||m.stops.has(this.deviceId);

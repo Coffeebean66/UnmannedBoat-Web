@@ -71,7 +71,7 @@ function createMissionFixture(options={}){
     advance(ms=100,id='boat-01',p={}){time+=ms;feed(id,p);control.refresh();mission.refresh();},
     route(id='boat-01',overrides={}){return store.save(id,{name:'湖区巡航',speedMps:1,arrivalRadiusM:3,points:[ORIGIN,NAV.destination(ORIGIN,0,30),NAV.destination(ORIGIN,90,45)],...overrides});},
     commands(){return client.sent.filter(p=>p.topic.endsWith('/control-command'));},
-    async close(){clearInterval(feedTimer);if(server?.listening)await new Promise(resolve=>server.close(resolve));else{mission.close();control.close();await bridge.stop();}fs.rmSync(dir,{recursive:true,force:true});}
+    async close(){clearInterval(feedTimer);if(server?.listening)await new Promise(resolve=>server.close(resolve));else{await mission.close();control.close();await bridge.stop();}fs.rmSync(dir,{recursive:true,force:true});}
   };
 }
 module.exports={createMissionFixture,ORIGIN,TOKEN,CLIENT,ENV};

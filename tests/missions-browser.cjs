@@ -46,6 +46,7 @@ async function main(){
     assert.equal(await evaluate('document.getElementById("view-missions").hidden'),true,'Task interface stays hidden before authentication');
     await evaluate('BoatAuth.login("operator","browser-admin-test-only")');await until('BoatMissions.deviceId==="boat-01"&&BoatMissions.map?.ready&&BoatWorkspace.current==="missions"');
     assert.equal(f.commands().length,0,'Entering planning never acquires or moves a boat');
+    if(!process.argv.includes('--recording-only')){
     await until('boatMonitor.link.connected&&boatMonitor.link.devices[0]?.controlAlgorithm?.id===0');
     await evaluate('boatMonitor.openBoatSettings("boat-01")');
     await until('document.getElementById("settingsDialog").open&&!document.getElementById("applyControlAlgorithm").disabled');
@@ -527,6 +528,55 @@ async function main(){
       assert.equal(await evaluate('document.getElementById("missionMap").getBoundingClientRect().height>=300'),true);
       await evaluate('document.getElementById("view-missions").scrollIntoView({block:"start",behavior:"instant"})');await shot('missions-'+width+'-light');
     }
+    }
+    // 实线/虚线为独立航段属性；真实按钮启动专用记录，关闭网页后仍按段采样。
+    await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
+    await evaluate('BoatWorkspace.navigate("missions",{focus:false});document.getElementById("missionNew").click();document.getElementById("missionSegmentType").value="line";document.getElementById("missionName").value="分段记录巡航";document.getElementById("missionName").dispatchEvent(new Event("input"));');
+    const recordingPoints=[0,30,60,90].map(m=>N.destination(ORIGIN,0,m));
+    for(let i=0;i<recordingPoints.length;i++)await evaluate('document.getElementById("missionSegmentRecord").value='+JSON.stringify(i===2?'skip':'record')+';BoatMissions.addPoint('+JSON.stringify(recordingPoints[i])+')');
+    assert.deepEqual(await evaluate('BoatMissions.map.lastTrackLines.filter(l=>l.color==="#467dff").map(l=>l.dashed)'),[false,true,false]);
+    await evaluate('(()=>{const s=document.querySelectorAll("[data-segment-record]")[0];s.value="skip";s.dispatchEvent(new Event("change"));BoatMissions.changeSegment(0,"curve");})()');
+    assert.equal(await evaluate('BoatMissions.route.segments[0].record'),false,'Changing the segment shape preserves recording choice');
+    await evaluate('BoatMissions.changeSegment(0,"line");(()=>{const s=document.querySelectorAll("[data-segment-record]")[0];s.value="record";s.dispatchEvent(new Event("change"));})();document.getElementById("missionSave").click()');
+    await until('BoatMissions.route.id&&!BoatMissions.busy&&!BoatMissions.dirty');const recordingRouteId=await evaluate('BoatMissions.route.id');
+    assert.equal(f.store.get('boat-01',recordingRouteId).segments[1].record,false);
+    f.feed('boat-01',{...ORIGIN,heading:0});await until('!document.getElementById("missionStartRecord").disabled');
+    await evaluate('document.getElementById("missionStartRecord").click()');await until('BoatMissions.run()?.status==="running"&&BoatMissions.run()?.targetIndex===1&&!!BoatMissions.run()?.trackId');
+    const recordingId=f.mission.snapshot('boat-01').trackId;
+    f.feed('boat-01',recordingPoints[1]);await until('BoatMissions.run()?.targetIndex===2');
+    const recordedCount=f.mission.tracks.get('boat-01',recordingId).pointCount;
+    await until('BoatMissionTracks.track?.pointCount>1&&BoatMissions.map._lineOverlays.has("mission-recording")');
+    await evaluate('document.getElementById("missionTrackToggle").click()');
+    assert.equal(await evaluate('BoatMissions.map._lineOverlays.has("mission-recording")'),false,'Display switch clears only recorded overlays');
+    assert.equal(f.mission.active('boat-01'),true);await evaluate('document.getElementById("missionTrackToggle").click()');
+    await send('Page.navigate',{url:'about:blank'});f.feed('boat-01',{...N.destination(ORIGIN,0,45),heading:0});await wait(1200);
+    assert.equal(f.mission.tracks.get('boat-01',recordingId).pointCount,recordedCount,'No browser is needed; skipped segment adds no point');
+    assert.ok(f.commands().at(-1).payload.readInt16LE(30)>0,'Skipped segment continues navigation');
+    f.feed('boat-01',recordingPoints[2]);for(let n=0;n<30&&f.mission.snapshot('boat-01').targetIndex!==3;n++)await wait(50);
+    assert.equal(f.mission.snapshot('boat-01').targetIndex,3);f.feed('boat-01',recordingPoints[3]);
+    for(let n=0;n<30&&f.mission.snapshot('boat-01').status!=='completed';n++)await wait(50);assert.equal(f.mission.snapshot('boat-01').status,'completed');
+    await send('Page.navigate',{url:base+'/#missions'});await until('window.BoatMissions?.deviceId==="boat-01"&&window.BoatMissionTracks?.track?.status==="completed"&&BoatMissions.map?.ready');
+    assert.deepEqual(await evaluate('BoatMissionTracks.track.chunks.map(c=>c.segmentIndex)'),[0,2]);
+    await evaluate('BoatMissions.load('+JSON.stringify(recordingRouteId)+');document.getElementById("missionTrackFit").click()');
+    assert.equal(await evaluate('BoatMissions.map._lineOverlays.get("mission-recording").lines.length'),2,'Skipped leg never gets a bridge line');
+    await evaluate('BoatWorkspace.navigate("navigation",{focus:false})');await until('boatMonitor.map.ready&&boatMonitor.map._lineOverlays.has("mission-recording")');
+    assert.equal(await evaluate('boatMonitor.map.lastTrackLines.length'),0,'Dedicated recording hides full telemetry path while selected');
+    assert.match(await evaluate('document.getElementById("trackStatus").textContent'),/任务分段实测轨迹/);
+    await evaluate('BoatWorkspace.navigate("missions",{focus:false});document.getElementById("missionQueueNew").click();document.getElementById("missionQueueRoute").value='+JSON.stringify(recordingRouteId)+';document.getElementById("missionQueueAdd").click();document.getElementById("missionQueueEdit").click()');
+    await evaluate('(()=>{const s=document.querySelectorAll("[data-queue-segment-record]")[0];s.value="skip";s.dispatchEvent(new Event("change"));})();document.getElementById("missionQueueSave").click()');
+    await until('BoatMissionQueue.queue.id&&!BoatMissionQueue.dirty&&!BoatMissions.busy');
+    assert.equal(await evaluate('BoatMissionQueue.queue.routes[0].segments[0].record'),false);assert.equal(f.store.get('boat-01',recordingRouteId).segments[0].record,undefined,'Private group recording edits never change source route');
+    f.feed('boat-01',ORIGIN);await until('!document.getElementById("missionQueueStartRecord").disabled');
+    await evaluate('document.getElementById("missionQueueStartRecord").click()');await until('BoatMissions.run()?.status==="running"&&BoatMissions.run()?.recordTrack===true');
+    await evaluate('document.getElementById("missionQueueStop").click()');await until('BoatMissions.run()?.status==="stopped"');
+    await evaluate('document.getElementById("missionTrackSelect").value='+JSON.stringify(recordingId)+';document.getElementById("missionTrackSelect").dispatchEvent(new Event("change"))');await until('BoatMissionTracks.track?.id==='+JSON.stringify(recordingId));
+    await evaluate('document.getElementById("themeToggle").click()');
+    for(const width of [1440,375,320]){
+      await send('Emulation.setDeviceMetricsOverride',{width,height:1000,deviceScaleFactor:1,mobile:false});await wait(120);
+      assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth+1'),true,'Recording controls fit '+width);
+      await evaluate('document.getElementById("missionTrackCard").scrollIntoView({block:"center",behavior:"instant"})');await shot('mission-recording-'+width);
+    }
+    console.log('PASS: recording selectors, line/curve attribute independence, real start-and-record buttons, headless server recording, skipped legs, persisted playback, map overlays, private group settings and 320/375/1440px layouts.');
     await evaluate('BoatWorkspace.navigate("driving",{focus:false});boatMonitor.driver.navigation.selectMode("auto");document.getElementById("driverQueueSettings").click()');
     assert.equal(await evaluate('document.getElementById("driverQueueDialog").open'),true);
     await evaluate('BoatAuth.logout()');await evaluate('BoatAuth.login("observer","browser-guest-test-only")');await until('BoatAuth.user?.role==="guest"');
@@ -534,7 +584,7 @@ async function main(){
     assert.equal(await evaluate('document.getElementById("view-missions").hidden&&document.getElementById("view-driving").hidden&&document.getElementById("missionActiveBar").hidden'),true,'Guest cannot see task, driver or global task interface');
     assert.equal(await evaluate('BoatMissions.routes.length===0&&BoatMissions.queues.length===0&&BoatMissions.runs.length===0&&BoatMissionQueue.queue.routeIds.length===0'),true,'Role change clears private task and queue UI state');
     await evaluate('BoatMissions.poll(true)');assert.equal(await evaluate('BoatMissions.routes.length'),0,'Guest does not poll or repopulate the task interface');
-    assert.deepEqual(errors,[]);console.log('PASS: real Chrome algorithm selection/MCU rejection/PID return and 320/375/1440px settings; LQR missions; actual map clicks and return-leg preview; loop persistence/reload; goto; MCU ACK and two loops; page closure/reopen; driving Space stop; guest permissions; dark/light responsive layouts.');
+    assert.deepEqual(errors,[]);console.log(process.argv.includes('--recording-only')?'PASS: recording browser checks, responsive layouts and guest permission cleanup.':'PASS: real Chrome algorithm selection/MCU rejection/PID return and 320/375/1440px settings; LQR missions; actual map clicks and return-leg preview; loop persistence/reload; goto; MCU ACK and two loops; page closure/reopen; driving Space stop; guest permissions; dark/light responsive layouts.');
   }finally{socket?.close();browser.kill();server.closeAllConnections?.();await f.close();}
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

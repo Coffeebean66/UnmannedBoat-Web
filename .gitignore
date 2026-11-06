@@ -2,6 +2,8 @@
 /.test-output/
 /.local-state/
 missions.json
+mission-tracks.json
+mission-tracks.json.tmp-*
 .missions-*.tmp
 *.log
 *.pid

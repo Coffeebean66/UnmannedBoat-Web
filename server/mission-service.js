@@ -1,6 +1,8 @@
 /* 服务器航线执行器：每轮校验定位/船速/航向和租约后重新计算目标，不依赖网页心跳。 */
 'use strict';
 const crypto=require('node:crypto');
+const path=require('node:path');
+const {MissionTracks}=require('./mission-tracks');
 const nav=require('../public/utils/missionNavigation');
 const paths=require('../public/utils/missionPath');
 const optimal=require('./optimal-guidance');
@@ -21,8 +23,9 @@ function feedback(bridge,id,now){
   return {latitude:v.latitude,longitude:v.longitude,heading,speedMps:Math.hypot(v.xMps,v.yMps),sourceTick:v.receivedMs,mode:b.controlMode,enabled:b.controlEnabled};
 }
 class MissionService{
-  constructor({bridge,control,store,now=Date.now,pollMs=100,progressTimeoutMs=120000}={}){
+  constructor({bridge,control,store,tracks,trackOptions={},now=Date.now,pollMs=100,progressTimeoutMs=120000}={}){
     this.bridge=bridge;this.control=control;this.store=store;this.now=now;this.progressTimeoutMs=progressTimeoutMs;this.jobs=new Map();this.closed=false;
+    this.tracks=tracks||new MissionTracks({file:store.file?path.join(path.dirname(store.file),'mission-tracks.json'):'',now,...trackOptions});
     this.timer=setInterval(()=>this.refresh(),pollMs);this.timer.unref?.();
   }
   active(id){return ACTIVE.has(this.jobs.get(id)?.status);}
@@ -40,22 +43,25 @@ class MissionService{
         loopEnabled:job.queue.definition.loopEnabled,loopCount:job.queue.definition.loopEnabled?job.queue.definition.loopCount:1,
         completedLoops:job.queue.completedLoops,currentLoop:job.action==='start'?Math.min(job.queue.completedLoops+1,job.queue.definition.loopEnabled?job.queue.definition.loopCount:1):null}}:{}),
       transitionFrom:['transit','queueReturning'].includes(job.phase)?job.transitionFrom:null,
+      trackId:job.trackId||null,recordTrack:!!job.trackId,
       algorithm:job.algorithm,position:job.position||null,startedAt:job.startedAt,finishedAt:job.finishedAt||null,stopConfirmed:job.stopConfirmed===true};
   }
   list(){return [...this.jobs.values()].map(job=>this.snapshot(job,false));}
-  start(id,routeId,action,revision){
+  start(id,routeId,action,revision,recordTrack=false){
     if(!['goto','start'].includes(action))throw fault(400,'任务操作不正确');
+    if(typeof recordTrack!=='boolean'||recordTrack&&action!=='start')throw fault(400,'只有开始任务可以启用分段轨迹记录');
     const route=this.store.get(id,routeId);
     if(revision!==undefined&&revision!==route.revision)throw fault(409,'航线已被修改，请重新载入核对后再执行');
-    return this.begin(id,route,action);
+    return this.begin(id,route,action,null,null,recordTrack);
   }
-  startQueue(id,queueId,action,revision,routeRevisions){
+  startQueue(id,queueId,action,revision,routeRevisions,recordTrack=false){
     if(!['goto','start'].includes(action))throw fault(400,'队列操作不正确');
+    if(typeof recordTrack!=='boolean'||recordTrack&&action!=='start')throw fault(400,'只有开始队列可以启用分段轨迹记录');
     const definition=this.store.getQueue(id,queueId);
     if(revision!==definition.revision)throw fault(409,'任务队列已修改，请重新载入核对');
     const routes=this.store.resolveQueue(id,definition);
     if(!Array.isArray(routeRevisions)||routeRevisions.length!==routes.length||routeRevisions.some((revision,i)=>revision!==routes[i].revision))throw fault(409,'队列中的航线已变化，请刷新并核对后再执行');
-    return this.begin(id,routes[0],action,null,{definition,routes,index:0,completedLoops:0});
+    return this.begin(id,routes[0],action,null,{definition,routes,index:0,completedLoops:0},recordTrack);
   }
   navigate(id,action,speedMps=1,arrivalRadiusM=3,revision){
     if(!['home','hold'].includes(action))throw fault(400,'导航操作不正确');
@@ -71,7 +77,7 @@ class MissionService{
     if(!old||old.runId!==runId||old.status!=='paused'||!old.stopConfirmed)throw fault(409,'当前任务不可继续，请刷新并确认已暂停停船');
     return this.begin(id,structuredClone(old.route),old.action,old);
   }
-  begin(id,route,action,resuming=null,queue=null){
+  begin(id,route,action,resuming=null,queue=null,recordTrack=false){
     if(this.closed||this.store.error)throw fault(503,this.store.error||'任务服务正在关闭');
     if(this.active(id))throw fault(409,'这艘船已有任务，请先停止当前任务');
     const position=feedback(this.bridge,id,this.now());
@@ -87,6 +93,10 @@ class MissionService{
     if(resuming){job.index=resuming.index;job.resumedFrom=resuming.runId;}
     job.onlineTuning=job.algorithm===1&&this.bridge.get(id).controlAlgorithm?.onlineTuning===true;
     if(job.algorithm===1&&!job.onlineTuning&&!job.queue)job.optimal=optimal.create(route.speedMps);
+    if(resuming?.trackId)job.trackId=resuming.trackId;
+    const previous=this.jobs.get(id);
+    if(!resuming&&previous?.status==='paused')this.tracks.state(previous,'stopped');
+    if(recordTrack||job.trackId)this.tracks.start(job);
     this.jobs.set(id,job);
     // 限制仅在内存保留最近 128 艘船的结束状态，活动任务不会被驱逐。
     if(this.jobs.size>128)for(const [key,value]of this.jobs)if(!this.active(key)){this.jobs.delete(key);break;}
@@ -114,9 +124,10 @@ class MissionService{
     if(!this.current(job))return;
     if(lease.mode!==2||lease.testMode)throw fault(409,'船端未确认正常航向闭环模式，任务停止');
     job.leaseId=lease.leaseId;job.status='running';job.message='自主导航已接管';job.armedAt=this.now();
+    this.tracks.state(job,'running');
     job.lastProgressAt=this.now();job.bestDistance=Infinity;this.step(job);
   }
-  finish(job,status,message,confirmed=false){job.status=status;job.message=message;job.finishedAt=this.now();job.stopConfirmed=confirmed;job.commandSpeedMps=0;}
+  finish(job,status,message,confirmed=false){job.status=status;job.message=message;job.finishedAt=this.now();job.stopConfirmed=confirmed;job.commandSpeedMps=0;this.tracks.state(job,status);}
   stop(id){
     const job=this.jobs.get(id);if(!job)throw fault(404,'当前无人船没有任务');
     if(job.status==='paused')this.finish(job,'stopped','已结束暂停的任务',true);
@@ -130,6 +141,7 @@ class MissionService{
   stopJob(job,result,message){
     if(this.jobs.get(job.id)!==job||!ACTIVE.has(job.status)||job.status==='stopping')return;
     job.controller.abort();job.result=result;job.message=message;job.commandSpeedMps=0;
+    this.tracks.break(job);
     const controlJob=job.controlJob;
     if(controlJob&&this.control.jobs.get(job.id)===controlJob){job.status='stopping';job.message=message+'；等待船端停止确认';this.control.stopJob(controlJob,'stop');}
     else if(controlJob){this.finish(job,'failed',message+'；控制租约已丢失，请确认船已停止');}
@@ -190,8 +202,10 @@ class MissionService{
     const currentSegment=job.action==='start'&&job.phase==='route'&&job.index>0?job.geometry.segments[job.index-1]:null;
     const curvePosition=currentSegment?.curved?paths.guide(p,currentSegment,0):null;
     if(isNew){job.arrivalCount=d<=radius&&(!curvePosition||curvePosition.remainingM<=radius)?job.arrivalCount+1:0;}
+    this.tracks.sample(job,p,{boundary:job.arrivalCount>=2});
     if(job.arrivalCount>=2&&job.action!=='hold'){
       this.arrived(job,now);if(job.status!=='running')return;
+      this.tracks.sample(job,p,{boundary:true});
       radius=job.route.arrivalRadiusM;
     }
     const target=job.route.points[job.index];
@@ -234,6 +248,13 @@ class MissionService{
       else if(job.status==='acquiring'){try{feedback(this.bridge,job.id,this.now());}catch(error){this.stopJob(job,'failed',error.message);}}
     }
   }
-  close(){if(this.closed)return;for(const job of this.jobs.values())this.stopJob(job,'stopped','服务器正在停止，任务不会自动恢复');this.closed=true;clearInterval(this.timer);}
+  close(){
+    if(this.closed)return this.closePromise;
+    for(const job of this.jobs.values()){
+      this.stopJob(job,'stopped','服务器正在停止，任务不会自动恢复');
+      if(ACTIVE.has(job.status))this.tracks.state(job,'interrupted');
+    }
+    this.closed=true;clearInterval(this.timer);this.closePromise=this.tracks.close();return this.closePromise;
+  }
 }
 module.exports={MissionService,feedback,ACTIVE};

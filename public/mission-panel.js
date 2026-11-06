@@ -23,6 +23,7 @@
       $('missionSave').onclick=()=>this.action(()=>this.save());
       $('missionDelete').onclick=()=>this.action(()=>this.remove());
       for(const action of ['goto','start'])$('mission'+(action==='goto'?'Goto':'Start')).onclick=()=>this.action(()=>this.execute(action));
+      $('missionStartRecord').onclick=()=>this.action(()=>this.execute('start',true));
       const stop=()=>{const run=this.run();if(run)this.stop(run).catch(error=>this.notice(error.message,true));};
       $('missionStop').onclick=stop;$('driverMissionStop').onclick=stop;
       window.addEventListener('keydown',event=>{
@@ -38,6 +39,7 @@
       window.addEventListener('boat-theme-change',()=>this.map?.setTheme(document.documentElement.dataset.theme));
       window.BoatAuth?.addEventListener('change',()=>{
         const key=String(BoatAuth.generation);
+        if(this.authKey!==key){this.trackSummaries=[];this.trackStorage=null;}
         if(this.authKey!==key){this.authKey=key;this.generation++;this.controller?.abort();this.polling=false;this.routes=[];this.queues=[];this.runs=[];this.home=null;this.position=null;this.editing=false;this.curveEditing=-1;this.drafts.clear();this.route=this.blank();this.dirty=false;this.fillForm();this.renderPoints();this.draw();}
         if(this.admin)this.poll(true);this.render();
       });
@@ -55,7 +57,8 @@
       const run=this.admin?this.run():null;
       // 始终采用服务器正在执行的航线，编辑器可同时载入其他草稿。
       const visible=run?.active||run?.status==='paused',route=visible?(run.route||this.routes.find(route=>route.id===run.routeId)):null;
-      return {allowed:this.admin,deviceId:this.deviceId,run:visible?run:null,route,home:this.admin?this.home:null,stale:!!this.statusError,updatedAt:this.updatedAt||0};
+      return {allowed:this.admin,deviceId:this.deviceId,run:visible?run:null,route,home:this.admin?this.home:null,stale:!!this.statusError,updatedAt:this.updatedAt||0,
+        tracks:this.admin?this.trackSummaries||[]:[],trackStorage:this.trackStorage||null};
     }
     readForm(){
       this.route.name=$('missionName').value;this.route.speedMps=Number($('missionSpeed').value);this.route.arrivalRadiusM=Number($('missionRadius').value);
@@ -67,6 +70,7 @@
       if(id===this.deviceId)return;
       if(this.deviceId){this.readForm();this.drafts.set(this.deviceId,{route:clone(this.route),dirty:this.dirty});}
       this.deviceId=id;this.generation++;this.controller?.abort();this.routes=[];this.queues=[];this.home=null;this.position=null;this.curveEditing=-1;
+      this.trackSummaries=[];this.trackStorage=null;
       const draft=this.drafts.get(id);this.route=draft?clone(draft.route):this.blank();this.dirty=!!draft?.dirty;this.editing=false;
       this.fillForm();this.renderPoints();this.render();this.draw();this.poll(true);
     }
@@ -87,6 +91,7 @@
         const data=await this.request('?deviceId='+encodeURIComponent(id),{signal:controller.signal});
         if(generation!==this.generation||this.controller!==controller)return;
         this.routes=data.routes;this.queues=data.queues||[];this.runs=data.runs;this.home=data.home||null;this.position=data.position;this.storageError=data.storageError||'';this.statusError='';this.updatedAt=Date.now();
+        this.trackSummaries=data.tracks||[];this.trackStorage=data.trackStorage||null;
         if(!this.route.id&&!this.dirty&&!this.route.points.length&&this.routes.length&&!this.drafts.has(id)){
           this.route=clone(this.routes.find(r=>r.id===this.run()?.routeId&&this.run()?.active)||this.routes[0]);this.fillForm();this.renderPoints();
         }
@@ -119,12 +124,13 @@
       this.route=route?clone(route):this.blank();this.curveEditing=-1;this.dirty=false;this.drafts.set(this.deviceId,{route:clone(this.route),dirty:false});
       this.fillForm();this.renderPoints();this.render();this.draw();this.fit();
     }
-    async execute(action){
+    async execute(action,recordTrack=false){
       if(this.dirty)throw Error('请先保存修改后的航线');
       const id=this.deviceId,authKey=this.authKey;
-      const data=await this.request('/run',{method:'POST',body:JSON.stringify({deviceId:id,routeId:this.route.id,revision:this.route.revision,action})});
+      const data=await this.request('/run',{method:'POST',body:JSON.stringify({deviceId:id,routeId:this.route.id,revision:this.route.revision,action,...(recordTrack?{recordTrack:true}:{})})});
       if(authKey!==this.authKey)return;
-      this.runs=this.runs.filter(r=>r.deviceId!==id).concat(data.run);this.notice('任务已提交服务器，关闭网页后仍会继续；可随时点击停止任务。');this.render();
+      this.runs=this.runs.filter(r=>r.deviceId!==id).concat(data.run);if(recordTrack)window.BoatMissionTracks?.selectLatest();
+      this.notice(recordTrack?'任务已提交，服务器仅记录实线航段的实际轨迹，虚线段正常航行但不记录。':'任务已提交服务器，关闭网页后仍会继续；可随时点击停止任务。');this.render();
     }
     async submitNavigation(action,options={}){
       const id=this.deviceId,run=this.run();let body={deviceId:id,action};
@@ -135,13 +141,13 @@
       }else body={...body,speedMps:options.speedMps,arrivalRadiusM:options.arrivalRadiusM,...(action==='home'?{homeRevision:this.home?.revision}:{})};
       return this.submitRun(body);
     }
-    async submitQueue(action,{queueId}={}){
+    async submitQueue(action,{queueId,recordTrack=false}={}){
       if(!['queueGoto','queueStart'].includes(action))throw Error('无效的任务组操作');
       const queue=this.queues.find(q=>q.id===queueId);if(!queue)throw Error('请先选择已保存的任务组');
       const editor=window.BoatMissionQueue;
       if(editor?.deviceId===this.deviceId&&editor.queue.id===queueId&&editor.dirty)throw Error('任务组有未保存修改，请先保存任务组');
       if(!queue.routes)throw Error('请更新任务管理组件并重新载入任务组');
-      return this.submitRun({deviceId:this.deviceId,action,queueId:queue.id,revision:queue.revision,routeRevisions:queue.routes.map(()=>queue.revision)});
+      return this.submitRun({deviceId:this.deviceId,action,queueId:queue.id,revision:queue.revision,routeRevisions:queue.routes.map(()=>queue.revision),...(recordTrack?{recordTrack:true}:{})});
     }
     async submitRun(body){
       // 单航线与任务组共用快照更新和迟到响应保护；调用方仍能取得结果并补发急停。
@@ -186,7 +192,7 @@
     }
     canEdit(){return this.admin&&!!this.deviceId&&!this.busy&&!this.routeInUse();}
     segments(route=this.route){return route.points.slice(1).map((_,i)=>route.segments?.[i]||{type:'line'});}
-    setSegments(segments){if(segments.some(s=>s.type==='curve'))this.route.segments=segments;else delete this.route.segments;}
+    setSegments(segments){if(segments.some(s=>s.type==='curve'||s.record===false))this.route.segments=segments;else delete this.route.segments;}
     geometry(route=this.route){
       const key=JSON.stringify([route.points,route.segments]);
       if(key!==this.geometryKey){
@@ -244,7 +250,14 @@
     changeSegment(index,type){
       if(!this.canEdit())return;
       const segments=this.segments();segments[index]=type==='curve'?{type,control:BoatModules.missionPath.defaultControl(this.route.points[index],this.route.points[index+1])}:{type:'line'};
+      if(this.route.segments?.[index]?.record===false)segments[index].record=false;
       this.setSegments(segments);this.curveEditing=-1;this.changed();
+    }
+    changeRecording(index,record){
+      if(!this.canEdit())return;
+      const segments=this.segments();segments[index]={...segments[index]};
+      if(record)delete segments[index].record;else segments[index].record=false;
+      this.setSegments(segments);this.changed();
     }
     placeCurveControl(p){
       if(!this.canEdit()||!Number.isFinite(p.latitude)||!Number.isFinite(p.longitude)||Math.abs(p.latitude)>85||Math.abs(p.longitude)>180)return;
@@ -263,7 +276,7 @@
       if(this.route.points.length>=256)return this.notice('每条航线最多 256 个航点',true);
       const segments=this.segments();
       this.route.points.push({latitude:Number(p.latitude.toFixed(7)),longitude:Number(p.longitude.toFixed(7))});
-      if(this.route.points.length>1){const type=$('missionSegmentType').value;segments.push(type==='curve'?{type,control:BoatModules.missionPath.defaultControl(this.route.points.at(-2),this.route.points.at(-1))}:{type:'line'});this.setSegments(segments);}
+      if(this.route.points.length>1){const type=$('missionSegmentType').value,segment=type==='curve'?{type,control:BoatModules.missionPath.defaultControl(this.route.points.at(-2),this.route.points.at(-1))}:{type:'line'};if($('missionSegmentRecord').value==='skip')segment.record=false;segments.push(segment);this.setSegments(segments);}
       this.curveEditing=-1;this.changed();
     }
     renderPoints(){
@@ -286,6 +299,9 @@
           const label=document.createElement('label');label.textContent='航段 '+index+' → '+(index+1);
           const select=document.createElement('select');select.dataset.missionEditor='';select.dataset.segmentIndex=String(index-1);select.setAttribute('aria-label','航段 '+index+' 到 '+(index+1)+' 形式');select.append(new Option('直线','line'),new Option('曲线','curve'));select.value=this.route.segments?.[index-1]?.type||'line';select.onchange=()=>this.changeSegment(index-1,select.value);label.append(select);editor.append(label);
           const segment=this.route.segments?.[index-1];
+          const recordLabel=document.createElement('label');recordLabel.textContent='轨迹';
+          const recordSelect=document.createElement('select');recordSelect.dataset.missionEditor='';recordSelect.dataset.segmentRecord=String(index-1);recordSelect.setAttribute('aria-label','航段 '+index+' 到 '+(index+1)+' 轨迹记录');
+          recordSelect.append(new Option('实线 · 记录','record'),new Option('虚线 · 不记录','skip'));recordSelect.value=segment?.record===false?'skip':'record';recordSelect.onchange=()=>this.changeRecording(index-1,recordSelect.value==='record');recordLabel.append(recordSelect);editor.append(recordLabel);
           if(segment?.type==='curve'){
             const pick=document.createElement('button');pick.type='button';pick.className='small-button';pick.dataset.missionEditor='';pick.dataset.curvePick=String(index-1);pick.textContent='地图选弯点';pick.onclick=()=>this.selectCurve(index-1);editor.append(pick);
             const fields=document.createElement('div');fields.className='mission-curve-coordinates';
@@ -317,12 +333,13 @@
       $('missionMapHint').textContent=this.pointsVisible?'拖动编号航点可调整位置；开启点选可新增航点。松手后请保存到服务器，Esc 可取消拖动。':'仅显示任务路线，航点与曲线辅助线已隐藏；显示航点后可继续编辑。';
       for(const el of document.querySelectorAll('[data-mission-point-legend]'))el.hidden=!this.pointsVisible;
       for(const id of ['missionNew','missionRouteSelect'])$(id).disabled=locked;
-      for(const id of ['missionName','missionSpeed','missionRadius','missionLoopEnabled','missionEdit','missionClear','missionAddCenter','missionSegmentType','missionCurveCancel'])$(id).disabled=locked||routeLocked;
+      for(const id of ['missionName','missionSpeed','missionRadius','missionLoopEnabled','missionEdit','missionClear','missionAddCenter','missionSegmentType','missionSegmentRecord','missionCurveCancel'])$(id).disabled=locked||routeLocked;
       $('missionLoopCount').disabled=locked||routeLocked||!this.route.loopEnabled;
       $('missionSave').disabled=locked||routeLocked||this.route.points.length<2||!!this.storageError||!validCount||!!this.geometryError;
       $('missionDelete').disabled=locked||routeLocked||!this.route.id;
       $('missionAddPosition').disabled=locked||routeLocked||!this.position;
       $('missionGoto').disabled=$('missionStart').disabled=locked||active||!this.route.id||this.dirty||!!this.storageError;
+      $('missionStartRecord').disabled=$('missionStart').disabled||!!this.trackStorage?.storageError||!this.trackStorage;
       $('missionStop').disabled=!this.admin||this.stops.has(this.deviceId)||(!active&&run?.status!=='paused')||run?.status==='stopping';
       $('driverMissionStop').hidden=!this.admin||(!active&&run?.status!=='paused');$('driverMissionStop').disabled=$('missionStop').disabled;
       $('missionEdit').setAttribute('aria-pressed',String(this.editing&&!locked&&!routeLocked));$('missionEdit').textContent=this.editing?'停止点选':'开启点选航点';
@@ -410,9 +427,10 @@
       }else{this.boatMarker?.remove();this.boatMarker=null;}
     }
     drawRouteLines(route=this.route){
-      const points=route.points,lines=points.length>1?[{points:this.geometry(route).points,color:'#467dff',width:3}]:[];
+      const points=route.points;let lines=[];
+      try{lines=BoatModules.missionPath.routeLines(route,{color:'#467dff',width:3});}catch(_){/* 无效草稿在保存前显示错误，不绘制误导航线。 */}
       if(this.pointsVisible&&this.editing)this.segments(route).forEach((segment,i)=>{if(segment.type==='curve')lines.push({points:[points[i],segment.control,points[i+1]],color:'#a983e8',width:1,dashed:true});});
-      if(route.loopEnabled&&points.length>1)lines.push({points:[points.at(-1),points[0]],color:'#d5952b',width:3});
+      if(route.loopEnabled&&points.length>1)lines.push({points:[points.at(-1),points[0]],color:'#d5952b',width:3,dashed:true});
       this.map.setTrackLines(lines);
     }
     fit(){if(this.route.points.length)this.map?.fitLocations(this.geometry().points,{maxZoom:18,padding:[35,35]});else if(this.position)this.map?.setView(this.position,17);}
