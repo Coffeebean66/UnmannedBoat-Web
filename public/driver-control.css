@@ -109,9 +109,6 @@ html[data-workspace-view="driving"] .brand-caption,html[data-workspace-view="dri
 .driver-hud-aux>span:first-child { position:absolute; top:-16px; left:12px; white-space:nowrap; }
 .driver-hud-aux>b { position:absolute; top:43%; left:10px; right:0; padding:4px; border-right:2px solid #6ce4f5; background:linear-gradient(270deg,#071724a8,transparent); color:#fff; font:19px ui-monospace,Consolas,monospace; }
 .driver-hud-aux>span:last-child { position:absolute; bottom:-22px; right:0; white-space:nowrap; font-size:8px; }
-.driver-hud-horizon { position:absolute; left:14px; bottom:7px; width:80px; opacity:.68; }
-.driver-hud-horizon svg path { vector-effect:none; }
-.driver-hud-horizon .ah-status { font-size:7px; }
 .driver-hud-guidance { position:absolute; left:25%; right:25%; top:84px; text-align:center; color:#88ffcd; font:10px ui-monospace,Consolas,"Microsoft YaHei",sans-serif; }
 .driver-hud-guidance>span { position:absolute; top:0; font-size:24px; transform:translateX(-50%); }
 .driver-hud-guidance>b { display:block; padding-top:28px; font-weight:500; }
@@ -306,7 +303,8 @@ button.driver-test-mode[aria-pressed="true"] { border-color:var(--warn); backgro
 .driving-workspace .motor-values span { font-size:8px; }
 .driving-workspace .motor-values b { font-size:11px; }
 .driving-workspace .motor-values small { font-size:8px; margin-left:1px; }
-.driver-instrument-grid { position:absolute; z-index:36; left:12px; bottom:calc(var(--driver-footer-height) + 60px); width:250px; padding:12px; border:1px solid var(--line-strong); border-radius:10px; background:color-mix(in srgb,var(--panel) 92%,transparent); }
+/* 仪表可独立拖动；容器仅保留布局占位，避免移走仪表后留下空背景框。 */
+.driver-instrument-grid { position:absolute; z-index:36; left:12px; bottom:calc(var(--driver-footer-height) + 60px); width:250px; padding:12px; border:1px solid transparent; border-radius:10px; background:transparent; }
 .driving-workspace .sensor-card { padding:0; border:0; border-radius:0; background:transparent; }
 .driving-workspace .sensor-card>.card-title,.driving-workspace .sensor-compass-toggle,.driving-workspace .sensor-secondary,.driving-workspace .sensor-rtk-data,.driving-workspace .sensor-imu-data,.driving-workspace .sensor-card>p,.driving-workspace .sensor-sources,.driving-workspace .sensor-status-strip,.driving-workspace .sensor-motion,.driving-workspace .sensor-navigation,.driving-workspace .sensor-details { display:none; }
 .driving-workspace .sensor-attitude-layout { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; margin:0; }
@@ -416,7 +414,6 @@ button.driver-test-mode[aria-pressed="true"] { border-color:var(--warn); backgro
   .driver-hud-top>svg { width:70px; height:22px; }
   .driver-hud-attitude-status { bottom:19px; font-size:6px; }
   .driver-hud-position { font-size:6px; max-width:calc(100% - 56px); }
-  .driver-hud-horizon { width:53px; left:3px; bottom:0; }
   .driver-hud-guidance { top:63px; left:20%; right:20%; font-size:7px; }
   .driver-hud-guidance>span { font-size:18px; }
   .driver-hud-guidance>b { padding-top:20px; }

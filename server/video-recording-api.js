@@ -6,7 +6,8 @@ const { createMqttDeviceClient } = require('./mqtt-device-api');
 const { READER } = require('./video-media-api');
 const PREFIX = '/api/video/recording', DEVICE = /^[A-Za-z0-9_-]{1,64}$/, CLIP = /^[a-f0-9]{64}$/;
 const ALIAS_PREFIX = '__boatrec_', MAX_BOATS = 64, MAX_SEGMENTS = 200;
-const TEMPLATE = '/%Y-%m-%d_%H-%M-%S-%f_%z', SEGMENT_SECONDS = 60, RETENTION_DAYS = 7;
+// 0 表示永久保留；60 秒只是文件分段长度，不限制一次录像的总时长。
+const TEMPLATE = '/%Y-%m-%d_%H-%M-%S-%f_%z', SEGMENT_SECONDS = 60, RETENTION_DAYS = 0;
 const fault = (status, message) => Object.assign(Error(message), { status });
 const clone = value => JSON.parse(JSON.stringify(value));
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -111,8 +112,9 @@ function createVideoRecordingApi({ env = process.env, accounts, file, client = c
   }
   // MediaMTX 要求保留 %path，由媒体服务用实际的船只 ID 代入。
   const recordPath = (id, directory) => directory + '/%path' + TEMPLATE;
-  const nativeSettings = (id, directory, armed) => ({ record: armed, recordPath: recordPath(id, directory), recordFormat: 'fmp4', recordPartDuration: '1s', recordSegmentDuration: '60s', recordDeleteAfter: '168h' });
-  const sameDuration = (a, b) => a === b || a === '1m0s' && b === '60s' || a === '168h0m0s' && b === '168h' || a === '1s' && b === '1s';
+  const nativeSettings = (id, directory, armed) => ({ record: armed, recordPath: recordPath(id, directory), recordFormat: 'fmp4', recordPartDuration: '1s', recordSegmentDuration: '60s', recordDeleteAfter: '0s' });
+  // MediaMTX v1.21 的 API 将零时长返回为空字符串，避免误判后反复重启录像路径。
+  const sameDuration = (a, b) => a === b || a === '1m0s' && b === '60s' || a === '' && b === '0s';
   function receivingInput(id, native) {
     // 静态 UDP/RTP 源即使尚未收到数据也可能 online，需核对字节计数是否近期增长。
     if (native.missing || !(native.online === true || native.ready === true)) { inputActivity.delete(id); return false; }
@@ -208,7 +210,7 @@ function createVideoRecordingApi({ env = process.env, accounts, file, client = c
       assertActive(owner, res);
       base.receiving = receivingInput(id, native);
       // 此字段表示录像已开启且有视频输入；磁盘故障仍应检查 MediaMTX 日志。
-      const confirmed = !!configured && !configured.missing && configured.record === base.armed && configured.recordPath === recordPath(id, state.directory);
+      const confirmed = !!configured && !configured.missing && configured.record === base.armed && configured.recordPath === recordPath(id, state.directory) && sameDuration(configured.recordDeleteAfter, '0s');
       base.recording = base.armed && base.receiving && confirmed;
       if (ownBoat(state, id) && !confirmed) base.error = '录像指令已保存，等待媒体服务确认；系统会自动重试';
       base.segments = (await segmentsFor(id, owner, res)).map(({ alias, ...segment }) => segment);
@@ -257,7 +259,7 @@ function createVideoRecordingApi({ env = process.env, accounts, file, client = c
       assertActive(owner, res, true);
       const directory = state.directory, clips = await segmentsFor(id, owner, res);
       const clip = clips.find(item => item.id === clipId);
-      if (!clip) throw fault(404, '录像不存在或已超过保留期限，请刷新录像列表');
+      if (!clip) throw fault(404, '录像不存在或不在当前目录列表中，请刷新录像列表');
       const configured = await control('GET', '/v3/config/paths/get/' + id, null, [404]);
       assertActive(owner, res, true);
       if (configured.missing || configured.recordPath !== recordPath(id, directory))
@@ -281,7 +283,7 @@ function createVideoRecordingApi({ env = process.env, accounts, file, client = c
     assertUsable();
     if (streams.size >= maxStreams) throw fault(429, '录像播放连接已满，请关闭其他录像后重试');
     const clips = await segmentsFor(id, owner, res), clip = clips.find(item => item.id === clipId);
-    if (!clip) throw fault(404, '录像不存在或已超过保留期限');
+    if (!clip) throw fault(404, '录像不存在或不在当前目录列表中');
     assertActive(owner, res);
     if (streams.size >= maxStreams) throw fault(429, '录像播放连接已满，请稍后重试');
     const range = req.headers.range;

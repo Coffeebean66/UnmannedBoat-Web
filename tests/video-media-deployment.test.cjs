@@ -33,7 +33,7 @@ test('媒体配置启用SRT、本地WebRTC与鉴权录像API，随机密钥不�
   assert.match(config,/^authHTTPExclude: \[\]$/m);assert.match(config,/^apiAllowOrigins: \[\]$/m);assert.match(config,/^playbackAllowOrigins: \[\]$/m);
   assert.equal(values.BOAT_VIDEO_RECORDING_ENABLED,'1');assert.equal(values.BOAT_VIDEO_RECORDING_ROOT,'/var/lib/unmanned-boat-video');
   assert.match(config,/recordPath: \/var\/lib\/unmanned-boat-video\/recordings\/%path\/%Y-%m-%d_%H-%M-%S-%f_%z/);
-  assert.match(config,/recordFormat: fmp4/);assert.match(config,/recordPartDuration: 1s/);assert.match(config,/recordSegmentDuration: 60s/);assert.match(config,/recordDeleteAfter: 7d/);
+  assert.match(config,/recordFormat: fmp4/);assert.match(config,/recordPartDuration: 1s/);assert.match(config,/recordSegmentDuration: 60s/);assert.match(config,/recordDeleteAfter: 0s/);
   assert.match(config,/webrtcIPsFromInterfaces: false/);assert.match(config,/overridePublisher: false/);assert.match(config,/record: false/);
   assert.match(config,/webrtcAdditionalHosts: \["boat\.example\.com"\]/);
   const second=generate(directory,'runtime.env','47.251.109.111','7891','-new');assert.equal(second.status,0,second.stderr);
@@ -90,6 +90,20 @@ test('升级只合入录像和同源鉴权接口，保留自定义UDP源、未�
   assert.equal(again.status,0,again.stderr);assert.equal(fs.readFileSync(again.configuration,'utf8'),next,'reinstall remains stable');
   const changed=generate(directory,'runtime-upgrade.env','newboat.example.com','7891','-udp-change',{previousConfiguration:result.configuration,env:{BOAT_VIDEO_UDP_DEVICE:'boat-01',BOAT_VIDEO_UDP_PORT:'8001',BOAT_VIDEO_UDP_FORMAT:'mpegts'}});
   assert.equal(changed.status,0,changed.stderr);const updated=fs.readFileSync(changed.configuration,'utf8');assert.match(updated,/source: "udp\+mpegts:\/\/0\.0\.0\.0:8001"/);assert.ok(updated.includes('runOnReady: echo custom-ready'));assert.doesNotMatch(updated,/rtpSDP:/);assert.equal((updated.match(/boat-01/g)||[]).length,1);
+});
+
+test('升级取消默认与单船的旧录像过期策略，保留录像开关、目录和UDP来源',t=>{
+  const directory=temporary(t),first=generate(directory);assert.equal(first.status,0,first.stderr);
+  const original=fs.readFileSync(first.configuration,'utf8').replace('  recordDeleteAfter: 0s','  recordDeleteAfter: 7d')
+    .replace('paths:\n','paths:\n  boat-01:\n    source: udp+rtp://0.0.0.0:8000\n    record: true\n    recordPath: /var/lib/unmanned-boat-video/voyage/%path/%Y-%m-%d_%H-%M-%S-%f_%z\n    recordDeleteAfter: 168h\n  boat-02:\n    source: publisher\n    record: false\n    recordDeleteAfter: 24h\n');
+  fs.writeFileSync(first.configuration,original);
+  const upgraded=generate(directory,'runtime.env','boat.example.com','7890','-permanent',{previousConfiguration:first.configuration});
+  assert.equal(upgraded.status,0,upgraded.stderr);const next=fs.readFileSync(upgraded.configuration,'utf8');
+  // 升级同时补齐旧配置缺少的两个本机 API 加密开关；逐字核对其余所有内容。
+  const withoutAddedGlobals=value=>value.split('\n').filter(line=>line!==''&&!/^apiEncryption:|^playbackEncryption:/.test(line)).join('\n');
+  assert.equal(withoutAddedGlobals(next),withoutAddedGlobals(original.replace(/^( {2}| {4})recordDeleteAfter:.*$/gm,'$1recordDeleteAfter: 0s')));
+  const again=generate(directory,'runtime-permanent.env','boat.example.com','7890','-permanent-again',{previousConfiguration:upgraded.configuration});
+  assert.equal(again.status,0,again.stderr);assert.equal(fs.readFileSync(again.configuration,'utf8'),next,'migration is idempotent');
 });
 
 function fixture(t){

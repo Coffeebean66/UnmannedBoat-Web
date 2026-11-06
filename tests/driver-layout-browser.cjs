@@ -41,6 +41,12 @@ async function main(){
     // 留出设置面板所在的中央区域，使用真实鼠标拖动仪表右下角。
     const horizon=await box('horizon');await pointer('horizon',110-horizon.left,130-horizon.top,{kind:'move'});
     const before=await box('horizon'),compass=await box('compass');
+    assert.equal(await evaluate('document.querySelectorAll("#driverHud .ah-instrument,#driverHudHorizon").length'),0,'Moving the HUD never brings a duplicate artificial horizon');
+    assert.equal(await evaluate('document.querySelectorAll("#view-driving .ah-instrument").length'),1,'The independent main horizon remains available');
+    const backdrop=await evaluate('(()=>{const s=getComputedStyle(document.querySelector(".driver-instrument-grid"));return {background:s.backgroundColor,border:s.borderTopColor,shadow:s.boxShadow};})()');
+    assert.deepEqual(backdrop,{background:'rgba(0, 0, 0, 0)',border:'rgba(0, 0, 0, 0)',shadow:'none'},'Dragging instruments leaves no dark empty panel at their original position');
+    await evaluate('document.getElementById("driverLayoutDone").click()');await viewportShot('driver-clean-instruments-desktop');
+    await evaluate('document.getElementById("driverLayoutToggle").click()');
     await pointer('horizon',130,90);
     const after=await box('horizon');near(after.width,before.width+130,'Horizon width follows the mouse');near(after.height,before.height+90,'Horizon height follows the mouse');
     near(after.left,before.left,'Resizing keeps the top-left anchor');near(after.top,before.top,'Resizing keeps the top-left anchor');

@@ -114,7 +114,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">无人船监测 <span>v1.59.0</span></div>
+      <div class="sidebar-version">无人船监测 <span>v1.60.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -427,7 +427,7 @@
                 <path class="driver-hud-reticle" d="M240 180 h38 v8 h10 v-15 l8-8 v-17 h8 v17 l8 8 v15 h10 v-8 h38 M292 197 h16 M300 188 v9"/>
               </svg>
               <div class="driver-hud-speed"><svg viewBox="0 0 60 200" aria-hidden="true"><g id="driverHudSpeedTicks"></g><path d="M46 94 39 100 46 106Z"/></svg><div><span>航速 <small>m/s</small></span><strong id="driverHudSpeed">--</strong><span>目标 <b id="driverHudTarget">--</b> m/s</span></div></div>
-              <div class="driver-hud-aux"><span>俯仰 · °</span><svg viewBox="0 0 60 200" aria-hidden="true"><g id="driverHudAuxTicks"></g><path d="M14 94 21 100 14 106Z"/></svg><b id="driverHudAuxPitch">--</b><span>高度 · 未上报</span></div><div id="driverHudHorizon" class="driver-hud-horizon" aria-label="半透明人工地平仪"></div><div id="driverHudGuidance" class="driver-hud-guidance" hidden><span id="driverHudGuideArrow">◆</span><b id="driverHudGuideText">等待任务</b></div>
+              <div class="driver-hud-aux"><span>俯仰 · °</span><svg viewBox="0 0 60 200" aria-hidden="true"><g id="driverHudAuxTicks"></g><path d="M14 94 21 100 14 106Z"/></svg><b id="driverHudAuxPitch">--</b><span>高度 · 未上报</span></div><div id="driverHudGuidance" class="driver-hud-guidance" hidden><span id="driverHudGuideArrow">◆</span><b id="driverHudGuideText">等待任务</b></div>
               <div class="driver-hud-propulsion" hidden><svg viewBox="0 0 60 150" aria-hidden="true"><g id="driverHudRpmTicks"></g><path d="M14 69 21 75 14 81Z"/></svg><span>RPM <b id="driverHudRpm">-- / --</b></span><div class="driver-hud-output"><div class="driver-hud-output-track"><span id="driverHudOutputFill"></span></div><span>输出 <b id="driverHudOutput">--</b>%</span></div></div>
               <div class="driver-hud-heading"><span>真北船头航向</span><strong><b id="driverHudHeadingValue">--</b><small>°</small></strong><svg viewBox="0 0 300 45" aria-hidden="true"><g id="driverHudHeadingTicks"></g><path d="M145 1 L150 8 L155 1 Z"/></svg></div>
               <div id="driverHudPosition" class="driver-hud-position">WGS84 · 等待有效定位</div>
@@ -528,13 +528,13 @@
         </article>
         </div>
         <article class="card recording-card" aria-labelledby="recordingTitle">
-          <div class="recording-heading"><div><h2 id="recordingTitle">服务器录像</h2><p>按船只独立保存 · 开始录像后，关闭网页或切换船只仍会继续</p></div><span id="recordingDevice" class="video-device">未选择无人船</span></div>
+          <div class="recording-heading"><div><h2 id="recordingTitle">服务器录像</h2><p>不限时录制 · 永久保留 · 关闭网页或切换船只仍会继续</p></div><span id="recordingDevice" class="video-device">未选择无人船</span></div>
           <div class="recording-toolbar"><p id="recordingStatus" class="recording-status" role="status" aria-live="polite">请选择一艘无人船查看服务器录像。</p><div class="recording-buttons"><button id="recordingStart" type="button" class="primary" hidden disabled>开始录像</button><button id="recordingStop" type="button" class="ghost" hidden disabled>停止录像</button><button id="recordingRefresh" type="button" class="ghost" disabled>刷新录像</button></div></div>
           <span id="recordingCount" class="recording-count">尚未读取</span><p id="recordingEmpty" class="recording-empty">选择无人船后读取已保存的录像。</p>
           <ul id="recordingList" class="recording-list" aria-label="当前无人船已保存的录像"></ul>
           <div id="recordingPlayerWrap" class="recording-player-wrap" hidden><div class="recording-player-heading"><strong id="recordingPlaybackTitle"></strong><button id="recordingPlaybackClose" type="button" class="ghost">关闭回放</button></div><video id="recordingPlayer" controls playsinline preload="none" aria-label="无人船录像回放"></video></div>
         </article>
-        <aside class="workspace-note"><span data-icon="help"></span><p>实时播放和服务器录像分别控制；停止播放不会停止录像。录像使用 SRT / UDP 视频通道，约每 60 秒保存一段 MP4，默认保留 7 天；列表展示最近 200 段。管理员可确认删除单段录像，删除后无法恢复；录制中的最新一段需停止录像后再删除。状态依据录像开关与视频输入判断，如持续没有新片段，请检查服务器磁盘和媒体服务日志。管理员可开始/停止录像并在平台设置中修改保存目录。</p></aside>
+        <aside class="workspace-note"><span data-icon="help"></span><p>实时播放和服务器录像分别控制；停止播放不会停止录像。录像使用 SRT / UDP 视频通道，不设总时长限制，约每 60 秒保存一段 MP4，永久保留且不自动清理。列表仅展示最近 200 段，更早的文件仍保存在服务器。管理员与驾驶员可开始/停止录像并确认删除单段，录制中的最新一段需停止后再删除；管理员可在平台设置修改保存目录。磁盘写满会影响继续保存，请按需下载或手动删除；录像状态异常时可检查媒体服务日志。</p></aside>
       </section>
       <footer><span>UNMANNED VESSEL MONITOR <b>/</b> 无人船监测平台</span><span>MQTT 云端监测与调参</span></footer>
     </main>

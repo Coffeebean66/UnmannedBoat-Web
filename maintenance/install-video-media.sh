@@ -169,7 +169,7 @@ const lines=['# Owned by unmanned-boat-video-media-v1','logLevel: warn','logDest
   'playback: true','playbackAddress: 127.0.0.1:9996','playbackAllowOrigins: []','playbackTrustedProxies: []',
   'rtsp: false','rtmp: false','hls: false','moq: false','webrtc: true','webrtcAddress: 127.0.0.1:8889','webrtcEncryption: false','webrtcAllowOrigins: []','webrtcTrustedProxies: []','webrtcLocalUDPAddress: :8189','webrtcLocalTCPAddress: ""','webrtcIPsFromInterfaces: false','webrtcAdditionalHosts: ['+JSON.stringify(host)+']','webrtcICEServers2: []','webrtcHandshakeTimeout: 10s','webrtcTrackGatherTimeout: 2s','srt: true','srtAddress: :8890',
   'pathDefaults:','  source: publisher','  overridePublisher: false','  maxReaders: 16','  record: false',
-  '  recordPath: /var/lib/unmanned-boat-video/recordings/%path/%Y-%m-%d_%H-%M-%S-%f_%z','  recordFormat: fmp4','  recordPartDuration: 1s','  recordSegmentDuration: 60s','  recordDeleteAfter: 7d',
+  '  recordPath: /var/lib/unmanned-boat-video/recordings/%path/%Y-%m-%d_%H-%M-%S-%f_%z','  recordFormat: fmp4','  recordPartDuration: 1s','  recordSegmentDuration: 60s','  recordDeleteAfter: 0s',
   'paths:',"  '~^[A-Za-z0-9_-]{1,64}$': {}"];
 let output=lines;
 // 保持原始 YAML 文本和路径块；不重新序列化未知字段，不将私密值打印到日志。
@@ -189,8 +189,11 @@ if(previousConfiguration&&fs.existsSync(previousConfiguration)){
  for(const [key,value]of Object.entries({authHTTPAddress:JSON.stringify('http://127.0.0.1:'+port+'/api/video/media/auth?token='+token),authHTTPExclude:'[]',api:'true',apiAddress:'127.0.0.1:9997',apiEncryption:'false',apiAllowOrigins:'[]',apiTrustedProxies:'[]',playback:'true',playbackAddress:'127.0.0.1:9996',playbackEncryption:'false',playbackAllowOrigins:'[]',playbackTrustedProxies:'[]',webrtcAdditionalHosts:'['+JSON.stringify(host)+']'}))setGlobal(key,value);
  const defaults=blocks.get('pathDefaults');
  if(!/^pathDefaults:\s*(?:#.*)?$/.test(defaults[0]))throw Error('Existing path defaults must be a block mapping');
- for(const [key,value]of Object.entries({record:'false',recordPath:'/var/lib/unmanned-boat-video/recordings/%path/%Y-%m-%d_%H-%M-%S-%f_%z',recordFormat:'fmp4',recordPartDuration:'1s',recordSegmentDuration:'60s',recordDeleteAfter:'7d'}))scalar(defaults,key,value,'  ',true);
+ for(const [key,value]of Object.entries({record:'false',recordPath:'/var/lib/unmanned-boat-video/recordings/%path/%Y-%m-%d_%H-%M-%S-%f_%z',recordFormat:'fmp4',recordPartDuration:'1s',recordSegmentDuration:'60s'}))scalar(defaults,key,value,'  ',true);
+ // 升级也关闭旧的过期清理；只改保留策略，保留来源、SDP、目录和其他自定义字段。
+ scalar(defaults,'recordDeleteAfter','0s','  ');
  const paths=blocks.get('paths');if(!/^paths:\s*(?:#.*)?$/.test(paths[0]))throw Error('Existing paths must be a block mapping');
+ for(let index=1;index<paths.length;index++)if(/^    recordDeleteAfter:(?:\s|$)/.test(paths[index]))paths[index]='    recordDeleteAfter: 0s';
  output=[...preamble,...[...blocks.values()].flat()];
 }
 if(udpDevice){

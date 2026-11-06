@@ -9,7 +9,7 @@ async function main(){
   const udpRtp=process.argv.includes('--udp-rtp');
   const output=path.resolve(__dirname,'../.test-output');fs.mkdirSync(output,{recursive:true});
   const run=fs.mkdtempSync(path.join(output,'recording-native-')),storage=path.join(run,'video').replace(/\\/g,'/');
-  fs.mkdirSync(storage);const children=[],logs=[];let server,media;
+  fs.mkdirSync(storage);const children=[],logs=[],nativeConfigurations=new Map();let server,media;
   const apiPort=await port(),playbackPort=await port(),whepPort=await port(),srtPort=await port(true),rtcPort=await port(true),udpPort=await port(true);
   const env={BOAT_ACCOUNTS_ENABLED:'1',BOAT_ADMIN_USERNAME:'recording-admin',BOAT_ADMIN_PASSWORD:'local-recording-admin',
     BOAT_GUEST_USERNAME:'recording-guest',BOAT_GUEST_PASSWORD:'local-recording-guest',BOAT_VIDEO_MEDIA_ENABLED:'1',
@@ -24,7 +24,7 @@ async function main(){
     let body=operation.body;
     if(body){const value=JSON.parse(body);if(value.recordPath)value.recordPath=value.recordPath.replace(root,storage);if(value.recordSegmentDuration)value.recordSegmentDuration='2s';body=Buffer.from(JSON.stringify(value));}
     const response=await transport({...operation,body});
-    if(operation.path.startsWith('/v3/config/paths/get/')&&response.status===200){const value=JSON.parse(response.body);value.recordPath=value.recordPath?.replace(storage,root);if(value.recordSegmentDuration==='2s')value.recordSegmentDuration='60s';response.body=Buffer.from(JSON.stringify(value));}
+    if(operation.path.startsWith('/v3/config/paths/get/')&&response.status===200){const value=JSON.parse(response.body);nativeConfigurations.set(operation.path.split('/').at(-1),value);value.recordPath=value.recordPath?.replace(storage,root);if(value.recordSegmentDuration==='2s')value.recordSegmentDuration='60s';response.body=Buffer.from(JSON.stringify(value));}
     return response;
   };
   function start(binary,args,label){const child=spawn(binary,args,{windowsHide:true,stdio:['ignore','pipe','pipe']});children.push(child);for(const channel of ['stdout','stderr'])child[channel].on('data',data=>logs.push(label+': '+data));child.on('error',error=>logs.push(label+': '+error.message));return child;}
@@ -56,7 +56,7 @@ async function main(){
     const admin=await login(),guest=await login(true);
     assert.equal((await request(boat)).status,401);
     assert.equal((await request(boat+'/start',{cookie:guest,method:'POST',body:{}})).status,403);
-    const armed=await request(boat+'/start',{cookie:admin,method:'POST',body:{}});assert.equal(armed.status,200,JSON.stringify(armed.data));assert.equal(armed.data.armed,true);assert.equal(armed.data.receiving,false);assert.equal(armed.data.error,null);
+    const armed=await request(boat+'/start',{cookie:admin,method:'POST',body:{}});assert.equal(armed.status,200,JSON.stringify(armed.data));assert.equal(armed.data.armed,true);assert.equal(armed.data.receiving,false);assert.ok(['','0s'].includes(nativeConfigurations.get('boat-alpha').recordDeleteAfter),'MediaMTX automatic recording deletion is disabled');assert.equal(armed.data.retentionDays,0);assert.equal(armed.data.error,null);
     assert.equal((await request(base+'/config',{cookie:admin,method:'PATCH',body:{directory:root+'/mission-2'}})).status,409);
     const ffmpeg=process.env.FFMPEG_PATH||(process.platform==='win32'?'D:/ClaudeTools/ffmpeg/ffmpeg-8.1-essentials_build/bin/ffmpeg.exe':'ffmpeg');
     const outputArgs=udpRtp?['-f','rtp','-payload_type','96','rtp://127.0.0.1:'+udpPort+'?pkt_size=1200']:

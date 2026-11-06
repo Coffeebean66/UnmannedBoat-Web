@@ -91,7 +91,8 @@
       n.recordingSettingsRead.disabled = !admin || configBusy;
       n.recordingSettingsForm.setAttribute('aria-busy', String(configBusy));
       n.recordingSettingsRoot.textContent = this.config?.enabled
-        ? '允许的保存范围：' + this.config.allowedRoot + '；每段约 ' + this.config.segmentSeconds + ' 秒，保留 ' + this.config.retentionDays + ' 天。' +
+        ? '允许的保存范围：' + this.config.allowedRoot + '；每段约 ' + this.config.segmentSeconds + ' 秒，' +
+          (this.config.retentionDays === 0 ? '不限时录制，永久保留，仅手动删除。' : '保留 ' + this.config.retentionDays + ' 天。') +
           (active ? ' 当前有 ' + this.config.activeCount + ' 艘船已开启录像，请全部停止后修改目录。' : '') +
           (this.config.persistent === false ? ' 当前设置未持久化，重启服务后会恢复默认。' : '')
         : '保存目录位于服务器，需先启用 SRT / UDP 录像组件。';

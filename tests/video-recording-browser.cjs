@@ -34,7 +34,7 @@ window.BoatAuth=new FixtureAuth();window.recording=new BoatVideoRecordingPanel()
       let body = ''; for await (const chunk of req) body += chunk;
       if (url.pathname === '/api/video/recording/config') {
         if (req.method === 'PATCH') directory = JSON.parse(body).directory;
-        return json(200, { enabled: true, directory, allowedRoot: ROOT, persistent: true, segmentSeconds: 60, retentionDays: 7, activeCount: [...states.values()].filter(Boolean).length });
+        return json(200, { enabled: true, directory, allowedRoot: ROOT, persistent: true, segmentSeconds: 60, retentionDays: 0, activeCount: [...states.values()].filter(Boolean).length });
       }
       const match = /^\/api\/video\/recording\/boats\/([A-Za-z0-9_-]+)(?:\/(start|stop))?$/.exec(url.pathname);
       if (match) { if (req.method === 'POST') states.set(match[1], match[2] === 'start'); return json(200, snapshot(match[1])); }

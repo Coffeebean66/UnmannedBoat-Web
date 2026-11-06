@@ -3,7 +3,7 @@ const { test } = require('node:test'), assert = require('node:assert/strict');
 const { BoatVideoRecordingPanel } = require('../public/video-recording');
 const BASE = '/api/video/recording', ROOT = '/var/lib/unmanned-boat-video';
 const reply = (status, value) => ({ ok: status >= 200 && status < 300, status, json: async () => value });
-const config = (extra = {}) => ({ enabled: true, persistent: true, directory: ROOT + '/recordings', allowedRoot: ROOT, segmentSeconds: 60, retentionDays: 7, activeCount: 0, ...extra });
+const config = (extra = {}) => ({ enabled: true, persistent: true, directory: ROOT + '/recordings', allowedRoot: ROOT, segmentSeconds: 60, retentionDays: 0, activeCount: 0, ...extra });
 const clip = (boat = 'boat-01', id = 'a'.repeat(64)) => ({ id, start: '2026-10-28T01:02:03Z', duration: 60, playbackUrl: BASE + '/boats/' + boat + '/clips/' + id, downloadUrl: BASE + '/boats/' + boat + '/clips/' + id + '?download=1' });
 const snapshot = (boat = 'boat-01', extra = {}) => ({ deviceId: boat, enabled: true, armed: false, receiving: false, recording: false, error: null, segments: [clip(boat)], ...extra });
 function setup(role = 'admin') {
@@ -96,6 +96,8 @@ test('untrusted media URLs and another boat snapshot are rejected before renderi
 
 test('administrator directory changes preserve server scope and show active recording lock', async () => {
   const h = setup(); assert.equal(await h.panel.open(), true); h.node('recordingDirectory').value = ROOT + '/voyage-2026';
+  assert.match(h.node('recordingSettingsRoot').textContent, /每段约 60 秒.*不限时录制，永久保留，仅手动删除/);
+  assert.doesNotMatch(h.node('recordingSettingsRoot').textContent, /保留 0 天/);
   assert.equal(await h.panel.saveSettings(), true); assert.equal(h.panel.config.directory, ROOT + '/voyage-2026'); assert.match(h.node('recordingSettingsStatus').textContent, /旧文件保留原目录/);
   assert.deepEqual(JSON.parse(h.calls.at(-1).body), { directory: ROOT + '/voyage-2026' });
   h.next(async () => reply(200, config({ activeCount: 2 }))); await h.panel.readSettings(); assert.equal(h.node('recordingDirectory').disabled, true);

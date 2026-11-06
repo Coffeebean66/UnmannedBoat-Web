@@ -128,13 +128,40 @@ test('recording requires login; paths and controls stay administrator-only, muta
 test('native recorder arms without telemetry or viewers, and each boat has an independent source and index', async t => {
   const f = await fixture(t), admin = await f.login(), guest = await f.login('guest');
   const started = await f.start(admin); assert.equal(started.status, 200, started.raw); assert.equal(started.data.armed, true); assert.equal(started.data.receiving, false); assert.equal(started.data.recording, false);
-  assert.equal(f.configs.get('boat-01').record, true); assert.equal(f.configs.get('boat-01').recordFormat, 'fmp4'); assert.equal(f.configs.get('boat-01').recordSegmentDuration, '60s'); assert.equal(f.configs.get('boat-01').recordDeleteAfter, '168h');
+  assert.equal(f.configs.get('boat-01').record, true); assert.equal(f.configs.get('boat-01').recordFormat, 'fmp4'); assert.equal(f.configs.get('boat-01').recordSegmentDuration, '60s'); assert.equal(f.configs.get('boat-01').recordDeleteAfter, '0s');
   assert.match(f.configs.get('boat-01').recordPath, /\/%path\//);
   f.ready.add('boat-01'); f.addClip();
   const status = await f.call(PREFIX + '/boats/boat-01', { cookie: guest }); assert.equal(status.data.recording, true); assert.equal(status.data.segments.length, 1);
   assert.match(status.data.segments[0].id, /^[a-f0-9]{64}$/); assert.doesNotMatch(status.raw, /__boatrec_|var\/lib|recordPath|Authorization/);
   const second = await f.call(PREFIX + '/boats/boat-02', { cookie: guest }); assert.equal(second.data.armed, false); assert.deepEqual(second.data.segments, []);
   assert.equal((await f.call(status.data.segments[0].playbackUrl.replace('boat-01', 'boat-02'), { cookie: guest })).status, 404);
+});
+
+test('legacy retention is disabled for armed and stopped boats; elapsed time never stops recording or expires clips', async t => {
+  let time = Date.now();
+  const f = await fixture(t, { apiOptions: { now: () => time } }), admin = await f.login();
+  await f.start(admin); await f.start(admin, 'boat-02'); await f.stop(admin, 'boat-02');
+  const oldStart = f.addClip('boat-01', ROOT + '/recordings', new Date(time - 30 * 86400000).toISOString());
+  f.ready.add('boat-01');
+  // 模拟升级前的媒体路径；后台恢复须同时迁移已开始和已停止录像的船。
+  for (const conf of f.configs.values()) conf.recordDeleteAfter = '168h0m0s';
+  assert.equal((await f.call(PREFIX + '/boats/boat-01', { cookie: admin })).data.recording, false, 'old expiry policy is not reported as confirmed');
+  await f.api.reconcile();
+  for (const conf of f.configs.values()) assert.equal(conf.recordDeleteAfter, '0s');
+  assert.equal(f.configs.get('boat-01').record, true); assert.equal(f.configs.get('boat-02').record, false);
+  // 真实 MediaMTX 把零时长序列化为空串；应确认成功，不能每次轮询都 PATCH 断开输入。
+  f.configs.get('boat-01').recordDeleteAfter = ''; f.configs.get('boat-01').recordSegmentDuration = '1m0s';
+  const patches = f.calls.filter(call => call.method === 'PATCH').length;
+  time += 365 * 86400000; await f.api.reconcile();
+  assert.equal(f.calls.filter(call => call.method === 'PATCH').length, patches, 'native normalized durations never restart an unchanged recorder');
+  const status = await f.call(PREFIX + '/boats/boat-01', { cookie: admin });
+  assert.equal(status.data.armed, true); assert.equal(status.data.recording, true); assert.equal(status.data.retentionDays, 0);
+  assert.equal(status.data.segments[0].start, oldStart);
+  assert.equal((await f.call(status.data.segments[0].downloadUrl, { cookie: admin })).status, 200, 'old clip remains downloadable');
+  assert.equal((await f.call(PREFIX + '/config', { cookie: admin })).data.retentionDays, 0);
+  assert.equal(f.calls.some(call => call.method === 'DELETE'), false, 'no background deletion is issued');
+  await f.stop(admin); assert.equal(f.configs.get('boat-01').record, false, 'manual stop still works');
+  assert.equal((await f.call(status.data.segments[0].downloadUrl, { cookie: admin })).status, 200, 'stopping preserves the recording');
 });
 
 test('directory updates refuse active recorders, preserve old files separately, and validate every path component', async t => {

@@ -11,7 +11,6 @@
       this.ticks=[];
       for(const id of ['driverHudRollMarker','driverHudSpeedTicks','driverHudRpmTicks','driverHudRpm','driverHudOutput','driverHudOutputFill'])this.nodes[id]=document.getElementById(id);
       for(const id of ['driverHudAuxTicks','driverHudAuxPitch','driverHudGuidance','driverHudGuideArrow','driverHudGuideText'])this.nodes[id]=document.getElementById(id);
-      this.horizon=new window.BoatArtificialHorizon(document.getElementById('driverHudHorizon'));
       this.speedTicks=this.createTape(this.nodes.driverHudSpeedTicks,9,38,100,23);
       this.rpmTicks=this.createTape(this.nodes.driverHudRpmTicks,7,22,75,20);
       this.auxTicks=this.createTape(this.nodes.driverHudAuxTicks,9,22,100,23);
@@ -74,7 +73,6 @@
       this.text('driverHudRollValue',attitude?roll.toFixed(1):'--');
       this.text('driverHudPitchValue',attitude?pitch.toFixed(1):'--');
       this.text('driverHudAttitudeStatus',attitude?'姿态实时':'姿态不可用');
-      this.horizon.setTelemetry(imu);
       this.setTape(this.nodes.driverHudAuxTicks,this.auxTicks,attitude?pitch:null,5);
       this.text('driverHudAuxPitch',attitude?pitch.toFixed(1):'--');
       // 与三维船模、人工地平仪一致：正 roll 右倾，正 pitch 船头向下。

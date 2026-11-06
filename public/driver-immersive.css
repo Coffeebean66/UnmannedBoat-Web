@@ -65,7 +65,7 @@ html[data-driver-focus="true"],html[data-driver-focus="true"] body { overflow:hi
 .driving-workspace[data-focus] button.driver-emergency { border-radius:12px; font-size:14px; }
 .driving-workspace[data-focus] .driver-emergency svg { width:17px; height:17px; }
 .driving-workspace[data-focus] .driver-emergency>small { flex-basis:100%; text-align:center; font-size:10px; }
-.driving-workspace[data-focus] .driver-instrument-grid { top:auto; left:16px; bottom:calc(var(--driver-focus-control-height) + 128px); width:230px; background:var(--driver-glass); }
+.driving-workspace[data-focus] .driver-instrument-grid { top:auto; left:16px; bottom:calc(var(--driver-focus-control-height) + 128px); width:230px; }
 .driving-workspace[data-focus] .driver-hud { inset:110px 20px calc(var(--driver-focus-control-height) + 134px); height:auto; min-height:100px; }
 .driving-workspace[data-focus] .driver-hud-heading { top:0; width:320px; max-width:42%; }
 .driving-workspace[data-focus] .driver-hud-heading strong { font-size:26px; }
@@ -150,7 +150,7 @@ html[data-driver-focus="true"],html[data-driver-focus="true"] body { overflow:hi
   .driving-workspace[data-focus] .driver-hud-heading strong { font-size:18px; }
   .driving-workspace[data-focus] .driver-hud-attitude { left:25%; top:60%; width:50%; height:60%; }
   .driving-workspace[data-focus] .driver-hud-speed { left:0; top:35%; height:35%; }
-  .driving-workspace[data-focus] .driver-hud-aux,.driving-workspace[data-focus] .driver-hud-horizon,.driving-workspace[data-focus] .driver-hud-top,.driving-workspace[data-focus] .driver-hud-attitude-status,.driving-workspace[data-focus] .driver-hud-position { display:none; }
+  .driving-workspace[data-focus] .driver-hud-aux,.driving-workspace[data-focus] .driver-hud-top,.driving-workspace[data-focus] .driver-hud-attitude-status,.driving-workspace[data-focus] .driver-hud-position { display:none; }
   .driving-workspace[data-focus] .driver-hud-guidance { top:72px; left:0; right:52%; font-size:7px; }
   .driving-workspace[data-focus="map"] .driver-region-map .boat-map-zoom,.driving-workspace[data-focus="map"] .driver-region-map .leaflet-top.leaflet-left { top:128px; right:calc(var(--driver-pip-width) + 16px); }
   .driving-workspace[data-focus="map"] .driver-region-map .map-north { display:none; }
