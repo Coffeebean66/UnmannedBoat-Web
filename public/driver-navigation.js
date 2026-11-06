@@ -123,7 +123,9 @@
         this.nodes.driverQueueSelect.replaceChildren(new Option('请选择已保存任务组',''),...queues.map(q=>new Option(q.name,q.id)));
       }
       this.nodes.driverRouteSelect.value=this.routeId;this.nodes.driverQueueSelect.value=this.queueId;
+      const modeChanged=d.nodes['view-driving'].dataset.navigationMode!==this.mode;
       d.nodes['view-driving'].dataset.navigationMode=this.mode;
+      if(modeChanged)d.layout?.schedule();
       this.nodes.driverAutonomy.hidden=this.mode==='manual';
       for(const button of this.document.querySelectorAll('[data-navigation-mode]')){button.setAttribute('aria-pressed',String(button.dataset.navigationMode===this.mode));button.disabled=locked||active||d.pending;}
       const auto=this.mode==='auto',group=auto&&this.taskKind==='queue',selectedQueue=queues.find(q=>q.id===this.queueId);
@@ -150,7 +152,7 @@
       if(this.mode!=='manual')d.nodes.driverEnable.disabled=true;
       const pendingHere=this.motionPending&&this.pendingMotion?.deviceId===this.deviceId;
       d.nodes.driverEmergency.disabled=(!d.active&&!d.pending&&!active&&!pendingHere)||!m.admin;
-      const layoutButton=this.document.getElementById('driverLayoutToggle');layoutButton.disabled=active;layoutButton.title=active?'先停止自主导航，再编辑布局':'拖动模块并设置单独透明度';
+      const layoutButton=this.document.getElementById('driverLayoutToggle');layoutButton.disabled=active;layoutButton.title=active?'先停止自主导航，再编辑布局':'调整各模块的位置、大小和透明度';
       // 停止请求不排在正在等待的导航 HTTP 后面；迟到的接管结果也必须停掉。
       if(this.cancelMotion&&active&&run.status!=='stopping'&&!this.emergencyPending&&m.admin){
         this.emergencyPending=true;m.stop(run).catch(error=>this.notice('急停确认失败：'+error.message,true)).finally(()=>{this.emergencyPending=false;});

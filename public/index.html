@@ -113,7 +113,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">无人船监测 <span>v1.57.0</span></div>
+      <div class="sidebar-version">无人船监测 <span>v1.58.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -444,18 +444,23 @@
           <button id="driverImmersiveToggle" type="button" class="small-button driver-immersive-toggle" title="返回进入驾驶前的页面，也可按 Esc"><i data-icon="arrow"></i><span>返回后台 · Esc</span></button><button id="driverSwapMedia" type="button" class="small-button"><i data-icon="map"></i><span>地图主画面</span></button>
           <button id="driverDetailsToggle" type="button" class="small-button" aria-expanded="false" aria-controls="driverDetailsPanel"><i data-icon="activity"></i>航行详情</button>
           <details id="driverDisplayOptions" class="driver-display-options"><summary><i data-icon="layers"></i>显示</summary><div class="driver-display-options-panel"><button id="driverInstrumentToggle" type="button" class="small-button" aria-pressed="false">仪表：隐藏</button><label for="driverOverlayOpacity" title="0% 隐藏 HUD，操控与急停保持可见">HUD 可见度 <output id="driverOverlayOpacityValue" for="driverOverlayOpacity">100%</output></label><input id="driverOverlayOpacity" type="range" min="0" max="100" step="5" value="100" aria-label="驾驶 HUD 可见度，0为隐藏100为完全显示"></div></details>
-          <button id="driverLayoutToggle" type="button" class="driver-layout-launch" aria-expanded="false" aria-controls="driverLayoutEditor" title="拖动模块并设置单独透明度">布局编辑</button>
+          <button id="driverLayoutToggle" type="button" class="driver-layout-launch" aria-expanded="false" aria-controls="driverLayoutEditor" title="调整各模块的位置、大小和透明度">布局编辑</button>
         </div>
         <div class="driver-emergency-dock"><button id="driverEmergency" type="button" class="driver-emergency" aria-label="急停并退出操控，也可按空格" disabled><span data-icon="power"></span><span>紧急停止</span><small>空格</small></button></div>
         <aside id="driverLayoutEditor" class="driver-layout-editor" aria-labelledby="driverLayoutTitle" hidden>
-          <div class="driver-layout-heading"><h3 id="driverLayoutTitle">布局编辑</h3><button id="driverLayoutDone" type="button" class="small-button">完成</button></div>
-          <p>拖动各部分的蓝色手柄；方向键微调，Shift 加速。编辑时暂停驾驶，完成后重新启用操控。</p>
+          <div class="driver-layout-heading"><h3 id="driverLayoutTitle">布局编辑</h3><button id="driverLayoutCompact" type="button" class="small-button" aria-expanded="true" aria-controls="driverLayoutControls">收起</button><button id="driverLayoutDone" type="button" class="small-button">完成</button></div>
+          <div id="driverLayoutControls">
+          <p>蓝色手柄移动模块，右下角手柄调整大小，也可输入宽高。手柄支持方向键微调，Shift 加速。面板遮挡时可收起。编辑时停船，完成后重新启用操控。</p>
           <label for="driverLayoutModule">当前部分</label><select id="driverLayoutModule"></select>
+          <div class="driver-layout-size-heading"><span>模块大小</span><output id="driverPartSizeValue" for="driverPartWidth driverPartHeight">--</output></div>
+          <div class="driver-layout-size-fields"><label for="driverPartWidth">宽度 / px<input id="driverPartWidth" type="number" min="1" step="1" inputmode="numeric" autocomplete="off"></label><label for="driverPartHeight">高度 / px<input id="driverPartHeight" type="number" min="1" step="1" inputmode="numeric" autocomplete="off"></label></div>
+          <button id="driverPartSizeReset" type="button" class="small-button">恢复默认大小</button>
           <label for="driverPartOpacity">不透明度 <output id="driverPartOpacityValue" for="driverPartOpacity">100%</output></label><input id="driverPartOpacity" type="range" min="0" max="100" step="5" value="100">
           <p id="driverLayoutHint" class="driver-layout-hint" role="status"></p>
           <button id="driverLayoutFloat" type="button" class="small-button" hidden>移出详情，独立显示</button>
           <div class="driver-layout-reset"><button id="driverLayoutResetPart" type="button" class="small-button">恢复此项</button><button id="driverLayoutResetAll" type="button" class="small-button">恢复全部布局</button></div>
-          <span class="driver-layout-saved">自动保存在当前浏览器 · 桌面 / 手机分别保存</span>
+          <span id="driverLayoutSaved" class="driver-layout-saved" role="status">自动保存在当前浏览器 · 桌面 / 手机、两种主画面分别保存</span>
+          </div>
         </aside>
         </div>
       </section>
