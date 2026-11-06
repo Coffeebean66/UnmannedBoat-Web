@@ -61,6 +61,7 @@
   <script defer src="driver-navigation.js"></script>
   <script defer src="driver-control.js"></script>
   <script defer src="mission-panel.js"></script>
+  <script defer src="mission-queue-panel.js"></script>
   <script defer src="app.js"></script>
   <script defer src="update-panel.js"></script>
 </head>
@@ -110,7 +111,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">无人船监测 <span>v1.52.0</span></div>
+      <div class="sidebar-version">无人船监测 <span>v1.54.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -139,12 +140,12 @@
         <div class="mission-toolbar"><div><strong id="missionBoatName">请选择无人船</strong><p class="muted">服务器独立执行 · 关闭网页后继续 · 重启后手动开始</p></div><button id="missionRefresh" type="button" class="small-button">刷新任务</button></div>
         <div class="mission-layout">
           <section class="mission-map-card" aria-label="航线地图">
-            <div class="mission-map-tools"><button id="missionEdit" type="button" class="small-button" aria-pressed="false">开启点选航点</button><label class="mission-segment-type">新增航段<select id="missionSegmentType" aria-label="新增航段形式"><option value="line">直线</option><option value="curve">曲线</option></select></label><button id="missionFit" type="button" class="small-button">显示整条航线</button><button id="missionCenter" type="button" class="small-button">定位船只</button><button id="missionProvider" type="button" class="small-button">切换地图</button></div>
+            <div class="mission-map-tools"><button id="missionEdit" type="button" class="small-button" aria-pressed="false">开启点选航点</button><label class="mission-segment-type">新增航段<select id="missionSegmentType" aria-label="新增航段形式"><option value="line">直线</option><option value="curve">曲线</option></select></label><button id="missionWaypointsToggle" type="button" class="small-button" aria-pressed="true" aria-controls="missionMap">隐藏航点</button><button id="missionFit" type="button" class="small-button">显示整条航线</button><button id="missionCenter" type="button" class="small-button">定位船只</button><button id="missionProvider" type="button" class="small-button">切换地图</button></div>
             <div id="missionCurveEdit" class="mission-curve-edit" hidden><span id="missionCurveHint" role="status"></span><button id="missionCurveCancel" type="button" class="small-button">取消选择</button></div>
-            <p class="mission-map-status">拖动编号航点可调整位置；开启点选可新增航点。松手后请保存到服务器，Esc 可取消拖动。</p>
+            <p id="missionMapHint" class="mission-map-status">拖动编号航点可调整位置；开启点选可新增航点。松手后请保存到服务器，Esc 可取消拖动。</p>
             <div id="missionMap" role="application" aria-label="拖动航点调整位置，开启点选后点击地图添加开始点、中间点和结束点"></div>
             <p id="missionMapStatus" class="mission-map-status" role="status">打开任务页后加载地图</p>
-            <div class="mission-map-legend"><span><i class="mission-start-dot"></i>开始点</span><span><i></i>中间点</span><span><i class="mission-end-dot"></i>结束点</span><span><i class="mission-curve-dot"></i>弯曲控制点</span><span id="missionLoopLegend" hidden><i class="mission-return-line"></i>终点 → 起点</span><span>WGS84 · 直线 / 曲线航段</span></div>
+            <div class="mission-map-legend"><span data-mission-point-legend><i class="mission-start-dot"></i>开始点</span><span data-mission-point-legend><i></i>中间点</span><span data-mission-point-legend><i class="mission-end-dot"></i>结束点</span><span data-mission-point-legend><i class="mission-curve-dot"></i>弯曲控制点</span><span><i class="mission-route-line"></i>任务路线</span><span id="missionLoopLegend" hidden><i class="mission-return-line"></i>终点 → 起点</span><span>WGS84 · 直线 / 曲线航段</span></div>
           </section>
           <div class="mission-sidebar">
             <section class="mission-card" aria-labelledby="missionRouteTitle">
@@ -167,6 +168,28 @@
             </section>
           </div>
         </div>
+        <section class="mission-card mission-queue-card" aria-labelledby="missionQueueTitle">
+          <div class="mission-card-heading"><div><h2 id="missionQueueTitle">多任务队列</h2><p class="muted">按顺序执行多条航线 · 按船保存 · 关闭网页后继续</p></div><button id="missionQueueNew" type="button" class="small-button">新建队列</button></div>
+          <div class="mission-queue-layout">
+            <div>
+              <label class="mission-field">已保存队列<select id="missionQueueSelect"><option value="">新任务队列</option></select></label>
+              <label class="mission-field">队列名称<input id="missionQueueName" type="text" maxlength="80" value="新任务队列" autocomplete="off"></label>
+              <div class="mission-fields"><label class="mission-loop-toggle"><input id="missionQueueLoopEnabled" type="checkbox" aria-describedby="missionQueueHelp">整组循环</label><label class="mission-field">循环次数 · 轮<input id="missionQueueLoopCount" type="number" min="1" max="999" step="1" value="1" aria-describedby="missionQueueHelp" disabled></label></div>
+              <p id="missionQueueHelp" class="mission-loop-help">按列表依次执行，每条航线保留自己的循环设置；整组只执行一次。</p>
+              <p id="missionQueueSummary" class="muted">0 条航线 · 尚未保存</p>
+              <div class="mission-actions"><button id="missionQueueSave" type="button" class="primary">保存队列</button><button id="missionQueueDelete" type="button" class="ghost">删除队列</button></div>
+            </div>
+            <div>
+              <div class="mission-queue-add"><label class="mission-field">添加已有航线<select id="missionQueueRoute"><option value="">请选择已保存航线</option></select></label><button id="missionQueueAdd" type="button" class="small-button">添加到队列</button></div>
+              <p id="missionQueueEmpty" class="mission-empty">先在航线库保存轨迹，再按执行顺序加入这里；可用上下按钮调整顺序。</p>
+              <ol id="missionQueueList" class="mission-queue-list" aria-label="任务队列执行顺序"></ol>
+            </div>
+          </div>
+          <p id="missionQueueProgress" class="mission-queue-progress" role="status">当前没有执行中的任务队列</p>
+          <div class="mission-actions"><button id="missionQueueGoto" type="button">前往队列起点</button><button id="missionQueueStart" type="button" class="primary">开始队列</button><button id="missionQueuePause" type="button">暂停队列</button><button id="missionQueueResume" type="button">继续队列</button><button id="missionQueueStop" type="button" class="mission-danger">停止队列</button></div>
+          <p class="mission-note">相邻航线之间自动直线转场；各航线按自己的航速、到点半径和循环次数执行。整组循环最后一轮也会返回首条航线起点后停止。航线与转场均不自动避障。</p>
+          <p id="missionQueueNotice" class="mission-notice" role="status"></p>
+        </section>
         <section class="mission-card mission-waypoint-card" aria-labelledby="missionPointsTitle">
           <div class="mission-card-heading"><div><h2 id="missionPointsTitle">航点序列</h2><p class="muted">首点为开始点，末点为结束点；每段可选直线或曲线。地图航点与弯曲控制点均可拖动；船不必经过控制点。</p></div><div class="mission-actions"><button id="missionAddPosition" type="button" class="small-button">加入当前船位</button><button id="missionAddCenter" type="button" class="small-button">加入地图中心</button><button id="missionClear" type="button" class="small-button">清空航点</button></div></div>
           <p id="missionPointsEmpty" class="mission-empty">开启地图点选，依次添加开始点、中间点和结束点。</p><ol id="missionPoints" class="mission-points" aria-label="航点列表"></ol>
@@ -248,7 +271,7 @@
             <div id="mapEmpty" class="map-empty"><div class="radar-rings" aria-hidden="true"></div><span data-icon="location"></span><strong>正在加载地图</strong><span>正在准备底图，无需等待船位定位</span></div>
             <p id="mapFixStatus" class="map-fix-status" role="status" hidden>等待有效定位 · 可拖动、缩放地图</p>
           </div>
-          <div class="map-controls"><div class="button-row"><button id="mapProviderToggle" type="button" class="small-button" aria-controls="map" disabled>切换地图</button><button id="trackStart" class="small-button primary">开始追踪</button><button id="trackClear" class="small-button subtle">清除痕迹</button><button id="mapVectorsToggle" class="small-button" aria-pressed="true" aria-controls="mapVectorReadouts">隐藏速度箭头</button><button id="mapMissionToggle" type="button" class="small-button" aria-pressed="true" aria-controls="map mapMissionInfo" hidden>任务路线：显示</button></div><label class="switch-label"><input type="checkbox" id="mapFollow" checked><span class="switch-track"></span>跟随船位</label></div>
+          <div class="map-controls"><div class="button-row"><button id="mapProviderToggle" type="button" class="small-button" aria-controls="map" disabled>切换地图</button><button id="trackStart" class="small-button primary">开始追踪</button><button id="trackClear" class="small-button subtle">清除痕迹</button><button id="mapVectorsToggle" class="small-button" aria-pressed="true" aria-controls="mapVectorReadouts">隐藏速度箭头</button><button id="mapMissionToggle" type="button" class="small-button" aria-pressed="true" aria-controls="map mapMissionInfo" hidden>任务路线：显示</button><button id="mapMissionPointsToggle" type="button" class="small-button" aria-pressed="true" aria-controls="map" hidden>隐藏任务航点</button></div><label class="switch-label"><input type="checkbox" id="mapFollow" checked><span class="switch-track"></span>跟随船位</label></div>
           <div id="mapMissionInfo" class="map-mission-info" data-visible="false" hidden><i aria-hidden="true"></i><p id="mapMissionStatus" role="status">当前无人船暂无执行中任务</p></div>
           <div class="vector-info"><div id="mapVectorReadouts" class="map-vector-readouts"><span class="target"><i></i>目标 <b id="mapVectorTarget">--</b></span><span class="actual"><i></i>实际 <b id="mapVectorActual">--</b></span></div><p id="mapVectorStatus" class="map-vector-status">仅在速度 / 角度闭环显示</p></div>
           <div class="map-track-info"><p id="trackStatus" class="muted">等待云端轨迹</p><div class="track-legend" id="trackLegend"></div></div>
@@ -376,7 +399,7 @@
           <div class="driver-mission-heading"><span><i data-icon="location"></i>导航任务</span><strong id="driverMissionState" data-status="idle">待命</strong></div>
           <p id="driverMissionName">暂无运行中的任务</p>
           <dl><div><dt>目标航点</dt><dd id="driverMissionProgress">--</dd></div><div><dt>距航点</dt><dd id="driverMissionDistance">--</dd></div><div><dt>航行阶段</dt><dd id="driverMissionPhase">--</dd></div><div><dt>循环进度</dt><dd id="driverMissionLoop">--</dd></div></dl>
-          <details id="driverMapOptions" class="driver-map-options"><summary><span>地图与返航工具</span><i data-icon="chevron"></i></summary><div class="driver-map-options-panel"><div class="driver-map-actions"><button id="driverMapCenter" type="button" aria-label="地图居中船位" title="地图居中船位"><i data-icon="target"></i><span>居中</span></button><button id="driverMapFollow" type="button" aria-pressed="true" aria-label="跟随船位" title="跟随船位"><i data-icon="location"></i><span>跟随</span></button><button id="driverMapFocus" type="button" aria-label="放大地图" title="放大地图"><i data-icon="maximize"></i><span>放大</span></button><a href="#missions" data-view-link aria-label="进入航线任务" title="进入航线任务"><i data-icon="map"></i><span>任务</span></a></div><div class="driver-home-actions"><button id="driverHomeSet" type="button" class="small-button"><i data-icon="target"></i>设置返航点</button><button id="driverReturnHome" type="button" class="small-button" disabled><i data-icon="boat"></i>一键返航</button></div><p id="driverHomeStatus" class="driver-home-status">当前船尚未设置返航点</p></div></details>
+          <details id="driverMapOptions" class="driver-map-options"><summary><span>地图与返航工具</span><i data-icon="chevron"></i></summary><div class="driver-map-options-panel"><div class="driver-map-actions"><button id="driverMapCenter" type="button" aria-label="地图居中船位" title="地图居中船位"><i data-icon="target"></i><span>居中</span></button><button id="driverMapFollow" type="button" aria-pressed="true" aria-label="跟随船位" title="跟随船位"><i data-icon="location"></i><span>跟随</span></button><button id="driverMapFocus" type="button" aria-label="放大地图" title="放大地图"><i data-icon="maximize"></i><span>放大</span></button><a href="#missions" data-view-link aria-label="进入航线任务" title="进入航线任务"><i data-icon="map"></i><span>任务</span></a></div><div class="driver-home-actions"><button id="driverMissionPointsToggle" type="button" class="small-button" aria-pressed="true" aria-controls="map" hidden>隐藏任务航点</button></div><div class="driver-home-actions"><button id="driverHomeSet" type="button" class="small-button"><i data-icon="target"></i>设置返航点</button><button id="driverReturnHome" type="button" class="small-button" disabled><i data-icon="boat"></i>一键返航</button></div><p id="driverHomeStatus" class="driver-home-status">当前船尚未设置返航点</p></div></details>
         </aside>
         <aside id="driverDetailsPanel" class="driver-details-panel" aria-labelledby="driverDetailsTitle" hidden>
           <div class="driver-details-heading"><h3 id="driverDetailsTitle">航行详情</h3><button id="driverDetailsClose" type="button" class="small-button" aria-label="收起航行详情">收起</button></div>

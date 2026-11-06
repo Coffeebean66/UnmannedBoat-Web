@@ -44,7 +44,7 @@ test('loop settings are finite integers, validated with the return leg and persi
   assert.doesNotThrow(()=>normalizeRoute({...definition,points:long}));assert.throws(()=>normalizeRoute({...definition,points:long,loopEnabled:true}),/100 千米/);
   const a=f.store.save('boat-01',{...definition,loopEnabled:true,loopCount:3},r.id,r.revision),b=f.route('boat-02',{loopEnabled:true,loopCount:7});
   const reopened=new MissionStore({env:f.env});assert.equal(reopened.error,'');assert.deepEqual(reopened.get('boat-01',a.id),a);assert.equal(reopened.get('boat-02',b.id).loopCount,7);
-  assert.equal(JSON.parse(fs.readFileSync(f.store.file,'utf8')).version,4);
+  assert.equal(JSON.parse(fs.readFileSync(f.store.file,'utf8')).version,5);
 });
 
 test('legacy route libraries retain single-run behavior and migrate on save; invalid loop files fail closed',t=>{

@@ -82,6 +82,17 @@ async function main(){
     await until('BoatMissions.route.id&&!BoatMissions.busy&&!BoatMissions.dirty');
     assert.equal(new MissionStore({env:f.env}).list('boat-01').length,1);const routeId=await evaluate('BoatMissions.route.id'),savedRoute=new MissionStore({env:f.env}).get('boat-01',routeId);
     assert.equal(savedRoute.loopEnabled,true);assert.equal(savedRoute.loopCount,2,'Loop count persists through real HTTP and storage reload');
+    const editorLines=await evaluate('BoatMissions.map.lastTrackLines'),planningCommands=f.commands().length;
+    await evaluate('document.getElementById("missionWaypointsToggle").click()');
+    assert.equal(await evaluate('BoatMissions.markers.length===0&&!BoatMissions.editing&&BoatMissions.curveEditing===-1&&!BoatMissions.dirty&&!!BoatMissions.boatMarker'),true,'Hide points without changing a saved route or hiding the live boat');
+    assert.deepEqual(await evaluate('BoatMissions.map.lastTrackLines'),editorLines,'Both the task path and loop return remain visible');
+    await clickPoint(N.destination(ORIGIN,90,15));assert.deepEqual(await evaluate('BoatMissions.route.points'),savedRoute.points,'Hidden points cannot be edited by an empty-map click');
+    assert.equal(await evaluate('[...document.querySelectorAll("[data-mission-point-legend]")].every(n=>getComputedStyle(n).display==="none")'),true);
+    await shot('missions-waypoints-hidden');
+    await evaluate('document.getElementById("missionWaypointsToggle").click()');assert.equal(await evaluate('BoatMissions.markers.length'),3);
+    await evaluate('document.getElementById("missionWaypointsToggle").click();document.getElementById("missionEdit").click()');
+    assert.equal(await evaluate('BoatMissions.pointsVisible&&BoatMissions.editing&&BoatMissions.markers.length===3&&!BoatMissions.dirty'),true,'Starting point selection restores visible points automatically');
+    assert.equal(f.commands().length,planningCommands,'Visibility never acquires or controls the boat');
     await evaluate('document.getElementById("missionNew").click()');await wait(1200);assert.equal(await evaluate('BoatMissions.route.points.length===0&&!BoatMissions.route.id&&!document.getElementById("missionLoopEnabled").checked&&document.getElementById("missionLoopCount").disabled'),true,'Background polling preserves an explicitly created blank single-run draft');
     await evaluate('document.getElementById("missionRouteSelect").value="'+routeId+'";document.getElementById("missionRouteSelect").dispatchEvent(new Event("change"))');
     assert.equal(await evaluate('BoatMissions.route.points.length'),3,'Saved route reloads all ordered waypoints');
@@ -95,6 +106,12 @@ async function main(){
     assert.equal(await evaluate('document.getElementById("driverMissionProgress").textContent===(BoatMissions.run().targetIndex+1)+" / "+BoatMissions.run().pointCount'),true);
     assert.equal(await evaluate('document.getElementById("driverMissionLoop").textContent'),'1 / 2 圈');
     const immersiveLease=f.mission.jobs.get('boat-01').leaseId;
+    await until('boatMonitor.mapMission.markers.length===3');
+    await evaluate('document.getElementById("driverMapOptions").open=true;document.getElementById("driverMissionPointsToggle").click()');
+    assert.equal(await evaluate('boatMonitor.mapMission.markers.length===0&&boatMonitor.map._lineOverlays.get("mission").lines.length===2&&document.getElementById("mapMissionPointsToggle").getAttribute("aria-pressed")==="false"'),true,'Driving waypoint control preserves the live route and synchronizes navigation');
+    assert.equal(f.mission.jobs.get('boat-01').leaseId,immersiveLease);
+    await shot('driver-mission-waypoints-hidden');
+    await evaluate('document.getElementById("driverMissionPointsToggle").click();document.getElementById("driverMapOptions").open=false');
     for(const [width,height]of [[1440,900],[375,667],[320,667],[320,812]]){
       await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<500});
       await evaluate('boatMonitor.driver.setMediaFocus("video")');await wait(120);
@@ -119,15 +136,23 @@ async function main(){
     await evaluate('BoatMissions.load("")');
     assert.equal(await evaluate('BoatMissions.route.points.length'),0);
     assert.equal(await evaluate('boatMonitor.mapMission.markers.length'),3,'Editing another route never replaces the currently running route overlay');
-    await evaluate('BoatMissions.load('+JSON.stringify(routeId)+');document.getElementById("mapMissionToggle").click()');
+    await evaluate('document.getElementById("mapMissionPointsToggle").click()');
+    assert.equal(await evaluate('boatMonitor.mapMission.markers.length'),0);
+    assert.deepEqual(await evaluate('boatMonitor.map._lineOverlays.get("mission").lines[0].points'),savedRoute.points,'Navigation retains the same path without numbered markers');
+    await evaluate('BoatMissions.load('+JSON.stringify(routeId)+');document.getElementById("missionWaypointsToggle").click();document.getElementById("mapMissionToggle").click()');
     assert.equal(await evaluate('boatMonitor.mapMission.markers.length===0&&!boatMonitor.map._lineOverlays.has("mission")'),true);
     assert.equal(f.mission.active('boat-01'),true,'Hiding the route never stops the mission');
     await send('Page.reload');
     await until('window.boatMonitor?.mapMission&&window.BoatMissions?.run()?.status==="running"&&BoatMissions.routes.length>0&&boatMonitor.map.ready');
     assert.equal(await evaluate('BoatWorkspace.current'), 'navigation');
     assert.equal(await evaluate('boatMonitor.mapMission.visible'),false,'Refresh preserves the hidden preference');
+    assert.equal(await evaluate('boatMonitor.mapMission.pointsVisible===false&&BoatMissions.pointsVisible===false'),true,'Refresh independently restores both editor and monitoring waypoint preferences');
     assert.equal(await evaluate('boatMonitor.mapMission.markers.length'),0);
     await evaluate('document.getElementById("mapMissionToggle").click();document.getElementById("mapFollow").checked=false');
+    assert.equal(await evaluate('boatMonitor.mapMission.markers.length===0&&boatMonitor.map._lineOverlays.get("mission").lines.length===2'),true,'Restoring the whole route respects the independent hidden-points preference');
+    await evaluate('BoatWorkspace.navigate("missions",{focus:false})');await until('BoatMissions.map?.ready&&BoatMissions.route.id==="'+routeId+'"');
+    assert.equal(await evaluate('BoatMissions.markers.length===0&&BoatMissions.map.lastTrackLines.length===2&&document.getElementById("missionEdit").disabled&&!document.getElementById("missionWaypointsToggle").disabled'),true,'Visibility remains adjustable on a locked executing route');
+    await evaluate('document.getElementById("missionWaypointsToggle").click();BoatWorkspace.navigate("navigation",{focus:false});document.getElementById("mapMissionPointsToggle").click()');
     assert.equal(await evaluate('boatMonitor.mapMission.markers.length'),3);
     await evaluate('boatMonitor.map.switchMode("satellite")');
     assert.equal(await evaluate('boatMonitor.mapMission.markers.length'),3,'Satellite switching restores route markers');
@@ -154,7 +179,7 @@ async function main(){
     await evaluate('BoatAuth.login("observer","browser-guest-test-only")');await until('BoatAuth.user?.role==="guest"');
     await evaluate('BoatMissions.poll(true)');
     assert.equal(await evaluate('BoatMissions.routes.length===0&&BoatMissions.runs.length===0&&document.getElementById("missionActiveBar").children.length===0'),true,'Guest never retains task details or the global task entry');
-    assert.equal(await evaluate('boatMonitor.mapMission.markers.length===0&&!boatMonitor.map._lineOverlays.has("mission")&&document.getElementById("mapMissionToggle").hidden&&document.getElementById("mapMissionInfo").hidden'),true,'Guest cannot retain the private mission overlay');
+    assert.equal(await evaluate('boatMonitor.mapMission.markers.length===0&&!boatMonitor.map._lineOverlays.has("mission")&&document.getElementById("mapMissionToggle").hidden&&document.getElementById("mapMissionPointsToggle").hidden&&document.getElementById("driverMissionPointsToggle").hidden&&document.getElementById("mapMissionInfo").hidden'),true,'Guest cannot retain the private mission overlay');
     for(const view of ['missions','driving'])assert.equal(await evaluate('BoatWorkspace.navigate('+JSON.stringify(view)+')'),'fleet');
     assert.equal(f.mission.active('boat-01'),true,'Hiding the interface and switching accounts do not stop a server task');
     await evaluate('BoatAuth.logout()');await evaluate('BoatAuth.login("operator","browser-admin-test-only")');
@@ -204,6 +229,21 @@ async function main(){
     assert.equal(await evaluate('BoatMissions.route.points.length'),3,'Choosing a bend never inserts a compulsory waypoint');
     assert.equal(await evaluate('BoatMissions.curveEditing'),-1);
     assert.ok(N.distance(await evaluate('BoatMissions.route.segments[0].control'),curveControl)<1,'Real map clicks store WGS84 control coordinates');
+    const curveBeforeHiding=await evaluate('BoatMissions.route'),curveDirty=await evaluate('BoatMissions.dirty');
+    assert.equal(await evaluate('BoatMissions.map.lastTrackLines.length'),2,'Curve editing includes its control helper before hiding');
+    await evaluate('document.getElementById("missionWaypointsToggle").click()');
+    assert.equal(await evaluate('BoatMissions.markers.length===0&&BoatMissions.map.lastTrackLines.length===1&&!document.querySelector("#missionMap .mission-curve-pin")'),true,'Hiding removes curve controls and helpers together with waypoints');
+    assert.deepEqual(await evaluate('BoatMissions.route'),curveBeforeHiding);assert.equal(await evaluate('BoatMissions.dirty'),curveDirty);
+    for(const width of [1440,375,320]){
+      await send('Emulation.setDeviceMetricsOverride',{width,height:1100,deviceScaleFactor:1,mobile:false});
+      await evaluate('document.getElementById("missionMap").scrollIntoView({block:"center",behavior:"instant"});BoatMissions.fit()');await wait(120);
+      assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth+1&&document.getElementById("missionWaypointsToggle").getBoundingClientRect().width>0'),true,'Hidden-points route controls fit '+width);
+      await shot('missions-curve-waypoints-hidden-'+width);
+    }
+    await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
+    await evaluate('document.querySelector("[data-curve-pick]").click()');
+    assert.equal(await evaluate('BoatMissions.pointsVisible&&BoatMissions.editing&&BoatMissions.curveEditing===0&&BoatMissions.markers.length===4'),true,'Selecting a curve bend automatically restores its markers');
+    await evaluate('document.getElementById("missionCurveCancel").click()');
     await evaluate('document.getElementById("missionName").value="曲线巡航 B";document.getElementById("missionName").dispatchEvent(new Event("input"));document.getElementById("missionSave").click()');await until('!!BoatMissions.route.id&&!BoatMissions.busy&&!BoatMissions.dirty');
     const curveId=await evaluate('BoatMissions.route.id');let savedCurve=new MissionStore({env:f.env}).get('boat-01',curveId);
     assert.deepEqual(savedCurve.segments,await evaluate('BoatMissions.route.segments'));
@@ -336,6 +376,58 @@ async function main(){
     await wait(1400);assert.equal(f.mission.active('boat-01'),false,'A delayed start response cannot revive cancelled autonomy');
     await evaluate('window.fetch=window.__missionFetch;delete window.__missionFetch');
     await shot('driver-autonomy-dark');
+    // 多任务由真实页面保存、排序、启停；服务器在切页和关闭页面后自行转场与循环。
+    const queueRoutes=[f.route('boat-01',{name:'队列轨迹一',points:[ORIGIN,N.destination(ORIGIN,0,20)]}),f.route('boat-01',{name:'队列轨迹二',speedMps:1.2,points:[N.destination(ORIGIN,90,20),N.destination(ORIGIN,90,45)]})];
+    await evaluate('BoatWorkspace.navigate("missions",{focus:false});BoatMissions.poll(true)');await until('BoatMissions.routes.some(r=>r.id==="'+queueRoutes[1].id+'")&&window.BoatMissionQueue&&!BoatMissions.busy');
+    const beforeQueuePlanning=f.commands().length;
+    await evaluate('document.getElementById("missionQueueNew").click();document.getElementById("missionQueueName").value="双轨迹巡航";document.getElementById("missionQueueName").dispatchEvent(new Event("input"))');
+    for(const route of [queueRoutes[1],queueRoutes[0],queueRoutes[1]])await evaluate('document.getElementById("missionQueueRoute").value="'+route.id+'";document.getElementById("missionQueueAdd").click()');
+    await evaluate('document.querySelectorAll("#missionQueueList li")[1].querySelectorAll("button")[0].click();document.querySelectorAll("#missionQueueList li")[2].querySelectorAll("button")[2].click()');
+    assert.deepEqual(await evaluate('BoatMissionQueue.queue.routeIds'),queueRoutes.map(r=>r.id),'Real queue buttons reorder and remove routes without touching their geometry');
+    await evaluate('document.getElementById("missionQueueLoopEnabled").click();document.getElementById("missionQueueLoopCount").value="0";document.getElementById("missionQueueLoopCount").dispatchEvent(new Event("input"))');
+    assert.equal(await evaluate('document.getElementById("missionQueueSave").disabled'),true);
+    await evaluate('document.getElementById("missionQueueLoopCount").value="2";document.getElementById("missionQueueLoopCount").dispatchEvent(new Event("input"));document.getElementById("missionQueueSave").click()');
+    await until('!!BoatMissionQueue.queue.id&&!BoatMissionQueue.dirty&&!BoatMissions.busy');
+    const queueId=await evaluate('BoatMissionQueue.queue.id');assert.deepEqual(new MissionStore({env:f.env}).getQueue('boat-01',queueId).routeIds,queueRoutes.map(r=>r.id));
+    assert.equal(f.commands().length,beforeQueuePlanning,'Saving and editing a queue never arms the boat');
+    for(const [width,height]of [[1440,1100],[375,812],[320,812]]){
+      await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
+      await evaluate('document.getElementById("missionQueueTitle").scrollIntoView({block:"start",behavior:"instant"})');await wait(100);
+      assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth+1&&["missionQueueName","missionQueueRoute","missionQueueLoopCount"].every(id=>{const r=document.getElementById(id).getBoundingClientRect();return r.width>0&&r.left>=0&&r.right<=innerWidth;})'),true,'Queue editor fits '+width);
+      await shot('mission-queue-'+width+'-dark');
+    }
+    await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
+    await evaluate('boatMonitor.selectBoat("boat-02",false)');await until('BoatMissions.deviceId==="boat-02"&&BoatMissionQueue.deviceId==="boat-02"');
+    assert.equal(await evaluate('BoatMissionQueue.queue.routeIds.length'),0,'Queue drafts and definitions belong to one vessel');
+    await evaluate('boatMonitor.selectBoat("boat-01",false)');await until('BoatMissionQueue.queue.id==="'+queueId+'"&&BoatMissions.queues.length===1');
+    await send('Page.reload');await until('window.BoatMissionQueue?.queue.id==="'+queueId+'"&&BoatMissions.map?.ready');
+    assert.equal(await evaluate('document.getElementById("missionQueueLoopCount").value'),'2','Saved queue and loops restore after reload');
+    f.feed('boat-01',{...ORIGIN,heading:0});await evaluate('document.getElementById("missionQueueGoto").click()');await until('BoatMissions.run()?.queue?.id==="'+queueId+'"&&BoatMissions.run()?.status==="completed"');
+    assert.equal(f.mission.snapshot('boat-01').queue.completedLoops,0,'Goto only reaches the first start and stops');
+    await evaluate('document.getElementById("missionQueueStart").click()');await until('BoatMissions.run()?.queue?.id==="'+queueId+'"&&BoatMissions.run()?.status==="running"&&BoatMissions.run()?.targetIndex===1');
+    const queueLease=f.mission.jobs.get('boat-01').leaseId;
+    await evaluate('BoatMissions.load("'+queueRoutes[1].id+'")');assert.equal(await evaluate('document.getElementById("missionSave").disabled&&document.getElementById("missionQueueSave").disabled&&document.getElementById("missionQueueLoopCount").disabled'),true,'Every queued route and the running queue are locked');
+    f.feed('boat-01',{...queueRoutes[0].points[1],heading:0});await until('BoatMissions.run()?.phase==="transit"&&BoatMissions.run()?.queue?.routeIndex===1');
+    await evaluate('BoatWorkspace.navigate("navigation",{focus:false})');await until('boatMonitor.map._lineOverlays.get("mission")?.lines.some(l=>l.className==="map-mission-line map-mission-transfer")');
+    const transferLine=await evaluate('boatMonitor.map._lineOverlays.get("mission").lines.find(l=>l.className==="map-mission-line map-mission-transfer").points');
+    assert.ok(N.distance(transferLine[0],queueRoutes[0].points[1])<.02);assert.deepEqual(transferLine[1],queueRoutes[1].points[0]);
+    await evaluate('BoatWorkspace.navigate("driving",{focus:false})');assert.match(await evaluate('document.getElementById("driverMissionName").textContent'),/双轨迹巡航.*2 \/ 2/);assert.equal(f.mission.jobs.get('boat-01').leaseId,queueLease);
+    await evaluate('BoatWorkspace.navigate("missions",{focus:false});document.getElementById("missionQueuePause").click()');await until('BoatMissions.run()?.status==="paused"&&BoatMissions.run()?.resumable');
+    await evaluate('document.getElementById("missionQueueResume").click()');await until('BoatMissions.run()?.status==="running"&&BoatMissions.run()?.phase==="transit"');
+    assert.notEqual(f.mission.jobs.get('boat-01').leaseId,queueLease,'Resume acquires a fresh lease and preserves the current route');
+    await send('Page.navigate',{url:'about:blank'});const beforeQueueClosed=f.commands().length;await wait(1100);assert.equal(f.mission.active('boat-01'),true);assert.ok(f.commands().length>beforeQueueClosed+5,'Server keeps the sequence active with no browser');
+    await send('Page.navigate',{url:base+'/#missions'});await until('window.BoatMissionQueue?.queue.id==="'+queueId+'"&&BoatMissions.run()?.phase==="transit"');
+    for(let lap=1;lap<=2;lap++){
+      if(lap>1){f.feed('boat-01',{...queueRoutes[0].points[1],heading:0});await until('BoatMissions.run()?.phase==="transit"&&BoatMissions.run()?.queue?.routeIndex===1');}
+      f.feed('boat-01',{...queueRoutes[1].points[0],heading:90});await until('BoatMissions.run()?.phase==="route"&&BoatMissions.run()?.queue?.routeIndex===1&&BoatMissions.run()?.targetIndex===1');
+      f.feed('boat-01',{...queueRoutes[1].points[1],heading:90});await until('BoatMissions.run()?.phase==="queueReturning"');
+      assert.equal(f.mission.snapshot('boat-01').queue.completedLoops,lap-1);
+      f.feed('boat-01',{...ORIGIN,heading:270});await until(lap===1?'BoatMissions.run()?.queue?.completedLoops===1&&BoatMissions.run()?.phase==="route"&&BoatMissions.run()?.queue?.routeIndex===0':'BoatMissions.run()?.status==="completed"&&BoatMissions.run()?.stopConfirmed');
+    }
+    assert.equal(f.mission.snapshot('boat-01').queue.completedLoops,2);assert.match(await evaluate('document.getElementById("missionQueueProgress").textContent'),/已完成 2 轮/);
+    await evaluate('document.getElementById("missionQueueStart").click()');await until('BoatMissions.run()?.status==="running"');
+    await evaluate('document.getElementById("missionQueueStop").click()');await until('BoatMissions.run()?.status==="stopped"&&BoatMissions.run()?.stopConfirmed');
+    console.log('PASS: queue UI ordering/save/reload/vessel isolation, 320/375/1440px layout, goto, all-route locks, automatic transfers, pause/resume, closed-page execution and two whole-queue loops.');
     await evaluate('BoatWorkspace.navigate("missions",{focus:false});document.getElementById("themeToggle").click()');
     for(const [width,height]of [[1440,1100],[1024,900],[375,812],[320,812]]){
       await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});await wait(100);
@@ -346,7 +438,7 @@ async function main(){
     }
     await evaluate('BoatAuth.logout()');await evaluate('BoatAuth.login("observer","browser-guest-test-only")');await until('BoatAuth.user?.role==="guest"');
     assert.equal(await evaluate('document.getElementById("view-missions").hidden&&document.getElementById("view-driving").hidden&&document.getElementById("missionActiveBar").hidden'),true,'Guest cannot see task, driver or global task interface');
-    assert.equal(await evaluate('BoatMissions.routes.length===0&&BoatMissions.runs.length===0'),true,'Role change clears private task UI state');
+    assert.equal(await evaluate('BoatMissions.routes.length===0&&BoatMissions.queues.length===0&&BoatMissions.runs.length===0&&BoatMissionQueue.queue.routeIds.length===0'),true,'Role change clears private task and queue UI state');
     await evaluate('BoatMissions.poll(true)');assert.equal(await evaluate('BoatMissions.routes.length'),0,'Guest does not poll or repopulate the task interface');
     assert.deepEqual(errors,[]);console.log('PASS: real Chrome algorithm selection/MCU rejection/PID return and 320/375/1440px settings; LQR missions; actual map clicks and return-leg preview; loop persistence/reload; goto; MCU ACK and two loops; page closure/reopen; driving Space stop; guest permissions; dark/light responsive layouts.');
   }finally{socket?.close();browser.kill();server.closeAllConnections?.();await f.close();}

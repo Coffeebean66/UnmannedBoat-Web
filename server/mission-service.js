@@ -26,6 +26,7 @@ class MissionService{
     this.timer=setInterval(()=>this.refresh(),pollMs);this.timer.unref?.();
   }
   active(id){return ACTIVE.has(this.jobs.get(id)?.status);}
+  usesRoute(id,routeId){const job=this.jobs.get(id);return this.active(id)&&!!routeId&&(job.route.id===routeId||job.queue?.routes.some(route=>route.id===routeId));}
   snapshot(job,includeRoute=true){
     if(typeof job==='string')job=this.jobs.get(job);
     if(!job)return null;
@@ -34,6 +35,11 @@ class MissionService{
       loopEnabled:job.loopEnabled,loopCount:job.loopCount,completedLoops:job.completedLoops,
       currentLoop:job.action==='start'?Math.min(job.completedLoops+1,job.loopCount):null,phase:job.phase,resumable:job.status==='paused'&&job.stopConfirmed===true,
       distanceM:job.distanceM??null,crossTrackM:job.crossTrackM??null,targetHeading:job.heading??null,commandSpeedMps:job.commandSpeedMps??0,
+      ...(job.queue?{queue:{id:job.queue.definition.id,name:job.queue.definition.name,revision:job.queue.definition.revision,
+        routeIds:job.queue.routes.map(r=>r.id),routeNames:job.queue.routes.map(r=>r.name),routeIndex:job.queue.index,routeCount:job.queue.routes.length,
+        loopEnabled:job.queue.definition.loopEnabled,loopCount:job.queue.definition.loopEnabled?job.queue.definition.loopCount:1,
+        completedLoops:job.queue.completedLoops,currentLoop:job.action==='start'?Math.min(job.queue.completedLoops+1,job.queue.definition.loopEnabled?job.queue.definition.loopCount:1):null}}:{}),
+      transitionFrom:['transit','queueReturning'].includes(job.phase)?job.transitionFrom:null,
       algorithm:job.algorithm,position:job.position||null,startedAt:job.startedAt,finishedAt:job.finishedAt||null,stopConfirmed:job.stopConfirmed===true};
   }
   list(){return [...this.jobs.values()].map(job=>this.snapshot(job,false));}
@@ -42,6 +48,14 @@ class MissionService{
     const route=this.store.get(id,routeId);
     if(revision!==undefined&&revision!==route.revision)throw fault(409,'航线已被修改，请重新载入核对后再执行');
     return this.begin(id,route,action);
+  }
+  startQueue(id,queueId,action,revision,routeRevisions){
+    if(!['goto','start'].includes(action))throw fault(400,'队列操作不正确');
+    const definition=this.store.getQueue(id,queueId);
+    if(revision!==definition.revision)throw fault(409,'任务队列已修改，请重新载入核对');
+    const routes=this.store.resolveQueue(id,definition);
+    if(!Array.isArray(routeRevisions)||routeRevisions.length!==routes.length||routeRevisions.some((revision,i)=>revision!==routes[i].revision))throw fault(409,'队列中的航线已变化，请刷新并核对后再执行');
+    return this.begin(id,routes[0],action,null,{definition,routes,index:0,completedLoops:0});
   }
   navigate(id,action,speedMps=1,arrivalRadiusM=3,revision){
     if(!['home','hold'].includes(action))throw fault(400,'导航操作不正确');
@@ -57,7 +71,7 @@ class MissionService{
     if(!old||old.runId!==runId||old.status!=='paused'||!old.stopConfirmed)throw fault(409,'当前任务不可继续，请刷新并确认已暂停停船');
     return this.begin(id,structuredClone(old.route),old.action,old);
   }
-  begin(id,route,action,resuming=null){
+  begin(id,route,action,resuming=null,queue=null){
     if(this.closed||this.store.error)throw fault(503,this.store.error||'任务服务正在关闭');
     if(this.active(id))throw fault(409,'这艘船已有任务，请先停止当前任务');
     const position=feedback(this.bridge,id,this.now());
@@ -67,10 +81,12 @@ class MissionService{
       status:'preparing',message:'正在读取船端最大速度参数',startedAt:this.now(),index:0,sequence:0,arrivalCount:0,controller:new AbortController(),
       algorithm:this.bridge.get(id).controlAlgorithm?.id??0,origin:{latitude:position.latitude,longitude:position.longitude},
       loopEnabled:action==='start'&&route.loopEnabled,loopCount:action==='start'&&route.loopEnabled?route.loopCount:1,completedLoops:resuming?.completedLoops||0,phase:resuming?.phase||(action==='goto'?'goto':action==='home'?'home':action==='hold'?'hold':'route'),resuming:!!resuming,holdHeading:position.heading};
+    if(queue||resuming?.queue)job.queue=structuredClone(queue||resuming.queue);
+    if(resuming?.transitionFrom){job.transitionFrom={...resuming.transitionFrom};job.transitSpeed=resuming.transitSpeed;}
     job.geometry=paths.compile(route);
     if(resuming){job.index=resuming.index;job.resumedFrom=resuming.runId;}
     job.onlineTuning=job.algorithm===1&&this.bridge.get(id).controlAlgorithm?.onlineTuning===true;
-    if(job.algorithm===1&&!job.onlineTuning)job.optimal=optimal.create(route.speedMps);
+    if(job.algorithm===1&&!job.onlineTuning&&!job.queue)job.optimal=optimal.create(route.speedMps);
     this.jobs.set(id,job);
     // 限制仅在内存保留最近 128 艘船的结束状态，活动任务不会被驱逐。
     if(this.jobs.size>128)for(const [key,value]of this.jobs)if(!this.active(key)){this.jobs.delete(key);break;}
@@ -84,8 +100,9 @@ class MissionService{
     if(!this.current(job))return;
     const frame=job.onlineTuning?optimalParameters.response(packet):decodeParameterFrame(packet),maximum=job.onlineTuning?frame?.maxTargetMmS:frame?.parameters?.maxTargetMmS;
     if(frame?.status!==0||!Number.isInteger(maximum)||maximum<100||maximum>20000)throw fault(503,'读取船端最大速度失败，未接管');
-    if(job.route.speedMps*1000>maximum)throw fault(409,'任务航速超过船端最大目标速度，请降低任务航速或先调参');
+    if((job.queue?.routes||[job.route]).some(route=>route.speedMps*1000>maximum))throw fault(409,'任务航速超过船端最大目标速度，请降低任务航速或先调参');
     if(job.onlineTuning){job.optimalConfig=optimalParameters.guidanceConfig(frame.parameters);job.optimal=optimal.create(job.route.speedMps,job.optimalConfig);}
+    if(job.algorithm===1&&job.queue){job.queueOptimal=job.queue.routes.map(route=>optimal.create(route.speedMps,job.optimalConfig));job.optimal=job.queueOptimal[job.queue.index];}
     const position=feedback(this.bridge,job.id,this.now());
     if((this.bridge.get(job.id).controlAlgorithm?.id??0)!==job.algorithm)throw fault(409,'船端算法已变化，请重新开始任务');
     if(job.action==='start'&&!job.resuming&&nav.distance(position,job.route.points[0])>job.route.arrivalRadiusM)throw fault(409,'船位已离开开始点范围，请重新前往开始点');
@@ -118,16 +135,40 @@ class MissionService{
     else if(controlJob){this.finish(job,'failed',message+'；控制租约已丢失，请确认船已停止');}
     else this.finish(job,result,message+'（未进入运动控制）',true);
   }
+  queueRoute(job,index,phase,now){
+    // 一个队列共用同一个控制租约；转场也需两份新定位确认，不能跨点或重新接管。
+    const from=job.position||job.route.points[job.index],previousSpeed=job.route.speedMps;
+    job.queue.index=index;job.route=job.queue.routes[index];job.geometry=paths.compile(job.route);job.index=0;job.phase=phase;
+    job.transitionFrom={...from};job.transitSpeed=Math.min(previousSpeed,job.route.speedMps);
+    job.loopEnabled=job.route.loopEnabled;job.loopCount=job.loopEnabled?job.route.loopCount:1;job.completedLoops=0;
+    if(job.queueOptimal)job.optimal=job.queueOptimal[index];
+    job.arrivalCount=0;job.bestDistance=Infinity;job.lastProgressAt=now;
+  }
+  routeCompleted(job,now){
+    const q=job.queue;
+    if(!q){this.stopJob(job,'completed',job.loopEnabled?'已完成 '+job.loopCount+' 圈并返回开始点':'全部航点已完成');return;}
+    if(q.index<q.routes.length-1){this.queueRoute(job,q.index+1,'transit',now);return;}
+    if(q.definition.loopEnabled){this.queueRoute(job,0,'queueReturning',now);return;}
+    q.completedLoops=1;this.stopJob(job,'completed','任务队列已全部完成');
+  }
   arrived(job,now){
     if(job.action==='goto'){this.stopJob(job,'completed','已到达任务开始点');return;}
     if(job.action==='home'){this.stopJob(job,'completed','已到达返航点');return;}
+    if(job.phase==='transit'||job.phase==='queueReturning'){
+      if(job.phase==='queueReturning'){
+        job.queue.completedLoops++;
+        if(job.queue.completedLoops>=job.queue.definition.loopCount){this.stopJob(job,'completed','任务队列已完成 '+job.queue.definition.loopCount+' 轮并返回首条航线起点');return;}
+      }
+      job.phase='route';job.index=1;job.transitionFrom=null;
+      job.arrivalCount=0;job.bestDistance=Infinity;job.lastProgressAt=now;return;
+    }
     if(job.phase==='returning'){
       // 只有返回起点并取得两份新定位后才完成一圈；最后一圈同样回到起点。
       job.completedLoops++;
-      if(job.completedLoops>=job.loopCount){this.stopJob(job,'completed','已完成 '+job.loopCount+' 圈并返回开始点');return;}
+      if(job.completedLoops>=job.loopCount){this.routeCompleted(job,now);return;}
       job.phase='route';job.index=1;
     }else if(job.index===job.route.points.length-1){
-      if(!job.loopEnabled){job.completedLoops=1;this.stopJob(job,'completed','全部航点已完成');return;}
+      if(!job.loopEnabled){job.completedLoops=1;this.routeCompleted(job,now);return;}
       job.phase='returning';job.index=0;
     }else job.index++;
     job.arrivalCount=0;job.bestDistance=Infinity;job.lastProgressAt=now;
@@ -142,7 +183,7 @@ class MissionService{
       if(job.lastSourceTick!==undefined&&((p.sourceTick-job.lastSourceTick)>>>0)>0x7fffffff)throw fault(409,'定位样本时间回退，任务停止');
       job.lastSourceTick=p.sourceTick;job.lastSourceAt=now;
     }else if(now-job.lastSourceAt>=1000)throw fault(503,'定位样本超过 1 秒未更新，任务停止');
-    const end=job.route.points[job.index],d=nav.distance(p,end),radius=job.route.arrivalRadiusM;
+    const end=job.route.points[job.index],d=nav.distance(p,end);let radius=job.route.arrivalRadiusM;
     if(job.action==='hold'&&d>Math.max(30,radius*5))throw fault(409,'船位偏离守位点过远，定点保持已停止');
     job.position={latitude:p.latitude,longitude:p.longitude};job.distanceM=d;
     // 连续两份不同 RTK 样本确认到点；同一个定位不能连续跨过多个相邻航点。
@@ -151,10 +192,12 @@ class MissionService{
     if(isNew){job.arrivalCount=d<=radius&&(!curvePosition||curvePosition.remainingM<=radius)?job.arrivalCount+1:0;}
     if(job.arrivalCount>=2&&job.action!=='hold'){
       this.arrived(job,now);if(job.status!=='running')return;
+      radius=job.route.arrivalRadiusM;
     }
     const target=job.route.points[job.index];
     // 返回航段沿“终点 → 起点”引导，也接受原有横向偏差/进度保护。
-    const from=job.phase==='returning'?job.route.points[job.route.points.length-1]:job.index>0?job.route.points[job.index-1]:null;
+    const transiting=['transit','queueReturning'].includes(job.phase),speed=transiting?job.transitSpeed:job.route.speedMps;
+    const from=transiting?job.transitionFrom:job.phase==='returning'?job.route.points[job.route.points.length-1]:job.index>0?job.route.points[job.index-1]:null;
     const segment=job.action==='start'&&job.phase==='route'&&job.index>0?job.geometry.segments[job.index-1]:null;
     let g;
     if(segment?.curved){
@@ -168,12 +211,16 @@ class MissionService{
     if(job.action==='hold'&&g.distanceM<=radius){job.lastProgressAt=now;job.bestDistance=Infinity;}
     if(now-job.lastProgressAt>=this.progressTimeoutMs)throw fault(504,'连续 '+Math.round(this.progressTimeoutMs/1000)+' 秒未接近目标航点，任务停止');
     const error=Math.abs(nav.angleError(job.heading,p.heading));
-    const slow=Math.min(job.route.speedMps,Math.max(0.2,Math.sqrt(Math.max(0,g.distanceM-radius)*0.6)));
+    const slow=Math.min(speed,Math.max(0.2,Math.sqrt(Math.max(0,g.distanceM-radius)*0.6)));
     // 大角度先原地转向；到点等待第二个定位样本时只保持零推力。
     job.commandSpeedMps=g.distanceM<=radius||error>70?0:slow*Math.max(0,Math.cos(error*Math.PI/180));
     const input={...job.input,throttle:Math.min(1000,Math.round(job.commandSpeedMps*1000000/job.maximum)),targetHeading:Math.round(job.heading*100)%36000};
     this.control.command(job.id,job.owner,job.clientId,job.leaseId,++job.sequence,'input',input);
     job.message=job.action==='hold'?(g.distanceM<=radius?'定点保持 · 范围内守位':'定点保持 · 正在回到目标位置'):job.action==='home'?'正在返回已保存返航点':(job.action==='goto'?'前往开始点':job.loopEnabled?'第 '+(job.completedLoops+1)+' / '+job.loopCount+' 圈 · '+(job.phase==='returning'?'终点返回起点':'沿线航行'):'航线执行')+' · 航点 '+(job.index+1)+' / '+job.route.points.length;
+    if(job.queue){
+      const q=job.queue,phase=job.action==='goto'?'前往队列起点':job.phase==='transit'?'前往下一航线起点':job.phase==='queueReturning'?'整组返回首条航线起点':job.message;
+      job.message=q.definition.name+' · 第 '+Math.min(q.completedLoops+1,q.definition.loopEnabled?q.definition.loopCount:1)+' / '+(q.definition.loopEnabled?q.definition.loopCount:1)+' 轮 · 航线 '+(q.index+1)+' / '+q.routes.length+' · '+phase;
+    }
   }
   refresh(){
     if(this.closed)return;
