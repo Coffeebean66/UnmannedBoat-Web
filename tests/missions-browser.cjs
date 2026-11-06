@@ -24,6 +24,22 @@ async function main(){
       const target=await evaluate('(()=>{const view=BoatMissions.map,point=view.map.latLngToContainerPoint(['+p.latitude+','+p.longitude+']),r=document.getElementById("missionMap").getBoundingClientRect();return {x:r.left+point.x,y:r.top+point.y};})()');
       for(const type of ['mousePressed','mouseReleased'])await send('Input.dispatchMouseEvent',{type,...target,button:'left',clickCount:1});
     };
+    const dragPin=async(selector,dx,dy,{touch=false,cancel=false,beforeDrop}={})=>{
+      const start=await evaluate('(()=>{const r=document.querySelector('+JSON.stringify(selector)+').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2};})()');
+      if(touch)await send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{...start,id:1}]});
+      else{await send('Input.dispatchMouseEvent',{type:'mouseMoved',...start});await send('Input.dispatchMouseEvent',{type:'mousePressed',...start,button:'left',buttons:1,clickCount:1});}
+      for(let n=1;n<=8;n++){
+        const point={x:start.x+dx*n/8,y:start.y+dy*n/8};
+        if(touch)await send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{...point,id:1}]});
+        else await send('Input.dispatchMouseEvent',{type:'mouseMoved',...point,button:'left',buttons:1});
+        await wait(20);
+      }
+      if(beforeDrop)await beforeDrop();
+      if(cancel){await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});}
+      if(touch)await send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+      else await send('Input.dispatchMouseEvent',{type:'mouseReleased',x:start.x+dx,y:start.y+dy,button:'left',buttons:0,clickCount:1});
+      await wait(60);
+    };
     await send('Runtime.enable');await send('Page.enable');await send('Network.enable');await send('Network.setBlockedURLs',{urls:['https://*']});
     await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
     await send('Page.navigate',{url:base+'/#missions'});await until('window.boatMonitor&&BoatAuth.ready&&window.BoatMissions');
@@ -199,6 +215,48 @@ async function main(){
     await evaluate('(()=>{const input=document.querySelector(".mission-curve-coordinates input");input.value='+JSON.stringify(String(adjustedLatitude))+';input.dispatchEvent(new Event("change"));})()');
     assert.equal(await evaluate('BoatMissions.route.segments[0].control.latitude'),adjustedLatitude,'Coordinates still edit the live route after saving or changing its speed');
     assert.equal(await evaluate('BoatMissions.dirty'),true);await evaluate('document.getElementById("missionSave").click()');await until('!BoatMissions.busy&&!BoatMissions.dirty');savedCurve=new MissionStore({env:f.env}).get('boat-01',curveId);assert.equal(savedCurve.segments[0].control.latitude,adjustedLatitude);
+    // 真实鼠标拖动只在松手时改草稿；跨过一轮状态轮询也不能拆除正在拖动的标记。
+    await evaluate('document.getElementById("missionMap").scrollIntoView({block:"center",behavior:"instant"});BoatMissions.fit()');await wait(150);
+    const beforeDragging=savedCurve.points,controlBeforeDragging=savedCurve.segments[0].control,commandsBeforeDragging=f.commands().length;
+    await dragPin('.mission-pin span[data-kind=via]',12,-8,{beforeDrop:async()=>{
+      assert.equal(await evaluate('!!BoatMissions.drag'),true);await evaluate('window.__dragNative=BoatMissions.drag.marker.native;void 0');
+      await wait(1150);assert.equal(await evaluate('BoatMissions.drag?.marker.native===window.__dragNative'),true,'Polling retains the actual marker throughout a long drag');
+      assert.equal(await evaluate('document.getElementById("missionSave").disabled&&document.getElementById("missionStart").disabled'),true);
+      assert.deepEqual(await evaluate('BoatMissions.route.points'),beforeDragging,'Moving previews without modifying the saved draft until release');
+      assert.ok(N.distance(await evaluate('BoatMissions.map.lastTrackLines[0].points.at(-2)'),beforeDragging[1])>1,'Actual route preview follows the moving waypoint');
+      await shot('missions-waypoint-dragging');
+    }});
+    const movedPoints=await evaluate('BoatMissions.route.points');assert.equal(movedPoints.length,3,'Drag release never adds a waypoint');
+    assert.ok(N.distance(movedPoints[1],beforeDragging[1])>1);assert.deepEqual(movedPoints[0],beforeDragging[0]);assert.deepEqual(movedPoints[2],beforeDragging[2]);
+    assert.deepEqual(await evaluate('BoatMissions.route.segments[0].control'),controlBeforeDragging,'Moving an endpoint retains the explicit curve control coordinate');
+    assert.equal(await evaluate('BoatMissions.dirty&&!BoatMissions.drag&&document.getElementById("missionStart").disabled'),true);
+    assert.deepEqual(new MissionStore({env:f.env}).get('boat-01',curveId).points,beforeDragging,'Drag cannot silently save or execute');
+    await dragPin('.mission-pin span[data-kind=start]',15,6,{cancel:true});assert.deepEqual(await evaluate('BoatMissions.route.points'),movedPoints,'Escape discards only the current preview, retaining earlier draft changes');
+    await evaluate('if(!BoatMissions.editing)document.getElementById("missionEdit").click()');
+    await dragPin('.mission-curve-pin span',-8,-6);assert.ok(N.distance(await evaluate('BoatMissions.route.segments[0].control'),controlBeforeDragging)>1);
+    assert.equal(await evaluate('BoatMissions.curveEditing'),-1,'A drag cannot also activate click-to-pick a curve point');
+    await evaluate('document.getElementById("missionSave").click()');await until('!BoatMissions.busy&&!BoatMissions.dirty');savedCurve=new MissionStore({env:f.env}).get('boat-01',curveId);
+    // 松手提交后继续拖动使用新草稿对象；切船时取消预览，不能把旧坐标写到另一艘船。
+    await dragPin('.mission-pin span[data-kind=via]',-10,6,{beforeDrop:async()=>{
+      await evaluate('boatMonitor.selectBoat("boat-02",false)');await until('BoatMissions.deviceId==="boat-02"&&!BoatMissions.drag');
+    }});
+    await evaluate('boatMonitor.selectBoat("boat-01",false)');await until('BoatMissions.deviceId==="boat-01"&&BoatMissions.routes.some(r=>r.id==="'+curveId+'")');
+    assert.deepEqual(await evaluate('BoatMissions.route.points'),savedCurve.points);assert.equal(await evaluate('BoatMissions.dirty'),false);
+    await evaluate('BoatMissions.map.switchProvider("arcgis")');await until('BoatMissions.map.provider==="arcgis"&&!BoatMissions.map.switching');
+    await send('Emulation.setDeviceMetricsOverride',{width:375,height:812,deviceScaleFactor:1,mobile:true});await send('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
+    // Leaflet 在加载时探测触屏能力，按真实手机首次进入的方式重新加载页面。
+    await send('Page.reload');await until('window.BoatMissions?.routes.some(r=>r.id==="'+curveId+'")&&BoatMissions.map?.ready');await evaluate('BoatMissions.load("'+curveId+'")');
+    assert.equal(await evaluate('L.Browser.touch&&navigator.maxTouchPoints>0'),true);
+    await evaluate('document.getElementById("missionMap").scrollIntoView({block:"center",behavior:"instant"});BoatMissions.fit()');await wait(200);
+    // 触摸移动超过浏览器自身的手势启动距离，再检查真实拖动状态。
+    await dragPin('.mission-pin span[data-kind=end]',-36,24,{touch:true,beforeDrop:async()=>assert.equal(await evaluate('!!BoatMissions.drag'),true,'Touch drags the marker on the satellite map')});
+    assert.ok(N.distance(await evaluate('BoatMissions.route.points.at(-1)'),savedCurve.points.at(-1))>1);assert.equal(await evaluate('BoatMissions.route.points.length'),3);await shot('missions-waypoint-touch-375');
+    await send('Emulation.setTouchEmulationEnabled',{enabled:false});await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
+    await evaluate('document.getElementById("missionSave").click()');await until('!BoatMissions.busy&&!BoatMissions.dirty');savedCurve=new MissionStore({env:f.env}).get('boat-01',curveId);
+    await send('Page.reload');await until('window.BoatMissions?.routes.some(r=>r.id==="'+curveId+'")&&BoatMissions.map?.ready');
+    await evaluate('BoatMissions.load("'+curveId+'")');assert.deepEqual(await evaluate('BoatMissions.route.points'),savedCurve.points);assert.deepEqual(await evaluate('BoatMissions.route.segments'),savedCurve.segments);
+    assert.equal(f.commands().length,commandsBeforeDragging,'All planning drag operations stay separate from vessel control');
+    console.log('PASS: mouse/touch waypoint and curve dragging, live preview across polling, Escape, vessel switch, satellite map and explicit save/reload.');
     await evaluate('document.querySelectorAll(".mission-point-tools")[1].querySelectorAll("button")[1].click()');
     assert.equal(await evaluate('BoatMissions.route.segments===undefined'),true,'Reordered endpoints do not inherit an unrelated curve');
     await evaluate('BoatMissions.load("'+curveId+'");document.querySelectorAll(".mission-point-tools")[2].lastElementChild.click()');
@@ -214,6 +272,8 @@ async function main(){
     await evaluate('document.getElementById("missionMap").scrollIntoView({block:"center",behavior:"instant"});BoatMissions.fit()');await wait(120);await shot('missions-curve-map');
     f.feed('boat-01',{...ORIGIN,heading:0});await evaluate('document.getElementById("missionStart").click()');await until('BoatMissions.run()?.status==="running"&&BoatMissions.run()?.targetIndex===1');
     assert.equal(await evaluate('document.querySelector("[data-segment-index]").disabled'),true,'Running route shape is locked');
+    await until('[...document.querySelectorAll("#missionMap .mission-pin")].every(n=>n.dataset.draggable==="false")');
+    await dragPin('.mission-pin span[data-kind=via]',12,0);assert.deepEqual(await evaluate('BoatMissions.route.points'),savedCurve.points,'Running waypoint dragging cannot change the route');
     await evaluate('BoatWorkspace.navigate("navigation",{focus:false})');await until('boatMonitor.map._lineOverlays.get("mission")?.lines[0]?.points.length>3');
     const displayedCurve=await evaluate('boatMonitor.map._lineOverlays.get("mission").lines[0].points'),expectedCurve=require('../public/utils/missionPath').compile(savedCurve).points;
     assert.equal(displayedCurve.length,expectedCurve.length);assert.ok(displayedCurve.every((p,i)=>N.distance(p,expectedCurve[i])<.00001),'Monitoring and driving use the same actual curved route within cross-runtime floating point precision');

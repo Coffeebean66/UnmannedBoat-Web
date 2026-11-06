@@ -5,7 +5,7 @@
   const labels={preparing:'读取参数',acquiring:'等待接管',running:'执行中',stopping:'正在停止',paused:'已暂停',completed:'已完成',stopped:'已停止',failed:'异常停止'};
   class BoatMissionPanel {
     constructor(){
-      this.deviceId='';this.routes=[];this.runs=[];this.home=null;this.route=this.blank();this.dirty=false;this.editing=false;this.curveEditing=-1;this.busy=false;this.drafts=new Map();this.stops=new Set();this.activeRows=new Map();this.markers=[];this.position=null;this.generation=0;
+      this.deviceId='';this.routes=[];this.runs=[];this.home=null;this.route=this.blank();this.dirty=false;this.editing=false;this.curveEditing=-1;this.drag=null;this.busy=false;this.drafts=new Map();this.stops=new Set();this.activeRows=new Map();this.markers=[];this.position=null;this.generation=0;
       for(const id of ['missionName','missionSpeed','missionRadius','missionLoopEnabled','missionLoopCount'])$(id).addEventListener('input',()=>{this.readForm();this.dirty=true;this.render();this.draw();});
       $('missionRouteSelect').addEventListener('change',()=>this.load($('missionRouteSelect').value));
       $('missionNew').onclick=()=>{this.route=this.blank();this.curveEditing=-1;this.dirty=false;this.drafts.set(this.deviceId,{route:clone(this.route),dirty:false});this.fillForm();this.renderPoints();this.render();this.draw();};
@@ -23,12 +23,15 @@
       const stop=()=>{const run=this.run();if(run)this.stop(run).catch(error=>this.notice(error.message,true));};
       $('missionStop').onclick=stop;$('driverMissionStop').onclick=stop;
       window.addEventListener('keydown',event=>{
+        if(event.code==='Escape'&&this.drag){event.preventDefault();this.cancelMarkerDrag();return;}
         if(event.code==='Escape'&&this.curveEditing>=0&&window.BoatWorkspace?.current==='missions'){event.preventDefault();this.curveEditing=-1;this.render();this.draw();return;}
         if(event.code!=='Space'||event.repeat||!this.admin||!this.run()?.active||!['missions','driving'].includes(window.BoatWorkspace?.current)||event.target.closest?.('input,select,textarea,button,[contenteditable="true"]'))return;
         event.preventDefault();stop();
       });
       window.addEventListener('boat-selection-change',event=>this.select(event.detail?.selectedId||''));
-      window.addEventListener('boat-view-change',event=>{if(event.detail?.view==='missions')this.initializeMap();});
+      window.addEventListener('boat-view-change',event=>{if(event.detail?.view==='missions')this.initializeMap();else this.cancelMarkerDrag();});
+      window.addEventListener('blur',()=>this.cancelMarkerDrag());
+      document.addEventListener('visibilitychange',()=>{if(document.hidden)this.cancelMarkerDrag();});
       window.addEventListener('boat-theme-change',()=>this.map?.setTheme(document.documentElement.dataset.theme));
       window.BoatAuth?.addEventListener('change',()=>{
         const key=String(BoatAuth.generation);
@@ -158,15 +161,55 @@
     }
     changed(){this.dirty=true;this.renderPoints();this.render();this.draw();}
     canEdit(){const run=this.run();return this.admin&&!!this.deviceId&&!this.busy&&!(run?.active&&run.routeId===this.route.id);}
-    segments(){return this.route.points.slice(1).map((_,i)=>this.route.segments?.[i]||{type:'line'});}
+    segments(route=this.route){return route.points.slice(1).map((_,i)=>route.segments?.[i]||{type:'line'});}
     setSegments(segments){if(segments.some(s=>s.type==='curve'))this.route.segments=segments;else delete this.route.segments;}
-    geometry(){
-      const key=JSON.stringify([this.route.points,this.route.segments]);
+    geometry(route=this.route){
+      const key=JSON.stringify([route.points,route.segments]);
       if(key!==this.geometryKey){
         this.geometryKey=key;this.geometryError='';
-        try{this.path=BoatModules.missionPath.compile(this.route);}catch(error){this.geometryError=error.message;this.path={points:[],segments:[],lengthM:0};}
+        try{this.path=BoatModules.missionPath.compile(route);}catch(error){this.geometryError=error.message;this.path={points:[],segments:[],lengthM:0};}
       }
       return this.path;
+    }
+    canDrag(){return this.canEdit()&&this.map?.ready&&!this.map.switching&&this.curveEditing<0&&window.BoatWorkspace?.current==='missions';}
+    dragValid(drag){return !!drag&&this.drag===drag&&drag.route===this.route&&drag.generation===this.generation&&this.canDrag();}
+    dragPoint(p){return p&&Number.isFinite(p.latitude)&&Number.isFinite(p.longitude)&&Math.abs(p.latitude)<=85&&Math.abs(p.longitude)<=180?{latitude:Number(p.latitude.toFixed(7)),longitude:Number(p.longitude.toFixed(7))}:null;}
+    markerDragOptions(kind,index){
+      const route=this.route,generation=this.generation;let session;
+      return {draggable:this.canDrag(),
+        onDragStart:(_point,marker)=>{
+          if(!this.canDrag()||this.drag||route!==this.route||generation!==this.generation)return false;
+          session=this.drag={kind,index,route,generation,preview:clone(route),marker};
+          marker.getElement()?.classList.add('mission-dragging');
+          this.notice('正在拖动'+(kind==='point'?'航点 '+(index+1):'航段 '+(index+1)+' 的弯点')+'，松手更新草稿，Esc 取消。');this.render();return true;
+        },
+        onDrag:point=>{
+          if(!session)return;
+          if(!this.dragValid(session))return this.cancelMarkerDrag(session);
+          const next=this.dragPoint(point);if(!next)return;
+          Object.assign(kind==='point'?session.preview.points[index]:session.preview.segments[index].control,next);
+          // 只预览路线，保持正在拖动的原生标记；轮询不会拆除它。
+          if(!this.dragFrame)this.dragFrame=requestAnimationFrame(()=>{this.dragFrame=0;if(this.dragValid(session))this.drawRouteLines(session.preview);});
+        },
+        onDragEnd:point=>{
+          if(!session)return;
+          if(!this.dragValid(session))return this.cancelMarkerDrag(session);
+          const next=this.dragPoint(point),target=kind==='point'?this.route.points[index]:this.route.segments[index].control;
+          if(!next){this.cancelMarkerDrag(session);return this.notice('拖动位置超出有效经纬度范围，已恢复原位置。',true);}
+          const changed=next.latitude!==target.latitude||next.longitude!==target.longitude;
+          this.endMarkerDrag();Object.assign(target,next);
+          if(changed){this.changed();this.notice('位置已更新，请核对路线后点击“保存到服务器”。');}else{this.render();this.draw();}
+        },
+        onDragCancel:()=>{if(session)this.cancelMarkerDrag(session);}
+      };
+    }
+    endMarkerDrag(){
+      if(this.dragFrame)cancelAnimationFrame(this.dragFrame);this.dragFrame=0;
+      this.drag?.marker.getElement()?.classList.remove('mission-dragging');this.drag=null;this.drawKey='';this.ignoreMapClickUntil=Date.now()+350;
+    }
+    cancelMarkerDrag(session=this.drag){
+      if(!session||session!==this.drag)return;
+      this.endMarkerDrag();this.render();this.draw();this.notice('已取消拖动，保留原位置。');
     }
     selectCurve(index){
       if(!this.canEdit()||this.route.segments?.[index]?.type!=='curve')return;
@@ -233,7 +276,7 @@
       });
     }
     render(){
-      const run=this.run(),active=!!run?.active,locked=this.busy||!this.admin||!this.deviceId,routeLocked=active&&run.routeId===this.route.id;
+      const run=this.run(),active=!!run?.active,locked=this.busy||!!this.drag||!this.admin||!this.deviceId,routeLocked=active&&run.routeId===this.route.id;
       $('missionBoatName').textContent=this.deviceId||'请选择无人船';
       const select=$('missionRouteSelect'),signature=JSON.stringify(this.routes.map(r=>[r.id,r.revision,r.name]));
       if(signature!==this.routeSignature){this.routeSignature=signature;select.replaceChildren(new Option('新航线',''),...this.routes.map(r=>new Option(r.name,r.id)));}
@@ -301,40 +344,46 @@
     }
     async initializeMap(){
       if(window.BoatWorkspace?.canAccessView&&!BoatWorkspace.canAccessView('missions'))return;
-      if(this.map){this.map.invalidateSize();return;}
+      if(this.map){this.map.invalidateSize();this.draw();return;}
       this.map=new BoatMapView('missionMap');
       this.map.on('click',p=>{
-        if(!this.editing||!this.canEdit())return;
+        if(!this.editing||!this.canEdit()||this.drag||Date.now()<this.ignoreMapClickUntil)return;
         if(this.curveEditing<0)return this.addPoint(p);
         this.placeCurveControl(p);
       });
       this.map.on('status',s=>{$('missionMapStatus').textContent=s.message;});
       this.map.on('providerchange',()=>this.draw());
+      this.map.on('switching',switching=>{if(switching)this.cancelMarkerDrag();this.draw();});
       await this.map.initialize();this.draw();this.fit();
     }
     draw(){
       if(!this.map?.ready)return;
+      if(this.drag&&!this.dragValid(this.drag)){this.cancelMarkerDrag();return;}
       const points=this.route.points,run=this.run(),current=run?.active&&run.routeId===this.route.id&&!this.dirty?run.targetIndex:-1;
-      const key=JSON.stringify([points,this.route.segments,current,this.route.loopEnabled,this.map.provider,this.editing,this.curveEditing]);
-      if(key!==this.drawKey){
-        this.drawKey=key;for(const m of this.markers)m.remove();this.markers=[];
-        const lines=points.length>1?[{points:this.geometry().points,color:'#467dff',width:3}]:[];
+      const key=JSON.stringify([points,this.route.segments,current,this.route.loopEnabled,this.map.provider,this.editing,this.curveEditing,this.canDrag(),this.generation]);
+      if(this.drag)this.drawRouteLines(this.drag.preview);
+      else if(key!==this.drawKey||this.markerRoute!==this.route){
+        this.drawKey=key;this.markerRoute=this.route;for(const m of this.markers)m.remove();this.markers=[];
         if(this.editing)this.segments().forEach((segment,i)=>{
           if(segment.type!=='curve')return;
-          lines.push({points:[points[i],segment.control,points[i+1]],color:'#a983e8',width:1,dashed:true});
-          const marker=this.map.createMarker(segment.control,{className:'mission-curve-pin',html:'<span data-selected="'+(i===this.curveEditing)+'">◇</span>',iconSize:[26,26],iconAnchor:[13,13],bubble:false,interactive:this.curveEditing<0,title:'航段 '+(i+1)+' 弯曲控制点，点击后在地图选择新位置',onClick:this.curveEditing<0?()=>this.selectCurve(i):undefined});if(marker)this.markers.push(marker);
+          const marker=this.map.createMarker(segment.control,{className:'mission-curve-pin',html:'<span data-selected="'+(i===this.curveEditing)+'">◇</span>',iconSize:[26,26],iconAnchor:[13,13],bubble:false,interactive:this.curveEditing<0,title:'航段 '+(i+1)+' 弯曲控制点，可拖动或点击后选点',...this.markerDragOptions('curve',i),onClick:this.curveEditing<0?()=>this.selectCurve(i):undefined});if(marker)this.markers.push(marker);
         });
-        if(this.route.loopEnabled&&points.length>1)lines.push({points:[points.at(-1),points[0]],color:'#d5952b',width:3});
-        this.map.setTrackLines(lines);
+        this.drawRouteLines();
         points.forEach((p,i)=>{
           const kind=i===0?'start':i===points.length-1?'end':'via';
-          const m=this.map.createMarker(p,{className:'mission-pin',html:'<span data-kind="'+kind+'" data-current="'+(i===current)+'">'+(i+1)+'</span>',iconSize:[28,28],iconAnchor:[14,14],bubble:false,interactive:true,title:'航点 '+(i+1),onClick:()=>this.curveEditing>=0?this.placeCurveControl(p):this.map.setView(p,Math.max(this.map.getZoom(),17))});if(m)this.markers.push(m);
+          const m=this.map.createMarker(p,{className:'mission-pin',html:'<span data-kind="'+kind+'" data-current="'+(i===current)+'">'+(i+1)+'</span>',iconSize:[28,28],iconAnchor:[14,14],bubble:false,interactive:true,title:'航点 '+(i+1)+'，拖动调整位置',...this.markerDragOptions('point',i),onClick:()=>this.curveEditing>=0?this.placeCurveControl(p):this.map.setView(p,Math.max(this.map.getZoom(),17))});if(m)this.markers.push(m);
         });
       }
       if(this.position){
         if(this.boatMarker)this.boatMarker.setPosition(this.position);
         else this.boatMarker=this.map.createMarker(this.position,{className:'mission-boat-pin',html:'<span>▲</span>',iconSize:[26,26],iconAnchor:[13,13],interactive:false,title:'当前实时船位'});
       }else{this.boatMarker?.remove();this.boatMarker=null;}
+    }
+    drawRouteLines(route=this.route){
+      const points=route.points,lines=points.length>1?[{points:this.geometry(route).points,color:'#467dff',width:3}]:[];
+      if(this.editing)this.segments(route).forEach((segment,i)=>{if(segment.type==='curve')lines.push({points:[points[i],segment.control,points[i+1]],color:'#a983e8',width:1,dashed:true});});
+      if(route.loopEnabled&&points.length>1)lines.push({points:[points.at(-1),points[0]],color:'#d5952b',width:3});
+      this.map.setTrackLines(lines);
     }
     fit(){if(this.route.points.length)this.map?.fitLocations(this.geometry().points,{maxZoom:18,padding:[35,35]});else if(this.position)this.map?.setView(this.position,17);}
   }

@@ -479,7 +479,8 @@
       const size = options.iconSize || [30, 30], anchor = options.iconAnchor || [15, 15];
       const interactive = options.interactive !== false || typeof options.onClick === 'function';
       const view = this;
-      let native, nativeProvider, attached = false, removed = false, opacity = 1;
+      let native, nativeProvider, handlers, attached = false, removed = false, opacity = 1;
+      let draggable = interactive && options.draggable === true, dragging = false, suppressClickUntil = 0;
       const wrapper = {
         native: null, position: raw, mapPosition: null,
         _mount() {
@@ -493,7 +494,7 @@
             const offset = scope.AMap.Pixel ? new scope.AMap.Pixel(x, y) : { x, y };
             native = new scope.AMap.Marker({
               position: [point.longitude, point.latitude], content: element, offset, anchor: 'top-left',
-              zIndex: 120 + (options.zIndexOffset || 0), clickable: interactive, bubble: options.bubble !== false, title: options.title || ''
+              zIndex: 120 + (options.zIndexOffset || 0), clickable: interactive, bubble: options.bubble !== false, title: options.title || '', draggable
             });
             this.native = native;
             native.setMap(view.map);
@@ -501,13 +502,39 @@
             native = scope.L.marker([point.latitude, point.longitude], {
               icon: scope.L.divIcon({ className: options.className || '', html: element.innerHTML, iconSize: size, iconAnchor: anchor }),
               interactive, keyboard: interactive, bubblingMouseEvents:options.bubble!==false, title: options.title || '', alt: options.ariaLabel || options.title || '',
-              zIndexOffset: options.zIndexOffset || 0
+              zIndexOffset: options.zIndexOffset || 0, draggable
             });
             this.native = native;
             native.addTo(view.map);
           }
-          if (typeof options.onClick === 'function' && typeof native.on === 'function') native.on('click', options.onClick);
           attached = true;
+          // 对外只回传 WGS84；切换底图后，旧原生标记的迟到事件不能修改新标记。
+          const mounted = native, current = () => attached && !removed && native === mounted && view.ready;
+          const dragPosition = event => view.unproject(nativeProvider === 'amap' ?
+            event?.lnglat || mounted.getPosition?.() : event?.latlng || mounted.getLatLng?.());
+          const remember = point => { if (point) { this.position = point; this.mapPosition = view.project(point); } };
+          handlers = {
+            click: event => { if (current() && !dragging && Date.now() >= suppressClickUntil) options.onClick?.(event); },
+            dragstart: event => {
+              if (!current() || !draggable || view.switching) return;
+              dragging = true;suppressClickUntil = Date.now() + 350;
+              if (options.onDragStart?.(dragPosition(event) || this.position, this) === false) this.setDraggable(false);
+            },
+            drag: event => {
+              if (!current() || !draggable || !dragging) return;
+              const point = dragPosition(event);remember(point);
+              if (point) options.onDrag?.(point, this);
+            },
+            dragend: event => {
+              if (!current() || !draggable || !dragging) return;
+              dragging = false;suppressClickUntil = Date.now() + 350;
+              const point = dragPosition(event);remember(point);options.onDragEnd?.(point, this);
+            }
+          };
+          for (const [name, listener] of Object.entries(handlers)) {
+            if (name !== 'click' || typeof options.onClick === 'function') native.on?.(name, listener);
+          }
+          this.setDraggable(draggable);
           if (typeof native.setOpacity === 'function' && element.style.opacity) element.style.opacity = '';
           if (opacity !== 1) this.setOpacity(opacity);
         },
@@ -515,9 +542,11 @@
           if (!native) return;
           const current = this.getElement();
           if (typeof current?.innerHTML === 'string') element.innerHTML = current.innerHTML;
-          if (typeof options.onClick === 'function' && typeof native.off === 'function') native.off('click', options.onClick);
+          const cancelled = dragging;dragging = false;attached = false;
+          for (const [name, listener] of Object.entries(handlers || {})) native.off?.(name, listener);
+          handlers = null;
           if (nativeProvider === 'amap') native.setMap(null); else native.remove();
-          attached = false;
+          if (cancelled) options.onDragCancel?.(this);
         },
         setPosition(value) {
           const next = fix(value);
@@ -532,6 +561,18 @@
         },
         setLatLng(value) { return this.setPosition(value); },
         getLatLng() { return { lat: this.position.latitude, lng: this.position.longitude }; },
+        setDraggable(value) {
+          draggable = interactive && value === true;
+          const cancelled = dragging && !draggable;
+          if (cancelled) { dragging = false;suppressClickUntil = Date.now() + 350; }
+          if (attached && !removed) {
+            if (nativeProvider === 'amap') native.setDraggable?.(draggable);
+            else if (draggable) native.dragging?.enable(); else native.dragging?.disable();
+            this.getElement()?.setAttribute?.('data-draggable', String(draggable));
+          }
+          if (cancelled) options.onDragCancel?.(this);
+          return this;
+        },
         setOpacity(value) {
           opacity = value;
           if (!removed && attached) {

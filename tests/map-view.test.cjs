@@ -8,6 +8,57 @@ const plain = value => JSON.parse(JSON.stringify(value));
 const configured = { provider: 'amap', version: '2.0', enabled: true, configured: true,
   key: 'key with+characters', securityJsCode: 'test-security-code' };
 
+test('可拖动标记统一回传WGS84，拖动后抑制点击且普通标记默认不可拖动', async () => {
+  for (const provider of ['amap', 'osm', 'arcgis', 'tianditu']) {
+    const f = fixture({ ...configured, tianditu: { configured: true, key: 'a'.repeat(32) } }, { 'boat.map.provider': provider });
+    if (provider === 'amap') await readyAmap(f); else await f.view.initialize();
+    const calls = [];let clicks = 0;
+    const marker = f.view.createMarker([31, 121], { draggable: true, onClick() { clicks++; },
+      onDragStart(p) { calls.push(['start', plain(p)]); }, onDrag(p) { calls.push(['move', plain(p)]); }, onDragEnd(p) { calls.push(['end', plain(p)]); } });
+    const native = marker.native;
+    assert.equal(native.options.draggable, true);assert.equal(native.draggable, true);
+    assert.equal(marker.getElement().attributes['data-draggable'], 'true');
+    native.emit('click');assert.equal(clicks, 1);
+    const event = (lat, lng) => provider === 'amap' ? { lnglat: { lat: lat + .002, lng: lng + .004 } } : { latlng: { lat, lng } };
+    native.emit('dragstart', event(31, 121));native.emit('drag', event(31.001, 121.002));native.emit('dragend', event(31.003, 121.004));native.emit('click');
+    assert.deepEqual(calls.map(call => call[0]), ['start', 'move', 'end']);assert.equal(clicks, 1, 'Drag release cannot become a marker click');
+    assert.ok(Math.abs(marker.position.latitude - 31.003) < 1e-10);assert.ok(Math.abs(marker.position.longitude - 121.004) < 1e-10);
+    assert.ok(Math.abs(calls[1][1].latitude - 31.001) < 1e-10);
+    assert.equal(f.view.createMarker([31, 121]).native.options.draggable, false);
+    assert.equal(f.view.createMarker([31, 121], { interactive: false, draggable: true }).native.options.draggable, false);
+    f.view.destroy();
+  }
+});
+
+test('拖动锁定、移除和底图重建清理事件，旧标记迟到事件不能覆盖新位置', async () => {
+  const f = fixture();await readyAmap(f);const calls = [];
+  const marker = f.view.createMarker([31, 121], { draggable: true,
+    onDragStart() { calls.push('start'); }, onDrag() { calls.push('move'); }, onDragEnd() { calls.push('end'); }, onDragCancel() { calls.push('cancel'); } });
+  const old = marker.native, lateMove = [...old.events.get('drag')][0], lateEnd = [...old.events.get('dragend')][0];
+  old.emit('dragstart');marker.setDraggable(false);old.emit('dragend', { lnglat: { lat: 35, lng: 125 } });
+  assert.deepEqual(calls, ['start', 'cancel']);assert.deepEqual(plain(marker.position), { latitude: 31, longitude: 121 });
+  marker.setDraggable(true);old.emit('dragstart');
+  await f.view.switchProvider('arcgis');assert.deepEqual(calls, ['start', 'cancel', 'start', 'cancel']);
+  assert.ok([...old.events.values()].every(set => set.size === 0));assert.equal(marker.native.draggable, true);
+  lateMove({ lnglat: { lat: 40, lng: 130 } });lateEnd({ lnglat: { lat: 40, lng: 130 } });
+  assert.deepEqual(plain(marker.position), { latitude: 31, longitude: 121 });
+  marker.native.setLatLng([32, 122]);marker.native.emit('dragstart');marker.native.emit('dragend');
+  assert.deepEqual(plain(marker.position), { latitude: 32, longitude: 122 }, 'Native position is used when the SDK end event has no coordinate');
+  const native = marker.native, late = [...native.events.get('dragend')][0];native.emit('dragstart');marker.remove();
+  late({ latlng: { lat: 34, lng: 124 } });assert.deepEqual(plain(marker.position), { latitude: 32, longitude: 122 });
+  assert.equal(calls.at(-1), 'cancel');assert.ok([...native.events.values()].every(set => set.size === 0));f.view.destroy();
+});
+
+test('未授权的拖动启动可被拒绝，非法坐标不进入标记状态', async () => {
+  const f = fixture({ configured: false });await f.view.initialize();let ends = 0;
+  const rejected = f.view.createMarker([31, 121], { draggable: true, onDragStart() { return false; }, onDragEnd() { ends++; } });
+  rejected.native.emit('dragstart');rejected.native.emit('dragend', { latlng: { lat: 32, lng: 122 } });
+  assert.equal(rejected.native.draggable, false);assert.equal(ends, 0);assert.deepEqual(plain(rejected.position), { latitude: 31, longitude: 121 });
+  const marker = f.view.createMarker([31, 121], { draggable: true, onDragEnd(p) { assert.equal(p, null);ends++; } });
+  marker.native.emit('dragstart');marker.native.emit('drag', { latlng: { lat: NaN, lng: 122 } });marker.native.emit('dragend', { latlng: { lat: 91, lng: 122 } });
+  assert.equal(ends, 1);assert.deepEqual(plain(marker.position), { latitude: 31, longitude: 121 });f.view.destroy();
+});
+
 function fixture(config = configured, preferences = {}, behavior = {}) {
   const listeners = new Map(), timers = new Map();
   const documentListeners = new Map();
@@ -97,6 +148,13 @@ function fixture(config = configured, preferences = {}, behavior = {}) {
       remove() { this.removed = true; }
     };
   }
+  function markerEvents(marker) {
+    marker.events = new Map();
+    marker.on = (name, fn) => { if (!marker.events.has(name)) marker.events.set(name, new Set());marker.events.get(name).add(fn);return marker; };
+    marker.off = (name, fn) => { marker.events.get(name)?.delete(fn);return marker; };
+    marker.emit = (name, event) => { for (const fn of [...(marker.events.get(name) || [])]) fn(event); };
+    return marker;
+  }
   const AMap = {
     Map: function (_container, options) { const map = mapInstance(options, 'amap'); maps.push(map); return map; },
     Pixel: function (x, y) { this.x = x; this.y = y; },
@@ -104,7 +162,10 @@ function fixture(config = configured, preferences = {}, behavior = {}) {
       this.options = options; this.position = options.position;
       this.setMap = map => { this.map = map; };
       this.setPosition = position => { this.position = position; };
+      this.getPosition = () => ({ lng: this.position[0], lat: this.position[1] });
+      this.setDraggable = value => { this.draggable = value; };
       this.getContent = () => options.content;
+      markerEvents(this);
       markers.push(this);
     },
     Polyline: function (options) {
@@ -130,9 +191,12 @@ function fixture(config = configured, preferences = {}, behavior = {}) {
       const marker = { position, options,
         addTo(map) { this.map = map; return this; },
         setLatLng(position) { this.position = position; return this; },
+        getLatLng() { return { lat: this.position[0], lng: this.position[1] }; },
         setOpacity(value) { this.opacity = value; return this; },
         getElement() { return element; },
         remove() { this.removed = true; } };
+      marker.dragging = { enable() { marker.draggable = true; }, disable() { marker.draggable = false; } };
+      markerEvents(marker);
       markers.push(marker);
       return marker;
     },
