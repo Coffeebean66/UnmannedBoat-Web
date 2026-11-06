@@ -27,6 +27,7 @@
   <link rel="stylesheet" href="driver-control.css">
   <link rel="stylesheet" href="mission-panel.css">
   <link rel="stylesheet" href="driver-layout.css">
+  <link rel="stylesheet" href="driver-immersive.css">
   <script defer src="vendor/leaflet/leaflet.js"></script>
   <script defer src="vendor/hls/hls.min.js"></script>
   <script defer src="vendor/mpegts/mpegts.js"></script>
@@ -109,7 +110,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">无人船监测 <span>v1.49.0</span></div>
+      <div class="sidebar-version">无人船监测 <span>v1.50.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -329,9 +330,9 @@
         <article class="driver-navigation-data" aria-label="实时航行数据">
           <div class="driver-panel-heading"><h2><i data-icon="activity"></i>航行仪表</h2><span>实时遥测</span></div>
           <div class="driver-telemetry" aria-label="驾驶实时读数">
-            <dl><div><dt>实际船速</dt><dd><strong id="driverActualSpeed">--</strong><small>m/s</small></dd></div><div><dt>船头航向</dt><dd><strong id="driverActualHeading">--</strong><small>°</small></dd></div><div><dt>目标船速</dt><dd><strong id="driverTargetSpeed">--</strong><small>m/s</small></dd></div><div><dt>公共输出</dt><dd><strong id="driverCommonOutput">--</strong><small>%</small></dd></div></dl>
-            <dl><div><dt>左 / 右转速</dt><dd><strong id="driverMotorRpm">-- / --</strong><small>RPM</small></dd></div><div class="driver-rpm-bars" aria-label="左右电机转速，自动量程"><span>左 <i><b id="driverLeftRpmBar"></b></i></span><span>右 <i><b id="driverRightRpmBar"></b></i></span></div><div><dt>左 / 右电压</dt><dd><strong id="driverMotorVoltage">-- / --</strong><small>V</small></dd></div><div><dt>横滚 / 俯仰</dt><dd><strong id="driverAttitudeAngles">-- / --</strong><small>°</small></dd></div></dl>
-            <dl class="driver-comms-values"><div><dt>定位 / 姿态</dt><dd class="driver-source-status"><span id="driverFixStatus">等待定位</span><span id="driverImuStatus">等待 IMU</span></dd></div><div><dt>云端通道</dt><dd id="driverMqttStatus">等待 MQTT</dd></div><div><dt>传输耗时 · 估算</dt><dd><strong id="driverNetworkDelay">--</strong><small>ms</small></dd></div><div class="driver-thrusters"><span>左推进 <b id="driverLeftPwm">--</b><i><em id="driverLeftOutput"></em></i></span><span>右推进 <b id="driverRightPwm">--</b><i><em id="driverRightOutput"></em></i></span></div></dl>
+            <dl><div><dt>实际航速</dt><dd><strong id="driverActualSpeed">--</strong><small>m/s</small></dd></div><div><dt>真北航向</dt><dd><strong id="driverActualHeading">--</strong><small>°</small></dd></div></dl>
+            <dl><div class="driver-rpm-value"><dt>左 / 右电机</dt><dd><strong id="driverMotorRpm">-- / --</strong><small>RPM</small></dd><div class="driver-rpm-bars" aria-label="左右电机转速，自动量程"><span>左 <i><b id="driverLeftRpmBar"></b></i></span><span>右 <i><b id="driverRightRpmBar"></b></i></span></div></div><div><dt>RTK / IMU</dt><dd class="driver-source-status"><span id="driverFixStatus">等待定位</span><span id="driverImuStatus">等待 IMU</span></dd></div></dl>
+            <dl class="driver-comms-values"><div><dt>通信状态</dt><dd class="driver-network-value"><span id="driverMqttStatus">等待 MQTT</span><span title="STM32 上行与服务器转发耗时之和的估算，不是视频总延迟"><b id="driverNetworkDelay">--</b> ms</span></dd></div><div><dt>驾驶接管</dt><dd id="driverTakeoverStatus" class="driver-takeover-status" data-state="idle">未接管</dd></div></dl>
           </div>
         </article>
         <article class="driver-console" aria-label="驾驶操控控制台">
@@ -370,20 +371,22 @@
         </div>
         <div class="driver-instrument-grid" data-driver-overlay><div class="workspace-slot" data-workspace-slot="driving-sensors"></div></div>
         <aside class="driver-mission-summary" aria-label="当前船只任务状态">
-          <div class="driver-mission-heading"><span><i data-icon="location"></i>自主导航</span><strong id="driverMissionState" data-status="idle">待命</strong></div>
+          <div class="driver-mission-heading"><span><i data-icon="location"></i>导航任务</span><strong id="driverMissionState" data-status="idle">待命</strong></div>
           <p id="driverMissionName">暂无运行中的任务</p>
           <dl><div><dt>目标航点</dt><dd id="driverMissionProgress">--</dd></div><div><dt>距航点</dt><dd id="driverMissionDistance">--</dd></div><div><dt>航行阶段</dt><dd id="driverMissionPhase">--</dd></div><div><dt>循环进度</dt><dd id="driverMissionLoop">--</dd></div></dl>
-          <div class="driver-map-actions"><button id="driverMapCenter" type="button" aria-label="地图居中船位" title="地图居中船位"><i data-icon="target"></i><span>居中</span></button><button id="driverMapFollow" type="button" aria-pressed="true" aria-label="跟随船位" title="跟随船位"><i data-icon="location"></i><span>跟随</span></button><button id="driverMapFocus" type="button" aria-label="放大地图" title="放大地图"><i data-icon="maximize"></i><span>放大</span></button><a href="#missions" data-view-link aria-label="进入航线任务" title="进入航线任务"><i data-icon="map"></i><span>任务</span></a></div>
-          <div class="driver-home-actions"><button id="driverHomeSet" type="button" class="small-button"><i data-icon="target"></i>设置返航点</button><button id="driverReturnHome" type="button" class="small-button" disabled><i data-icon="boat"></i>一键返航</button></div><p id="driverHomeStatus" class="driver-home-status">当前船尚未设置返航点</p>
+          <details id="driverMapOptions" class="driver-map-options"><summary><span>地图与返航工具</span><i data-icon="chevron"></i></summary><div class="driver-map-options-panel"><div class="driver-map-actions"><button id="driverMapCenter" type="button" aria-label="地图居中船位" title="地图居中船位"><i data-icon="target"></i><span>居中</span></button><button id="driverMapFollow" type="button" aria-pressed="true" aria-label="跟随船位" title="跟随船位"><i data-icon="location"></i><span>跟随</span></button><button id="driverMapFocus" type="button" aria-label="放大地图" title="放大地图"><i data-icon="maximize"></i><span>放大</span></button><a href="#missions" data-view-link aria-label="进入航线任务" title="进入航线任务"><i data-icon="map"></i><span>任务</span></a></div><div class="driver-home-actions"><button id="driverHomeSet" type="button" class="small-button"><i data-icon="target"></i>设置返航点</button><button id="driverReturnHome" type="button" class="small-button" disabled><i data-icon="boat"></i>一键返航</button></div><p id="driverHomeStatus" class="driver-home-status">当前船尚未设置返航点</p></div></details>
         </aside>
         <aside id="driverDetailsPanel" class="driver-details-panel" aria-labelledby="driverDetailsTitle" hidden>
           <div class="driver-details-heading"><h3 id="driverDetailsTitle">航行详情</h3><button id="driverDetailsClose" type="button" class="small-button" aria-label="收起航行详情">收起</button></div>
           <div class="driver-position"><div><span>纬度 · WGS84</span><b id="driverLatitude">--</b></div><div><span>经度 · WGS84</span><b id="driverLongitude">--</b></div></div>
           <dl class="driver-secondary-values"><div><dt>实际控制模式</dt><dd id="driverActualMode">--</dd></div><div><dt>键盘推进 / 转向</dt><dd id="driverInput">0% / 0%</dd></div></dl>
+          <dl class="driver-secondary-values"><div><dt>目标航速</dt><dd><b id="driverTargetSpeed">--</b> m/s</dd></div><div><dt>公共输出</dt><dd><b id="driverCommonOutput">--</b> %</dd></div><div><dt>左 / 右电压</dt><dd><b id="driverMotorVoltage">-- / --</b> V</dd></div><div><dt>横滚 / 俯仰</dt><dd><b id="driverAttitudeAngles">-- / --</b> °</dd></div></dl>
+          <div class="driver-thrusters" aria-label="左右推进器实际输出"><span>左推进 <b id="driverLeftPwm">--</b><i><em id="driverLeftOutput"></em></i></span><span>右推进 <b id="driverRightPwm">--</b><i><em id="driverRightOutput"></em></i></span></div>
           <section class="driver-propulsion" aria-label="电控与动力系统"><div class="driver-panel-title"><span><i data-icon="motor"></i>电控与动力</span><a href="#propulsion" data-view-link>完整数据 <i data-icon="arrow"></i></a></div><div class="workspace-slot" data-workspace-slot="driving-motors"></div></section>
           <details id="driverModelPreview" class="driver-model-preview"><summary><span><i data-icon="boat"></i>三维船体预览</span><i data-icon="chevron"></i></summary><div class="workspace-slot" data-workspace-slot="driving-model"></div></details>
         </aside>
         <div id="driverFocusTools" class="driver-focus-tools">
+          <button id="driverImmersiveToggle" type="button" class="small-button driver-immersive-toggle" aria-pressed="false" title="进入沉浸驾驶，Esc 返回后台布局"><i data-icon="maximize"></i><span>沉浸驾驶</span></button><button id="driverSwapMedia" type="button" class="small-button" hidden><i data-icon="map"></i><span>地图主画面</span></button>
           <button id="driverDetailsToggle" type="button" class="small-button" aria-expanded="false" aria-controls="driverDetailsPanel"><i data-icon="activity"></i>航行详情</button>
           <details id="driverDisplayOptions" class="driver-display-options"><summary><i data-icon="layers"></i>显示</summary><div class="driver-display-options-panel"><button id="driverInstrumentToggle" type="button" class="small-button" aria-pressed="false">仪表：隐藏</button><label for="driverOverlayOpacity" title="0% 隐藏 HUD，操控与急停保持可见">HUD 可见度 <output id="driverOverlayOpacityValue" for="driverOverlayOpacity">100%</output></label><input id="driverOverlayOpacity" type="range" min="0" max="100" step="5" value="100" aria-label="驾驶 HUD 可见度，0为隐藏100为完全显示"></div></details>
           <button id="driverLayoutToggle" type="button" class="driver-layout-launch" aria-expanded="false" aria-controls="driverLayoutEditor" title="拖动模块并设置单独透明度">布局编辑</button>

@@ -1,7 +1,7 @@
 /* 只保存显示偏好，不保存船只接管凭据；共享仪表离开驾驶页后恢复原样。 */
 (() => {
   'use strict';
-  // 新控制台单独保存布局，旧驾驶页的位置和透明度不覆盖照片对应的默认排布。
+  // 常规 / 图传主画面 / 地图主画面分别保存位置；急停始终保持完全可见。
   const STORAGE='boat-driver-platform-layout-v1';
   const clamp=(value,min,max)=>Math.max(min,Math.min(max,value));
   const PARTS=[
@@ -17,7 +17,7 @@
     ['details','航行详情','#driverDetailsPanel'],
     ['motors','电机详情','.driver-propulsion',0,true],
     ['model','三维船体','#driverModelPreview',0,true],
-    ['emergency','急停','.driver-emergency-dock',35]
+    ['emergency','急停','.driver-emergency-dock',100]
   ];
   class BoatDriverLayout {
     constructor({document=window.document,onEditingChange=()=>{},onReset=()=>{}}={}) {
@@ -152,10 +152,11 @@
       const entry=this.profile()[part.id]||{},opacity=clamp(entry.opacity??100,part.min,100);
       this.ui.driverLayoutModule.value=part.id;this.ui.driverPartOpacity.min=String(part.min);
       this.ui.driverPartOpacity.value=String(opacity);this.ui.driverPartOpacityValue.textContent=opacity+'%';
+      this.ui.driverPartOpacity.disabled=part.id==='emergency';
       this.ui.driverLayoutFloat.hidden=!part.floating;
       this.ui.driverLayoutFloat.textContent=entry.floating?'收回航行详情':'移出详情，独立显示';
       const main=(part.id==='map'||part.id==='video')&&!this.canMove(part);
-      this.ui.driverLayoutHint.textContent=main?'放大的主画面保持铺满；还原布局或作为小窗时可以拖动。':
+      this.ui.driverLayoutHint.textContent=part.id==='emergency'?'急停始终保持 100% 不透明，可以调整位置，不受 HUD 或布局透明度影响。':main?'放大的主画面保持铺满；还原布局或作为小窗时可以拖动。':
         part.floating&&!entry.floating?'当前位于航行详情，可移出后单独摆放。':
         part.min?'此项最低 '+part.min+'%，保留必要操作的可见度。':'0% 完全隐藏；编辑时仍显示轮廓，便于找回。';
       for(const item of this.parts)item.node.dataset.layoutSelected=String(item===part);

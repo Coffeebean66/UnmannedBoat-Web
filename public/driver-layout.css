@@ -15,6 +15,7 @@
 .driver-layout-grip { display:none; }
 .driving-workspace [data-driver-layout-module] { opacity:var(--driver-part-opacity,1); }
 .driving-workspace .driver-hud { opacity:calc(var(--driver-overlay-opacity,1) * var(--driver-part-opacity,1)); }
+.driving-workspace .driver-emergency-dock { opacity:1!important; visibility:visible!important; pointer-events:auto; }
 .driving-workspace .imu-horizon-panel,.driving-workspace .sensor-compass-panel,.driving-workspace .imu-euler-values { position:relative; }
 .driving-workspace[data-layout-editing="false"] [data-driver-part-hidden="true"],.driving-workspace:not([data-layout-editing]) [data-driver-part-hidden="true"] { visibility:hidden; pointer-events:none; }
 .driving-workspace[data-layout-editing="true"] [data-driver-overlay] { opacity:1; visibility:visible; pointer-events:auto; }

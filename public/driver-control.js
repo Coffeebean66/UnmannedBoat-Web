@@ -11,7 +11,7 @@
       this.nodes=Object.fromEntries(['view-driving','driverBoatName','driverLinkStatus','driverState','driverEnable','driverRelease','driverEmergency','driverTestMode','driverTestNotice','driverTestAck','driverNotice','driverActualSpeed','driverTargetSpeed','driverActualHeading','driverActualMode','driverInput','driverLatitude','driverLongitude','driverFixStatus','driverImuStatus','driverModelPreview','driverMode','driverLimit','driverLimitValue','driverHeading','driverHoldHeading','driverVideoExpand','driverMapExpand','driverOverlayOpacity','driverOverlayOpacityValue','driverFocusTools','driverDetailsPanel','driverDetailsToggle','driverDetailsClose','driverDisplayOptions','driverControlOptions','driverInstrumentToggle'].map(id=>[id,document.getElementById(id)]));
       this.hud=new window.BoatDriverHud({document});
       for(const id of ['driverDeviceSelect','driverOperator','driverConnectionToggle','driverAccount','driverLogout','driverSystemSettings','driverCommonOutput','driverMotorRpm','driverMotorVoltage','driverAttitudeAngles','driverMapLayer','driverMapFollow'])this.nodes[id]=document.getElementById(id);
-      for(const id of ['driverSystemMode','driverTopFix','driverTopPower','driverUtc','driverMqttStatus','driverNetworkDelay','driverLeftRpmBar','driverRightRpmBar','driverLeftPwm','driverRightPwm','driverLeftOutput','driverRightOutput','driverVideoResolution','driverVideoDelay','driverVideoNetwork'])this.nodes[id]=document.getElementById(id);
+      for(const id of ['driverSystemMode','driverTopFix','driverTopPower','driverUtc','driverMqttStatus','driverNetworkDelay','driverLeftRpmBar','driverRightRpmBar','driverLeftPwm','driverRightPwm','driverLeftOutput','driverRightOutput','driverVideoResolution','driverVideoDelay','driverVideoNetwork','driverTakeoverStatus','driverImmersiveToggle','driverSwapMedia','driverMapOptions'])this.nodes[id]=document.getElementById(id);
       const random=new Uint8Array(8);window.crypto.getRandomValues(random);
       this.clientId=Array.from(random,value=>value.toString(16).padStart(2,'0')).join('');
       this.context={deviceId:'',connected:false,authenticated:false,canManage:false,parameterBusy:false};
@@ -73,7 +73,7 @@
       this.listen(this.nodes.driverInstrumentToggle,'click',()=>this.setInstrumentsVisible(this.nodes['view-driving'].dataset.instrumentsHidden==='true'));
       // 收起非必要弹层不改接管租约；点回主画面时也不再遮挡地图和图传。
       this.listen(document,'pointerdown',event=>{
-        for(const id of ['driverDisplayOptions','driverControlOptions'])if(!this.nodes[id].contains(event.target))this.nodes[id].open=false;
+        for(const id of ['driverDisplayOptions','driverControlOptions','driverMapOptions'])if(!this.nodes[id].contains(event.target))this.nodes[id].open=false;
       });
       this.listen(this.nodes.driverHeading,'change',()=>{this.headingValue(true);this.sendInput();});
       this.listen(this.nodes.driverHoldHeading,'click',()=>{
@@ -82,6 +82,9 @@
       });
       this.listen(this.nodes.driverVideoExpand,'click',()=>this.focusMedia('video'));
       this.listen(this.nodes.driverMapExpand,'click',()=>this.focusMedia('map'));
+      // 沉浸入口和主画面交换只改变同一组媒体的排布，不重建播放器或申请接管。
+      this.listen(this.nodes.driverImmersiveToggle,'click',()=>this.setMediaFocus(this.nodes['view-driving'].dataset.focus?'':'video'));
+      this.listen(this.nodes.driverSwapMedia,'click',()=>this.setMediaFocus(this.nodes['view-driving'].dataset.primary==='map'?'video':'map'));
       this.listen(this.nodes.driverModelPreview,'toggle',()=>window.dispatchEvent(new CustomEvent('boat-driver-layout-change')));
       this.listen(document,'keydown',event=>this.keyDown(event));
       this.listen(document,'keyup',event=>this.keyUp(event));
@@ -96,11 +99,12 @@
           this.setMediaFocus('');
           this.setDetailsOpen(false);
           this.nodes.driverDisplayOptions.open=this.nodes.driverControlOptions.open=false;
+          this.nodes.driverMapOptions.open=false;
         }
         this.render();if(event.detail?.view==='driving'){this.lastPoll=0;this.poll();}
       });
       this.listen(window,'boat-selection-change',event=>{
-        if(event.detail?.selectedId!==this.context.deviceId)this.stop('无人船已切换，已停止原船操控');
+        if(event.detail?.selectedId!==this.context.deviceId){this.stop('无人船已切换，已停止原船操控');this.nodes.driverMapOptions.open=false;}
       });
       if(auth)this.listen(auth,'change',()=>{if(!this.admin())this.stop('驾驶权限已失效，已停船并退出操控');this.render();});
       this.layout=new window.BoatDriverLayout({document,onEditingChange:editing=>{
@@ -305,7 +309,7 @@
       if(event.code==='Escape'&&this.layout?.editing){event.preventDefault();this.layout.setEditing(false);return;}
       if(event.code==='Escape'&&this.visible()){
         if(!this.nodes.driverDetailsPanel.hidden){event.preventDefault();this.setDetailsOpen(false,true);return;}
-        for(const id of ['driverDisplayOptions','driverControlOptions'])if(this.nodes[id].open){event.preventDefault();this.nodes[id].open=false;this.nodes[id].querySelector('summary').focus({preventScroll:true});return;}
+        for(const id of ['driverDisplayOptions','driverControlOptions','driverMapOptions'])if(this.nodes[id].open){event.preventDefault();this.nodes[id].open=false;this.nodes[id].querySelector('summary').focus({preventScroll:true});return;}
       }
       if(event.code==='Escape'&&this.nodes['view-driving'].hasAttribute('data-focus')){event.preventDefault();this.setMediaFocus('');return;}
       if(!this.active||!this.permitted())return;
@@ -360,6 +364,12 @@
         this.nodes[id].title=label;this.nodes[id].setAttribute('aria-label',label);
       }
       this.nodes.driverFocusTools.hidden=false;
+      this.nodes.driverImmersiveToggle.setAttribute('aria-pressed',String(!!name));
+      this.nodes.driverImmersiveToggle.querySelector('span').textContent=name?'退出沉浸':'沉浸驾驶';
+      this.nodes.driverImmersiveToggle.title=name?'返回后台驾驶布局，也可按 Esc':'进入沉浸驾驶，Esc 返回后台布局';
+      this.nodes.driverSwapMedia.hidden=!name;
+      this.nodes.driverSwapMedia.querySelector('span').textContent=name==='map'?'图传主画面':'地图主画面';
+      this.nodes.driverMapOptions.open=false;
       this.updateOverlayInteraction();
       this.layout?.refresh();
       window.dispatchEvent(new CustomEvent('boat-driver-layout-change'));
@@ -427,6 +437,8 @@
       }
       const state=this.active?(this.testMode?'test':'active'):this.pending?'pending':'idle';this.nodes.driverState.dataset.state=state;
       this.text('driverState',this.active?(this.testMode?'测试场景 · 已接管':'电脑已接管'):this.pending?'等待船端确认':this.remote?.state===2?'停船保护':'监测待机');
+      this.text('driverTakeoverStatus',this.active?(this.testMode?'测试接管':'电脑已接管'):this.pending?'等待船端确认':this.remote?.state===2?'停船保护':'未接管');
+      this.nodes.driverTakeoverStatus.dataset.state=state;
       this.nodes.driverEnable.disabled=!this.permitted()||this.active||this.pending||!this.remote?.ready||(this.testMode&&!this.remote?.testSupported)||(Number(this.nodes.driverMode.value)===2&&!Number.isFinite(this.actualHeading));
       this.nodes.driverTestMode.hidden=!this.admin();
       this.nodes.driverTestMode.disabled=this.active||this.pending||!this.permitted()||(!this.testMode&&!this.remote?.testSupported);

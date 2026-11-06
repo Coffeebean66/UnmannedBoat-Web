@@ -56,9 +56,14 @@ async function main(){
     await until('document.getElementById("driverHudSpeed").textContent!=="--"&&document.getElementById("driverHud").dataset.attitudeValid==="true"');
     await until('document.getElementById("driverHudRpm").textContent===document.getElementById("motor1Rpm").textContent+" / "+document.getElementById("motor2Rpm").textContent&&document.getElementById("driverHudRpm").textContent!=="-- / --"');
     assert.equal(await evaluate('document.getElementById("driverDeviceSelect").value'),await evaluate('boatMonitor.link.selectedId'),'The cockpit device selector follows the actual MQTT device');
+    const mapTools=await evaluate('(()=>{const node=document.querySelector("#driverMapOptions>summary"),r=node.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2};})()');
+    for(const type of ['mousePressed','mouseReleased'])await send('Input.dispatchMouseEvent',{type,...mapTools,button:'left',clickCount:1});
+    assert.equal(await evaluate('document.getElementById("driverMapOptions").open'),true,'A real pointer opens the compact map tools');
+    assert.equal(await evaluate('(()=>{const b=document.getElementById("driverMapFollow"),r=b.getBoundingClientRect();return r.height>=28&&document.elementFromPoint(r.left+r.width/2,r.top+r.height/2)?.closest("#driverMapFollow")===b;})()'),true,'Expanded map tools stay above the map and receive mouse hits');
     const follow=await evaluate('(()=>{const b=document.getElementById("driverMapFollow"),original=document.getElementById("mapFollow");b.click();const disabled=!original.checked&&b.getAttribute("aria-pressed")==="false";b.click();return {disabled,enabled:original.checked&&b.getAttribute("aria-pressed")==="true"};})()');
     assert.deepEqual(follow,{disabled:true,enabled:true},'Map follow buttons control the shared map preference');
     await evaluate('document.getElementById("driverMapCenter").click()');
+    await key('Escape');await key('Escape',false);assert.equal(await evaluate('document.getElementById("driverMapOptions").open'),false,'Escape closes map tools without leaving the driving page');
     const hud=await evaluate('(()=>{const h=boatMonitor.driver.hud;h.setTelemetry({actual:"1.250",target:"2.000",actualHeading:"359",imu:{eulerFresh:true,rollDegrees:10,pitchDegrees:5}});const valid={speed:document.getElementById("driverHudSpeed").textContent,roll:document.getElementById("driverHudRoll").getAttribute("transform"),pitch:document.getElementById("driverHudPitch").getAttribute("transform"),north:document.getElementById("driverHudHeadingTicks").textContent.includes("北")};h.setTelemetry({actual:"--",actualHeading:"--",imu:{eulerFresh:false,rollDegrees:10,pitchDegrees:5}});return {valid,stale:{speed:document.getElementById("driverHudSpeed").textContent,roll:document.getElementById("driverHudRollValue").textContent,pose:document.getElementById("driverHud").dataset.attitudeValid,heading:document.getElementById("driverHudHeadingTicks").style.display}};})()');
     assert.deepEqual(hud,{valid:{speed:'1.25',roll:'rotate(-10 300 180)',pitch:'translate(0 -20)',north:true},stale:{speed:'--',roll:'--',pose:'false',heading:'none'}},'HUD follows the boat axes, wraps north and clears stale motion');
     server.driverFixture.ackDelay=350;
@@ -183,8 +188,11 @@ async function main(){
       }
       for(const [type,id]of [['video','driverVideoExpand'],['map','driverMapExpand']]){
         await enable();const focusLease=await evaluate('boatMonitor.driver.leaseId');
-        await evaluate('document.getElementById('+JSON.stringify(id)+').click()');await wait(150);
+        await evaluate('document.getElementById('+JSON.stringify(type==='video'?'driverImmersiveToggle':id)+').click()');await wait(150);
         assert.equal(await evaluate('document.getElementById("view-driving").dataset.focus'),type);
+        assert.equal(await evaluate('document.getElementById("driverImmersiveToggle").getAttribute("aria-pressed")'),'true','Explicit immersion entry follows the media layout');
+        const focusTools=await evaluate('(()=>{const toolbar=document.querySelector(".driver-region-"+document.getElementById("view-driving").dataset.focus+" .driver-region-toolbar").getBoundingClientRect();return ["#driverImmersiveToggle","#driverSwapMedia","#driverDetailsToggle","#driverDisplayOptions>summary","#driverLayoutToggle"].map(selector=>{const node=document.querySelector(selector),r=node.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {selector,visible:r.width>0&&r.height>0&&r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=toolbar.top,clickable:node===hit||node.contains(hit)};});})()');
+        assert.ok(focusTools.every(tool=>tool.visible&&tool.clickable),'Immersive layout keeps exit, media swap, details, display and layout editing accessible at '+width+': '+JSON.stringify(focusTools));
         assert.equal(await evaluate('boatMonitor.driver.active&&boatMonitor.driver.leaseId==='+JSON.stringify(focusLease)),true,'Expanding media preserves the active driving lease');
         assert.equal(await evaluate('document.documentElement.scrollWidth>innerWidth'),false,'Expanded '+type+' fits '+width);
         const focusLayout=await evaluate('(()=>{const box=node=>{const r=node.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};};return {view:box(document.getElementById("view-driving")),stage:box(document.querySelector(".driver-region-'+type+' .'+(type==='map'?'map-stage':'video-stage')+'")),viewport:{width:innerWidth,height:innerHeight},mediaZ:getComputedStyle(document.querySelector(".driver-media-grid")).zIndex,consoleZ:getComputedStyle(document.querySelector(".driver-console")).zIndex,instrumentZ:getComputedStyle(document.querySelector(".driver-instrument-grid")).zIndex};})()');
@@ -194,6 +202,14 @@ async function main(){
         const inset=await evaluate('(()=>{const n=document.querySelector(".driver-region-'+(type==='map'?'video':'map')+'"),r=n.getBoundingClientRect();return {display:getComputedStyle(n).display,left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height};})()');
         assert.ok(inset.display!=='none'&&inset.width>0&&inset.height>0&&inset.left>width/2&&inset.top<(width<500?90:60)&&inset.right<=width&&inset.bottom<height/2,'Other media remains visible in the top-right inset at '+width+': '+JSON.stringify(inset));
         assert.equal(await evaluate('document.getElementById("boatVideo")===__driverInstances.videoEl&&boatMonitor.videoView.playing&&!document.getElementById("boatVideo").paused'),true,'Exchanging main media keeps the same live video playing');
+        if(type==='video'&&[1440,375].includes(width)){
+          await evaluate('document.getElementById("driverSwapMedia").click()');await wait(100);
+          assert.equal(await evaluate('document.getElementById("view-driving").dataset.focus'),'map','Main-picture switch shows the map and retains the video inset');
+          assert.equal(await evaluate('document.querySelectorAll("#boatVideo").length===1&&document.getElementById("boatVideo")===__driverInstances.videoEl&&boatMonitor.driver.leaseId==='+JSON.stringify(focusLease)),true,'Main-picture switching reuses the player and active driving authority');
+          await evaluate('document.getElementById("driverSwapMedia").click()');await wait(100);
+        }
+        const priority=await evaluate('(()=>{const panel=document.querySelector(".driver-navigation-data").getBoundingClientRect();return ["driverActualSpeed","driverActualHeading","driverMotorRpm","driverFixStatus","driverMqttStatus","driverTakeoverStatus"].every(id=>{const r=document.getElementById(id).getBoundingClientRect();return r.width>0&&r.height>0&&r.left>=panel.left&&r.right<=panel.right&&r.top>=panel.top&&r.bottom<=panel.bottom;});})()');
+        assert.equal(priority,true,'All six priority driving readouts remain visible in the compact strip at '+width);
         assert.ok(Number(focusLayout.consoleZ)>Number(focusLayout.mediaZ)&&Number(focusLayout.instrumentZ)>Number(focusLayout.mediaZ),'Driving controls and data layer above expanded media');
         if(type==='map'&&width>760)assert.equal(await evaluate('(()=>{const r=document.querySelector(".driver-navigation-data").getBoundingClientRect();return [".map-layer-label",".boat-map-layers"].every(selector=>{const b=document.querySelector(selector).getBoundingClientRect();return b.left>=r.right||b.right<=r.left||b.top>=r.bottom||b.bottom<=r.top;});})()'),true,'Expanded map layer controls avoid the telemetry readouts');
         await evaluate('document.getElementById("driverDetailsToggle").click()');
@@ -307,7 +323,8 @@ async function main(){
     await selectPart('console');await setPartOpacity(0);
     assert.equal(await evaluate('document.getElementById("driverPartOpacityValue").textContent'),'20%','Control strip retains its minimum visibility');
     await selectPart('emergency');await setPartOpacity(0);
-    assert.equal(await evaluate('document.getElementById("driverPartOpacityValue").textContent'),'35%','Emergency remains recoverable independently of the control strip');
+    assert.equal(await evaluate('document.getElementById("driverPartOpacityValue").textContent'),'100%','Emergency visibility cannot be reduced by layout preferences');
+    assert.equal(await evaluate('document.getElementById("driverPartOpacity").disabled'),true,'Emergency opacity has no editable slider');
     await selectPart('motors');await evaluate('document.getElementById("driverLayoutFloat").click()');
     assert.equal(await evaluate('document.querySelector(".driver-propulsion").parentElement.id'),'driverStage','Motor details can be detached into their own overlay');
     await dragPart('motors',-330,130);
@@ -319,13 +336,15 @@ async function main(){
     assert.equal(await evaluate('getComputedStyle(document.querySelector("[data-driver-layout-module=horizon]")).opacity'),'0');
     assert.equal(await evaluate('document.querySelector("[data-driver-layout-module=horizon]").inert'),true,'Fully hidden parts leave keyboard and pointer access to the media');
     assert.equal(await evaluate('getComputedStyle(document.querySelector(".driver-console")).opacity'),'0.2');
-    assert.equal(await evaluate('getComputedStyle(document.querySelector(".driver-emergency-dock")).opacity'),'0.35','Emergency opacity is independent of console opacity');
+    assert.equal(await evaluate('getComputedStyle(document.querySelector(".driver-emergency-dock")).opacity'),'1','Emergency remains fully opaque even when other controls are faded');
+    await evaluate('(()=>{const key="boat-driver-platform-layout-v1",saved=JSON.parse(localStorage.getItem(key));saved.profiles["desktop:dock"].emergency.opacity=35;localStorage.setItem(key,JSON.stringify(saved));})()');
     const savedLayout=await evaluate('localStorage.getItem("boat-driver-platform-layout-v1")');
     await send('Page.reload');await until('window.boatMonitor?.driver?.layout&&BoatAuth.ready');
     await evaluate('connectTestBoat()');await until('!document.getElementById("driverEnable").disabled');await wait(160);
     assert.equal(await evaluate('boatMonitor.driver.active'),false,'Reloading a layout never restores control authority');
     assert.equal(await evaluate('localStorage.getItem("boat-driver-platform-layout-v1")'),savedLayout,'Layout positions and opacity survive an actual reload');
     assert.equal(await evaluate('getComputedStyle(document.querySelector(".driver-navigation-data")).opacity'),'0.4');
+    assert.equal(await evaluate('getComputedStyle(document.querySelector(".driver-emergency-dock")).opacity'),'1','Older stored emergency opacity is clamped to full visibility after reload');
     assert.equal(await evaluate('document.querySelector(".driver-propulsion").parentElement.id'),'driverStage','Floating panels are restored');
     await go('attitude');
     assert.equal(await evaluate('document.querySelector(".imu-horizon-panel").style.translate'),'', 'Shared horizon loses driver offsets outside driving');
@@ -370,6 +389,8 @@ async function main(){
     await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
     await evaluate('document.getElementById("themeToggle").click();document.getElementById("sensorTelemetry").scrollIntoView({block:"center",behavior:"instant"})');await shot('driver-instruments-light');
     await evaluate('window.scrollTo(0,0)');
+    await evaluate('document.getElementById("driverImmersiveToggle").click()');await wait(100);await shot('driver-immersive-light');
+    await evaluate('document.getElementById("driverImmersiveToggle").click()');
     await enable();const oldId=await evaluate('boatMonitor.driver.context.deviceId');await evaluate('boatMonitor.driver.update({deviceId:"boat-another"})');
     await untilCall(call=>call.action==='release'&&call.deviceId===oldId);assert.equal(await evaluate('boatMonitor.driver.active'),false,'Changing boats releases the old vessel');
     await wait(250);await enable();server.driverFixture.failInputs=true;await key('KeyW');await until('!boatMonitor.driver.active');await key('KeyW',false);server.driverFixture.failInputs=false;

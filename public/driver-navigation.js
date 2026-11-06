@@ -14,7 +14,7 @@
         this.notice(action==='pause'?'已请求停船；收到船端确认后可以继续。':action==='resume'?'正在重新校验反馈并申请接管。':'已提交服务器；关闭网页后继续，可暂停或急停。');
       },{motion:['goto','start','resume'].includes(action)}));
       this.listen(this.nodes.driverNavSave,'click',()=>this.perform(async()=>{await this.missions.saveNavigationSpeed(this.routeId,this.values().speedMps,this.values().arrivalRadiusM);this.notice('航线航速和到点半径已保存到服务器。');}));
-      this.listen(this.nodes.driverHomeSet,'click',()=>{this.setHomeEditing(!this.editingHome);this.render();});
+      this.listen(this.nodes.driverHomeSet,'click',()=>{this.setHomeEditing(!this.editingHome);driver.nodes.driverMapOptions.open=false;this.render();});
       this.listen(this.nodes.driverHomeCancel,'click',()=>{this.setHomeEditing(false);this.render();});
       this.listen(this.nodes.driverHomeSave,'click',()=>this.perform(async()=>{if(!this.draft)throw Error('请先在地图上选择返航点');await this.missions.saveHome(this.draft);this.setHomeEditing(false);this.notice('当前船的返航点已保存到服务器。');}));
       this.listen(this.nodes.driverReturnHome,'click',()=>this.perform(async operation=>{const run=await this.missions.submitNavigation('home',this.values());if(operation?.cancelled){await this.missions.stop(run);return;}this.notice('正在返回已保存返航点；直线返航不包含自动避障。');},{motion:true}));
@@ -112,6 +112,7 @@
       }
       if(this.cancelMotion&&!this.motionPending&&!active&&run&&['stopped','completed','failed'].includes(run.status))this.cancelMotion=false;
       if(active||paused)d.text('driverSystemMode',(run.action==='hold'?'定点保持':run.action==='home'?'一键返航':'自动航行')+' · '+(paused?'已暂停':run.status==='running'?'运行中':'准备中'));
+      if(active||paused){d.text('driverTakeoverStatus',paused?'任务已暂停':run.status==='running'?'服务器已接管':run.status==='stopping'?'等待停船确认':'等待自主接管');d.nodes.driverTakeoverStatus.dataset.state=run.status==='running'?'active':paused?'idle':'pending';}
       d.hud.setNavigation(same?m.navigationState():null);
       this.bindMap();this.drawHome();
     }

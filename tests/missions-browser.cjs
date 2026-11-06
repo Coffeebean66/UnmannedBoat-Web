@@ -78,6 +78,20 @@ async function main(){
     assert.equal(await evaluate('document.getElementById("driverMissionName").textContent'),'湖区巡检 A','Driving summarizes the current vessel server mission');
     assert.equal(await evaluate('document.getElementById("driverMissionProgress").textContent===(BoatMissions.run().targetIndex+1)+" / "+BoatMissions.run().pointCount'),true);
     assert.equal(await evaluate('document.getElementById("driverMissionLoop").textContent'),'1 / 2 圈');
+    const immersiveLease=f.mission.jobs.get('boat-01').leaseId;
+    for(const [width,height]of [[1440,900],[375,667],[320,667],[320,812]]){
+      await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<500});
+      await evaluate('boatMonitor.driver.setMediaFocus("video")');await wait(120);
+      const summary=await evaluate('(()=>{const box=document.querySelector(".driver-mission-summary").getBoundingClientRect(),strip=document.querySelector(".driver-navigation-data").getBoundingClientRect();return {inside:box.left>=0&&box.right<=innerWidth&&box.top>=0&&box.bottom<=strip.top-3,values:["driverMissionState","driverMissionProgress","driverMissionDistance"].map(id=>{const node=document.getElementById(id),r=node.getBoundingClientRect();return {text:node.textContent,visible:r.width>0&&r.height>0,font:parseFloat(getComputedStyle(node).fontSize)};}),takeover:document.getElementById("driverTakeoverStatus").textContent};})()');
+      assert.equal(summary.inside,true,'Compact navigation summary stays above the instruments at '+width+': '+JSON.stringify(summary));
+      assert.equal(summary.values.every(value=>value.visible&&value.text!=='--'&&value.font>=9),true,'Real target point, distance and task status remain readable in the inset layout');
+      assert.equal(summary.takeover,'服务器已接管');assert.equal(f.mission.jobs.get('boat-01').leaseId,immersiveLease);
+      const taskButtons=await evaluate('["driverGoto","driverNavStart","driverNavPause","driverNavResume","driverNavSave"].map(id=>{const node=document.getElementById(id),r=node.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {id,visible:r.width>0&&r.height>0&&r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight,clear:node===hit||node.contains(hit)};})');
+      assert.ok(taskButtons.every(button=>button.visible&&button.clear),'Navigation actions remain visible and unobstructed by emergency stop at '+width+'x'+height+': '+JSON.stringify(taskButtons));
+      await shot('driver-mission-immersive-'+width);
+      await evaluate('document.getElementById("driverImmersiveToggle").click()');
+    }
+    await send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});await wait(100);
     const staleMission=await evaluate('(()=>{BoatMissions.statusError="同步失败";BoatMissions.render();const state=document.getElementById("driverMissionState").textContent;BoatMissions.statusError="";BoatMissions.render();return state;})()');
     assert.equal(staleMission,'状态过期','A failed mission status query is never shown as current');
     assert.equal(f.mission.snapshot('boat-01').algorithm,1);assert.ok(f.mission.jobs.get('boat-01').optimal);
@@ -188,6 +202,8 @@ async function main(){
     await evaluate('document.getElementById("driverEmergency").click()');await until('BoatMissions.run()?.status==="stopped"');
     // 在共享地图上真实鼠标点选返航点；保存前不发控制、不写入存储。
     await until('!document.getElementById("driverHomeSet").disabled');
+    await evaluate('document.getElementById("driverMapOptions").open=true');
+    assert.equal(await evaluate('document.getElementById("driverHomeSet").getBoundingClientRect().height>=28'),true,'Map and return-home tools expand into real operable controls');
     await evaluate('document.getElementById("driverHomeSet").click();document.getElementById("mapFollow").checked=false;boatMonitor.map.setView('+JSON.stringify(ORIGIN)+',18,{animate:false});window.scrollTo(0,0)');await wait(180);
     const homePoint=N.destination(ORIGIN,0,30),homePixel=await evaluate('(()=>{const p=boatMonitor.map.map.latLngToContainerPoint(['+homePoint.latitude+','+homePoint.longitude+']),r=document.getElementById("map").getBoundingClientRect();return {x:r.left+p.x,y:r.top+p.y};})()');
     await shot('driver-select-home');
@@ -202,7 +218,7 @@ async function main(){
     await evaluate('boatMonitor.selectBoat("boat-02",false)');await until('BoatMissions.deviceId==="boat-02"');
     assert.equal(await evaluate('BoatMissions.home===null&&!boatMonitor.driver.navigation.marker'),true,'Home marker is isolated per vessel');
     await evaluate('boatMonitor.selectBoat("boat-01",false);BoatWorkspace.navigate("driving",{focus:false})');await until('!document.getElementById("driverReturnHome").disabled');
-    await evaluate('document.getElementById("driverReturnHome").click()');await until('BoatMissions.run()?.action==="home"&&BoatMissions.run()?.status==="running"');
+    await evaluate('document.getElementById("driverMapOptions").open=true;document.getElementById("driverReturnHome").click()');await until('BoatMissions.run()?.action==="home"&&BoatMissions.run()?.status==="running"');
     assert.deepEqual(f.mission.snapshot('boat-01').route.points,[{latitude:home.latitude,longitude:home.longitude}]);
     await until('document.getElementById("driverHudGuideText").textContent.includes("返航点")');
     await evaluate('document.getElementById("driverEmergency").click()');await until('BoatMissions.run()?.status==="stopped"');
