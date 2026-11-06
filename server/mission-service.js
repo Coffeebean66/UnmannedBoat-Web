@@ -26,7 +26,7 @@ class MissionService{
     this.timer=setInterval(()=>this.refresh(),pollMs);this.timer.unref?.();
   }
   active(id){return ACTIVE.has(this.jobs.get(id)?.status);}
-  usesRoute(id,routeId){const job=this.jobs.get(id);return this.active(id)&&!!routeId&&(job.route.id===routeId||job.queue?.routes.some(route=>route.id===routeId));}
+  usesRoute(id,routeId){const job=this.jobs.get(id);return this.active(id)&&!!routeId&&!job.queue&&job.route.id===routeId;}
   snapshot(job,includeRoute=true){
     if(typeof job==='string')job=this.jobs.get(job);
     if(!job)return null;

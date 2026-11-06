@@ -50,7 +50,7 @@
     get admin(){return window.BoatAuth?.enabled===true&&BoatAuth.ready&&['admin','driver'].includes(BoatAuth.user?.role);}
     run(){return this.runs.find(r=>r.deviceId===this.deviceId);}
     runTitle(run){return run?.queue?run.queue.name+' · 航线 '+(run.queue.routeIndex+1)+' / '+run.queue.routeCount+' · '+run.routeName:run?.routeName;}
-    routeInUse(){const run=this.run();return run?.active&&(run.routeId===this.route.id||run.queue?.routeIds.includes(this.route.id));}
+    routeInUse(){const run=this.run();return run?.active&&!run.queue&&run.routeId===this.route.id;}
     navigationState(){
       const run=this.admin?this.run():null;
       // 始终采用服务器正在执行的航线，编辑器可同时载入其他草稿。
@@ -140,8 +140,8 @@
       const queue=this.queues.find(q=>q.id===queueId);if(!queue)throw Error('请先选择已保存的任务组');
       const editor=window.BoatMissionQueue;
       if(editor?.deviceId===this.deviceId&&editor.queue.id===queueId&&editor.dirty)throw Error('任务组有未保存修改，请先保存任务组');
-      if(this.dirty&&queue.routeIds.includes(this.route.id))throw Error('任务组中的航线有未保存修改，请先保存航线');
-      return this.submitRun({deviceId:this.deviceId,action,queueId:queue.id,revision:queue.revision,routeRevisions:queue.routeIds.map(id=>this.routes.find(r=>r.id===id)?.revision)});
+      if(!queue.routes)throw Error('请更新任务管理组件并重新载入任务组');
+      return this.submitRun({deviceId:this.deviceId,action,queueId:queue.id,revision:queue.revision,routeRevisions:queue.routes.map(()=>queue.revision)});
     }
     async submitRun(body){
       // 单航线与任务组共用快照更新和迟到响应保护；调用方仍能取得结果并补发急停。
@@ -375,6 +375,7 @@
       if(window.BoatWorkspace?.canAccessView&&!BoatWorkspace.canAccessView('missions'))return;
       if(this.map){this.map.invalidateSize();this.draw();return;}
       this.map=new BoatMapView('missionMap');
+      this.map.on('rotationchange',()=>this.cancelMarkerDrag());
       this.map.on('click',p=>{
         if(!this.pointsVisible||!this.editing||!this.canEdit()||this.drag||Date.now()<this.ignoreMapClickUntil)return;
         if(this.curveEditing<0)return this.addPoint(p);
@@ -388,7 +389,7 @@
     draw(){
       if(!this.map?.ready)return;
       if(this.drag&&!this.dragValid(this.drag)){this.cancelMarkerDrag();return;}
-      const points=this.route.points,run=this.run(),current=run?.active&&run.routeId===this.route.id&&!this.dirty?run.targetIndex:-1;
+      const points=this.route.points,run=this.run(),current=run?.active&&!run.queue&&run.routeId===this.route.id&&!this.dirty?run.targetIndex:-1;
       const key=JSON.stringify([points,this.route.segments,current,this.route.loopEnabled,this.map.provider,this.pointsVisible,this.editing,this.curveEditing,this.canDrag(),this.generation]);
       if(this.drag)this.drawRouteLines(this.drag.preview);
       else if(key!==this.drawKey||this.markerRoute!==this.route){

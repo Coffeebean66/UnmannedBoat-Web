@@ -32,10 +32,10 @@ test('quadratic path uses metre geometry, preserves anchors and bounds approxima
   assert.deepEqual(P.compile(straight).points,straight.points,'Legacy straight paths retain their original coordinates');
 });
 
-test('curve metadata validates strictly and persists in v5; v1/v2/v3 libraries and home points migrate without rewriting on read',t=>{
+test('curve metadata validates strictly and persists in v6; v1/v2/v3 libraries and home points migrate without rewriting on read',t=>{
   const f=fixture(t),d=definition(),r=f.route('boat-01',d),reopened=new MissionStore({env:f.env});
   assert.equal(reopened.error,'');assert.deepEqual(reopened.get('boat-01',r.id),r);
-  assert.equal(JSON.parse(fs.readFileSync(f.store.file,'utf8')).version,5);
+  assert.equal(JSON.parse(fs.readFileSync(f.store.file,'utf8')).version,6);
   for(const segments of [[],[null],[{type:'spline'}],[{type:'line',control:ORIGIN}],[{type:'curve',control:{...ORIGIN,height:1}}],[{type:'curve',control:{latitude:NaN,longitude:0}}],[{type:'curve',control:N.destination(ORIGIN,180,10)}]]){
     assert.throws(()=>normalizeRoute({...d,segments}),{status:400});
   }

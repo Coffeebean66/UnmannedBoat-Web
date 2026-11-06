@@ -159,6 +159,10 @@
       render();
     });
     map.on('dragstart',()=>$('mapFollow').checked=false);
+    map.on('rotationchange',()=>{
+      const latest=state.latest.velocity;
+      if(latest)renderMapBoatHeading(latest.frame,M.velocityDisplay.prepareVelocityDisplay(latest.frame,latest.at,performance.now(),link.connected));
+    });
     // 栅格断点和遥测标签会改变容器尺寸，由地图门面更新底图与箭头锚点。
     const mapResize=new ResizeObserver(()=>{if($('map').clientWidth&&$('map').clientHeight)map.invalidateSize();});
     mapResize.observe($('map'));
@@ -185,6 +189,10 @@
     button.title=satellite?'恢复此前使用的平面地图':nextOsm?'切换为 OpenStreetMap，保留轨迹和船位':'切换为高德平面地图；卫星视角及来源可在地图内选择';
     set('heroSourceLabel','MQTT 云端监测 / '+(map?.providerLabel||'地图加载中'));
   }
+  function renderMapBoatHeading(frame,view) {
+    const arrow=marker?.getElement()?.firstElementChild;
+    if(arrow)arrow.style.transform='rotate('+((view.headingFresh?frame.velocity.headingDegrees:0)+map.getRotation())+'deg)';
+  }
   function position(frame,at,now,preserveView=false) {
     const view=M.velocityDisplay.prepareVelocityDisplay(frame,at,now,link.connected),v=frame?.velocity;
     if(view.fixFresh) {
@@ -195,7 +203,7 @@
         const firstMapFix=!marker;
         if(!marker)marker=map.createMarker(fix,{className:'boat-pin',html:'<span>▲</span>',iconSize:[30,30],iconAnchor:[15,15]});
         marker.setPosition(fix);marker.setOpacity(1);
-        const arrow=marker.getElement()?.firstElementChild;if(arrow)arrow.style.transform='rotate('+(view.headingFresh?v.headingDegrees:0)+'deg)';
+        renderMapBoatHeading(frame,view);
         if(!preserveView&&$('mapFollow').checked)map.setView(lastLocation,firstMapFix?16:map.getZoom(),{animate:false});
       }
       hadFix=true;

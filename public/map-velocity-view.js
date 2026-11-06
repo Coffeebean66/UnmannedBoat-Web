@@ -7,6 +7,7 @@ class MapVelocityView {
     this.visible=true;
     try{this.visible=localStorage.getItem('boat_web_velocity_vectors_v1')!=='hidden';}catch(_){}
     this.map?.on('resize',()=>this.render(this.lastView));
+    this.map?.on('rotationchange',()=>this.render(this.lastView));
     this.syncButton();
   }
   syncButton() {
@@ -45,7 +46,7 @@ class MapVelocityView {
     group.dataset.length=String(length);
     group.querySelector('title').textContent=(group.dataset.vector==='target'?'目标 ':'实际 ')+this.readout(vector);
     const moving=length>0&&vector.bearingDegrees!=null;
-    group.setAttribute('transform','rotate('+(vector.bearingDegrees||0)+')');
+    group.setAttribute('transform','rotate('+((vector.bearingDegrees||0)+(this.map?.getRotation?.()||0))+')');
     const head=Math.min(9,length*.45),halfWidth=head*.6;
     const shaft='M 0 0 L 0 '+(-length);
     const tip='M '+(-halfWidth)+' '+(-length+head)+' L 0 '+(-length)+' L '+halfWidth+' '+(-length+head);

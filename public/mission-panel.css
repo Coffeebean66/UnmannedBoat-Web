@@ -27,3 +27,23 @@ button.mission-danger{color:var(--danger);background:var(--danger-bg);border-col
 @media(max-width:650px){.mission-curve-coordinates{grid-template-columns:minmax(0,1fr);gap:8px}}
 .mission-queue-card{margin-top:18px}.mission-queue-card .muted{font-size:12px;line-height:1.8}.mission-queue-layout{display:grid;grid-template-columns:minmax(0,340px) minmax(0,1fr);gap:24px}.mission-queue-add{display:flex;align-items:center;gap:10px}.mission-queue-add .mission-field{flex:1;min-width:0}.mission-queue-add>button{flex:none}.mission-queue-list{list-style:none;padding:0;margin:0;display:grid;gap:8px;max-height:350px;overflow:auto}.mission-queue-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--soft)}.mission-queue-row>div:first-child{min-width:0}.mission-queue-row strong{display:block;font-size:12px;overflow-wrap:anywhere}.mission-queue-row span{display:block;font-size:11px;color:var(--muted);margin-top:4px}.mission-queue-row[data-current="true"]{border-color:var(--accent);background:var(--accent-soft)}.mission-queue-row .mission-point-tools{flex:none}.mission-queue-progress{padding:12px;background:var(--soft);border-radius:8px;margin-top:16px;font-size:12px;line-height:1.8;overflow-wrap:anywhere}
 @media(max-width:800px){.mission-queue-layout{grid-template-columns:minmax(0,1fr);gap:12px}}@media(max-width:400px){.mission-queue-row{flex-wrap:wrap;gap:8px}.mission-queue-row .mission-point-tools{margin-left:auto}}
+/* 任务组用颜色对应执行顺序；只为选中的独立副本显示编辑航点。 */
+.mission-queue-row{border-left:4px solid var(--queue-route-color,var(--line))}
+.mission-queue-preview{margin-top:22px;padding-top:18px;border-top:1px solid var(--line);min-width:0}.mission-queue-preview h3{font-size:14px}
+.mission-queue-preview-layout{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(270px,1fr);gap:18px;align-items:start}
+.mission-queue-map-card{min-width:0;overflow:hidden;border:1px solid var(--line);border-radius:9px;background:var(--soft)}
+#missionQueueMap{height:400px;min-width:0;z-index:0;background:var(--soft)}
+.mission-queue-legend{display:flex;gap:6px;flex-wrap:wrap;padding:10px;max-height:150px;overflow:auto;border-top:1px solid var(--line)}
+.mission-queue-legend-item{display:inline-flex;align-items:center;gap:7px;max-width:100%;font-size:11px;text-align:left;overflow-wrap:anywhere;padding:6px 8px;min-height:30px}
+.mission-queue-legend-item::before{content:"";width:18px;flex:none;border-top:3px solid var(--queue-route-color)}
+.mission-queue-legend-item[aria-pressed="true"],#missionQueueEdit[aria-pressed="true"]{color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
+.mission-queue-route-editor{min-width:0}.mission-queue-route-editor>.mission-field:first-child{margin-top:0}.mission-queue-route-editor>.small-button{margin:10px 0}
+.mission-queue-points{list-style:none;padding:0;margin:12px 0 0;display:grid;gap:8px;max-height:420px;overflow:auto}
+.mission-queue-point-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;padding:10px;background:var(--soft);border:1px solid var(--line);border-radius:7px}
+.mission-queue-point-row strong{grid-column:1/-1;font-size:12px}.mission-queue-point-row label{display:grid;gap:5px;min-width:0;font-size:10px;color:var(--muted)}
+.mission-queue-point-row input{width:100%;min-width:0;padding:7px 5px;border:1px solid var(--line-strong);border-radius:5px;color:var(--text);background:var(--panel);font-size:12px}.mission-queue-point-row input:disabled{opacity:.7}
+.mission-queue-preview-error{font-size:12px;line-height:1.8;color:var(--danger);padding-top:10px;overflow-wrap:anywhere}.mission-queue-preview-error[hidden]{display:none}
+.mission-queue-pin{background:transparent;border:0}.mission-queue-pin span{display:grid;place-items:center;width:28px;height:28px;border:2px solid #fff;border-radius:50%;color:#fff;font:700 12px sans-serif;box-shadow:0 2px 8px #0005}
+.mission-queue-control-pin span{width:26px;height:26px;border-radius:6px;font-size:20px}.mission-queue-pin[data-draggable="true"]{cursor:grab;touch-action:none}.mission-queue-pin.mission-dragging{cursor:grabbing}
+@media(max-width:900px){.mission-queue-preview-layout{grid-template-columns:minmax(0,1fr)}.mission-queue-points{max-height:330px}}
+@media(max-width:650px){#missionQueueMap{height:330px}.mission-queue-preview{margin-top:16px}.mission-queue-preview-layout{gap:14px}.mission-queue-point-row{gap:8px}.mission-queue-legend{max-height:120px}}

@@ -8,6 +8,40 @@ const plain = value => JSON.parse(JSON.stringify(value));
 const configured = { provider: 'amap', version: '2.0', enabled: true, configured: true,
   key: 'key with+characters', securityJsCode: 'test-security-code' };
 
+test('四种底图可旋转并朝北复位，角度规范化而原始坐标、中心和缩放保持',async()=>{
+  for(const provider of ['amap','osm','arcgis','tianditu']){
+    const f=fixture({...configured,tianditu:{configured:true,key:'a'.repeat(32)}},{'boat.map.provider':provider});
+    if(provider==='amap')await readyAmap(f);else await f.view.initialize();
+    const view=f.view,center=view.getCenter(),zoom=view.getZoom(),points=[{latitude:31,longitude:121},{latitude:31.001,longitude:121.001}],changes=[];
+    const marker=view.createMarker(points[0]);view.setTrackLines([{points,color:'#5c90ff'}]);view.on('rotationchange',event=>changes.push(event.rotation));
+    view.setRotation(90);assert.equal(view.getRotation(),90);assert.deepEqual(changes,[90]);
+    assert.deepEqual(plain(marker.position),points[0]);assert.deepEqual(plain(view.lastTrackLines[0].points),points);assert.deepEqual(plain(view.getCenter()),plain(center));assert.equal(view.getZoom(),zoom);
+    view._rotationButtons[0].events.click();assert.equal(view.getRotation(),75);
+    view._rotationButtons[2].events.click();assert.equal(view.getRotation(),90);
+    view.setRotation(-30);assert.equal(view.getRotation(),330);assert.equal(view._rotationLabel.textContent,'-30°');
+    for(const bad of [NaN,Infinity,'45',null])view.setRotation(bad);assert.equal(view.getRotation(),330);
+    view._rotationButtons[1].events.click();assert.equal(view.getRotation(),0);assert.equal(view._rotationArrow.style.transform,'rotate(0deg)');
+    const old=f.maps.at(-1);old.rotation=135;old.emit(provider==='amap'?'rotatechange':'rotate');assert.equal(view.getRotation(),135);assert.equal(view._rotationLabel.textContent,'135°');
+    if(provider!=='amap')assert.deepEqual(plain({rotate:old.options.rotate,touchRotate:old.options.touchRotate,pitchDrag:old.options.pitchDrag,rotateControl:old.options.rotateControl}),{rotate:true,touchRotate:true,pitchDrag:false,rotateControl:false});
+    const controls=view._rotationControls;view.destroy();assert.equal(controls.removed,true);assert.equal(old.listenerCount(provider==='amap'?'rotatechange':'rotate'),0);
+    view.setRotation(45);assert.equal(view._rotation,135,'已销毁地图不能复活或改变方向');
+  }
+});
+
+test('旋转角随底图切换和失败回退保留，加载中控件禁用且地图实例之间独立',async()=>{
+  const f=fixture();await readyAmap(f);f.view.setRotation(65);
+  await f.view.switchProvider('arcgis');assert.equal(f.view.getRotation(),65);assert.equal(f.maps.at(-1).options.bearing,65);
+  const previous=f.maps.at(-1),original=f.window.L.map;
+  // 高德已加载，可直接切回；其原生初始角度也须保持。
+  await f.view.switchProvider('amap');assert.equal(f.maps.at(-1).options.rotation,65);
+  f.window.L.map=()=>{throw Error('Map creation test failure');};
+  await assert.rejects(f.view.switchProvider('osm'),/Map creation test failure/);assert.equal(f.view.provider,'amap');assert.equal(f.view.ready,true);assert.equal(f.view.getRotation(),65);
+  f.window.L.map=original;f.view._setSwitching(true);assert.ok(f.view._rotationButtons.every(b=>b.disabled));f.view.resetRotation();assert.equal(f.view.getRotation(),65);
+  f.view._setSwitching(false);assert.ok(f.view._rotationButtons.every(b=>!b.disabled));f.view.resetRotation();assert.equal(f.view.getRotation(),0);
+  assert.equal(previous.removed,true);const other=fixture({configured:false});await other.view.initialize();assert.equal(other.view.getRotation(),0);other.view.setRotation(150);assert.equal(f.view.getRotation(),0);
+  other.view.destroy();f.view.destroy();
+});
+
 test('可拖动标记统一回传WGS84，拖动后抑制点击且普通标记默认不可拖动', async () => {
   for (const provider of ['amap', 'osm', 'arcgis', 'tianditu']) {
     const f = fixture({ ...configured, tianditu: { configured: true, key: 'a'.repeat(32) } }, { 'boat.map.provider': provider });
@@ -112,7 +146,7 @@ function fixture(config = configured, preferences = {}, behavior = {}) {
   function mapInstance(options, provider) {
     const events = new Map();
     return {
-      options, provider, center: options.center, zoom: options.zoom ?? 5,
+      options, provider, center: options.center, zoom: options.zoom ?? 5, rotation: options.rotation??options.bearing??0,
       on(name, fn) {
         if (!events.has(name)) events.set(name, new Set());
         events.get(name).add(fn);
@@ -137,6 +171,10 @@ function fixture(config = configured, preferences = {}, behavior = {}) {
       },
       getZoom() { return this.zoom; },
       setZoom(zoom) { this.zoom = zoom; },
+      getRotation() { return this.rotation; },
+      setRotation(rotation) { this.rotation=rotation;this.emit('rotatechange'); },
+      getBearing() { return this.rotation; },
+      setBearing(rotation) { this.rotation=rotation;this.emit('rotate'); },
       getSize() { return { width: 400, height: 300 }; },
       panBy(...args) { this.pan = args; },
       lngLatToContainer([lng, lat]) { return { x: lng * 10, y: lat * 10 }; },
@@ -394,7 +432,7 @@ test('map clicks expose WGS84 on both providers and native listeners are detache
   }
 });
 
-test('official SDK loads only once after security code and initialization stays north-up 2D', async () => {
+test('official SDK loads only once after security code and initializes north-up with rotation enabled and pitch disabled', async () => {
   const f = fixture();
   const first = f.view.initialize();
   assert.equal(f.view.initialize(), first);
@@ -415,7 +453,7 @@ test('official SDK loads only once after security code and initialization stays 
   assert.equal(f.maps[0].options.viewMode, '2D');
   assert.equal(f.maps[0].options.rotation, 0);
   assert.equal(f.maps[0].options.pitch, 0);
-  assert.equal(f.maps[0].options.rotateEnable, false);
+  assert.equal(f.maps[0].options.rotateEnable, true);
   assert.equal(f.maps[0].options.pitchEnable, false);
   assert.equal(f.maps[0].style, 'amap://styles/darkblue');
   const zoom = f.view._zoomControls;

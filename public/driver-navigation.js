@@ -132,7 +132,7 @@
       this.nodes.driverQueueSettings.disabled=locked||active;this.nodes.driverQueueSelect.disabled=locked||active;
       this.nodes.driverNavParameters.hidden=group;this.nodes.driverNavSave.hidden=!auto;
       this.nodes.driverQueueSummary.hidden=!group;
-      this.nodes.driverQueueSummary.textContent=selectedQueue?selectedQueue.routeIds.length+' 条航线 · '+(selectedQueue.loopEnabled?'整组循环 '+selectedQueue.loopCount+' 轮':'整组执行 1 轮')+' · 使用各航线已保存的航速与半径':'暂无任务组，请点击“设置任务组”创建并保存。';
+      this.nodes.driverQueueSummary.textContent=selectedQueue?selectedQueue.routeIds.length+' 条航线 · '+(selectedQueue.loopEnabled?'整组循环 '+selectedQueue.loopCount+' 轮':'整组执行 1 轮')+' · 使用组内独立副本的航速与半径':'暂无任务组，请点击“设置任务组”创建并保存。';
       this.nodes.driverNavSave.disabled=locked||active||!this.routeId;
       this.nodes.driverRouteSelect.disabled=locked||active;
       for(const id of ['driverNavSpeed','driverNavRadius'])this.nodes[id].disabled=locked||active;

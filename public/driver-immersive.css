@@ -152,7 +152,7 @@ html[data-driver-focus="true"],html[data-driver-focus="true"] body { overflow:hi
   .driving-workspace[data-focus] .driver-hud-speed { left:0; top:35%; height:35%; }
   .driving-workspace[data-focus] .driver-hud-aux,.driving-workspace[data-focus] .driver-hud-horizon,.driving-workspace[data-focus] .driver-hud-top,.driving-workspace[data-focus] .driver-hud-attitude-status,.driving-workspace[data-focus] .driver-hud-position { display:none; }
   .driving-workspace[data-focus] .driver-hud-guidance { top:72px; left:0; right:52%; font-size:7px; }
-  .driving-workspace[data-focus="map"] .driver-region-map .boat-map-zoom,.driving-workspace[data-focus="map"] .driver-region-map .leaflet-top.leaflet-left { top:100px; right:calc(var(--driver-pip-width) + 16px); }
+  .driving-workspace[data-focus="map"] .driver-region-map .boat-map-zoom,.driving-workspace[data-focus="map"] .driver-region-map .leaflet-top.leaflet-left { top:128px; right:calc(var(--driver-pip-width) + 16px); }
   .driving-workspace[data-focus="map"] .driver-region-map .map-north { display:none; }
   .driving-workspace[data-focus]:not([data-navigation-mode="manual"]) .driver-console { padding:8px 8px 40px; }
   /* 窄屏仍把参数放在一行，为任务操作与独立急停留出间隔。 */

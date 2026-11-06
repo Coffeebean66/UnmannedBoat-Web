@@ -19,11 +19,12 @@ const fakeSdk='('+function(){
       const host=typeof container==='string'?document.getElementById(container):container;
       host.dataset.testMap='fake-amap';
       host.style.background='#153147';
-      this.map=L.map(host,{zoomControl:false,zoomAnimation:false,fadeAnimation:false,markerZoomAnimation:false})
+      this.map=L.map(host,{zoomControl:false,zoomAnimation:false,fadeAnimation:false,markerZoomAnimation:false,rotate:true,bearing:options.rotation||0,rotateControl:false,pitchDrag:false,touchRotate:options.rotateEnable===true})
         .setView(coord(options.center||[121.47,31.23]),options.zoom||5);
       const label=L.control({position:'bottomleft'});label.onAdd=()=>{const node=document.createElement('div');node.style.cssText='background:#061525;color:#c7dbe7;padding:4px 8px;font:11px sans-serif';node.textContent='高德 SDK 模拟测试 · 非真实底图';return node;};label.addTo(this.map);
     }
     on(name,fn){
+      if(name==='rotatechange')name='rotate';
       this.map.on(name,fn);
       // 真实 SDK 先构造 Map，底图/渲染器完成后才异步通知 complete。
       if(name==='complete'&&!this.completeScheduled){
@@ -36,12 +37,14 @@ const fakeSdk='('+function(){
       }
       return this;
     }
-    off(name,fn){this.map.off(name,fn);return this;}
+    off(name,fn){this.map.off(name==='rotatechange'?'rotate':name,fn);return this;}
     add(overlay){for(const item of Array.isArray(overlay)?overlay:[overlay])item.setMap(this);return this;}
     remove(overlay){for(const item of Array.isArray(overlay)?overlay:[overlay])item.setMap(null);return this;}
     getZoom(){return this.map.getZoom();}
     getCenter(){const p=this.map.getCenter();return {lng:p.lng,lat:p.lat,getLng:()=>p.lng,getLat:()=>p.lat};}
     setZoom(zoom){this.map.setZoom(zoom,{animate:false});return this;}
+    getRotation(){return this.map.getBearing();}
+    setRotation(rotation){this.map.setBearing(rotation);return this;}
     setCenter(center){this.map.setView(coord(center),this.getZoom(),{animate:false});return this;}
     setZoomAndCenter(zoom,center){this.map.setView(coord(center),zoom,{animate:false});return this;}
     panBy(x,y){this.map.panBy(Array.isArray(x)?x:[x,y],{animate:false});return this;}
@@ -49,7 +52,7 @@ const fakeSdk='('+function(){
     lngLatToContainer(point){const p=this.map.latLngToContainerPoint(coord(point));return new Pixel(p.x,p.y);}
     setMapStyle(style){this.style=style;return this;}
     resize(){this.map.invalidateSize({pan:false,animate:false});return this;}
-    destroy(){this.destroyed=true;clearTimeout(this.completeTimer);this.map.remove();}
+    destroy(){this.destroyed=true;clearTimeout(this.completeTimer);this.map.shiftKeyRotate?.disable();this.map.remove();}
   }
   class Marker{
     constructor(options){this.options=options;this.position=[...options.position];this.content=options.content;this.map=null;calls.markers.push(this);}
@@ -364,7 +367,7 @@ async function main(){
     assert.match(sdkUrl.searchParams.get('callback'),/^__boatAmapReady/);
     assert.equal(await evaluate('amapTestCalls.security'),testCode,'Security config exists before SDK execution');
     assert.deepEqual(await evaluate('(()=>{const o=amapTestCalls.maps[0].options;return {rotation:o.rotation,pitch:o.pitch,rotateEnable:o.rotateEnable,pitchEnable:o.pitchEnable};})()'),
-      {rotation:0,pitch:0,rotateEnable:false,pitchEnable:false},'Navigation remains north-up to keep bearings accurate');
+      {rotation:0,pitch:0,rotateEnable:true,pitchEnable:false},'Maps initially face north and support rotation without pitch');
     assert.equal(await evaluate('amapTestCalls.maps[0].style'),'amap://styles/darkblue','AMap initially follows the dark dashboard');
     await evaluate("document.getElementById('themeToggle').click()");
     assert.equal(await evaluate('amapTestCalls.maps[0].style'),'amap://styles/normal','AMap follows the light dashboard');

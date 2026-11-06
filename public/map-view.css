@@ -9,6 +9,17 @@
 .boat-map-zoom button { width:30px; height:30px; min-height:30px; padding:0; border:0; border-radius:0; background:var(--panel); color:var(--text); font-size:21px; font-weight:400; }
 .boat-map-zoom button+button { border-top:1px solid var(--line-strong); }
 .boat-map-zoom button:focus-visible { outline-offset:-3px; }
+.boat-map-rotation { position:absolute; right:12px; bottom:26px; z-index:600; display:flex; align-items:stretch; border:1px solid var(--line-strong); border-radius:6px; overflow:hidden; box-shadow:0 2px 10px #0003; background:var(--panel); color:var(--text); }
+.boat-map-rotation button { display:flex; align-items:center; justify-content:center; gap:4px; min-width:30px; height:32px; min-height:32px; margin:0; padding:3px 7px; border:0; border-radius:0; background:var(--panel); color:var(--text); font-size:18px; line-height:1; }
+.boat-map-rotation button+button { border-left:1px solid var(--line-strong); }.boat-map-rotation [data-map-rotation="reset"] { font-size:11px; white-space:nowrap; }
+.boat-map-north-arrow { display:inline-block; font-size:17px; line-height:1; color:var(--accent); }.boat-map-rotation small { font-size:9px; min-width:23px; color:var(--muted); }
+.boat-map-rotation button:hover { background:var(--accent-soft); }.boat-map-rotation button:focus-visible { outline:2px solid var(--accent); outline-offset:-3px; }.boat-map-rotation button:disabled { opacity:.5; cursor:wait; }
+.driving-workspace .boat-map-rotation { right:8px; bottom:23px; }.driving-workspace .boat-map-rotation button { min-width:28px; padding:3px 5px; }
+.driving-workspace[data-focus="map"] .boat-map-rotation { top:110px; bottom:auto; left:16px; right:auto; }
+.driving-workspace[data-focus="video"] .map-fix-status { top:6px; bottom:auto; left:6px; right:6px; max-width:none; padding:3px 5px; font-size:9px; line-height:1.35; }
+.map-stage .map-fix-status { max-width:calc(100% - 156px); }
+@media(max-width:760px){.driving-workspace[data-focus="map"] .boat-map-rotation{top:86px;left:8px}}
+@media(max-width:650px){.boat-map-rotation{right:8px;bottom:24px}.boat-map-rotation button{padding:3px 5px}.driving-workspace[data-focus="video"] .boat-map-rotation small{display:none}}
 .amap-marker .map-velocity-anchor { overflow:visible; }
 .amap-copyright,.amap-logo { visibility:visible; }
 /* 通用图标把 svg 固定为 19px；地图渲染器须使用自己的宽高属性，否则轨迹被裁成小块。 */

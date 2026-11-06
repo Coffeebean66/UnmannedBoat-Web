@@ -379,13 +379,15 @@ async function main(){
     await evaluate('window.fetch=window.__missionFetch;delete window.__missionFetch');
     await shot('driver-autonomy-dark');
     // 多任务由真实页面保存、排序、启停；服务器在切页和关闭页面后自行转场与循环。
-    const queueRoutes=[f.route('boat-01',{name:'队列轨迹一',points:[ORIGIN,N.destination(ORIGIN,0,20)]}),f.route('boat-01',{name:'队列轨迹二',speedMps:1.2,points:[N.destination(ORIGIN,90,20),N.destination(ORIGIN,90,45)]})];
+    const queueRoutes=[f.route('boat-01',{name:'队列轨迹一',points:[ORIGIN,N.destination(ORIGIN,0,20)]}),f.route('boat-01',{name:'队列轨迹二',speedMps:1.2,points:[N.destination(ORIGIN,90,20),N.destination(ORIGIN,90,45)],segments:[{type:'curve',control:require('../public/utils/missionPath').defaultControl(N.destination(ORIGIN,90,20),N.destination(ORIGIN,90,45))}]})];
+    const originalQueueSources=structuredClone(queueRoutes);
     await evaluate('BoatWorkspace.navigate("missions",{focus:false});BoatMissions.poll(true)');await until('BoatMissions.routes.some(r=>r.id==="'+queueRoutes[1].id+'")&&window.BoatMissionQueue&&!BoatMissions.busy');
     const beforeQueuePlanning=f.commands().length;
     await evaluate('BoatWorkspace.navigate("driving",{focus:false});boatMonitor.driver.navigation.selectMode("auto");document.getElementById("driverTaskKind").value="queue";document.getElementById("driverTaskKind").dispatchEvent(new Event("change"));document.getElementById("driverQueueSettings").click()');
     assert.equal(await evaluate('document.getElementById("driverQueueDialog").open&&document.querySelectorAll("#missionQueueCard").length===1&&document.getElementById("driverQueueEditorSlot").contains(document.getElementById("missionQueueCard"))'),true,'Driving settings reuse the single queue editor in a native modal');
     await evaluate('document.getElementById("missionQueueNew").click();document.getElementById("missionQueueName").value="双轨迹巡航";document.getElementById("missionQueueName").dispatchEvent(new Event("input"))');
     for(const route of [queueRoutes[1],queueRoutes[0],queueRoutes[1]])await evaluate('document.getElementById("missionQueueRoute").value="'+route.id+'";document.getElementById("missionQueueAdd").click()');
+    assert.equal(await evaluate('BoatMissionQueue.queue.routes[0]!==BoatMissionQueue.queue.routes[2]&&BoatMissionQueue.queue.routes[0].points!==BoatMissionQueue.queue.routes[2].points'),true,'Repeated sources have separate editable copies');
     await evaluate('document.querySelectorAll("#missionQueueList li")[1].querySelectorAll("button")[0].click();document.querySelectorAll("#missionQueueList li")[2].querySelectorAll("button")[2].click()');
     assert.deepEqual(await evaluate('BoatMissionQueue.queue.routeIds'),queueRoutes.map(r=>r.id),'Real queue buttons reorder and remove routes without touching their geometry');
     await evaluate('document.getElementById("missionQueueLoopEnabled").click();document.getElementById("missionQueueLoopCount").value="0";document.getElementById("missionQueueLoopCount").dispatchEvent(new Event("input"))');
@@ -393,6 +395,67 @@ async function main(){
     await evaluate('document.getElementById("missionQueueLoopCount").value="2";document.getElementById("missionQueueLoopCount").dispatchEvent(new Event("input"));document.getElementById("missionQueueSave").click()');
     await until('!!BoatMissionQueue.queue.id&&!BoatMissionQueue.dirty&&!BoatMissions.busy');
     const queueId=await evaluate('BoatMissionQueue.queue.id');assert.deepEqual(new MissionStore({env:f.env}).getQueue('boat-01',queueId).routeIds,queueRoutes.map(r=>r.id));
+    // 在航线任务页编辑组副本；驾驶弹窗随后复用同一地图和草稿。
+    await evaluate('document.getElementById("driverQueueClose").click();BoatWorkspace.navigate("missions",{focus:false});document.getElementById("missionQueueMap").scrollIntoView({block:"center",behavior:"instant"})');
+    await until('BoatMissionQueue.preview.map?.ready');await evaluate('BoatMissionQueue.preview.fit()');await wait(160);
+    assert.equal(await evaluate('BoatMissionQueue.preview.map.lastTrackLines.filter(l=>l.className==="mission-queue-route-line").length'),2);
+    assert.equal(await evaluate('new Set(BoatMissionQueue.preview.map.lastTrackLines.filter(l=>l.className==="mission-queue-route-line").map(l=>l.color)).size'),2,'Each route has its own color');
+    assert.equal(await evaluate('BoatMissionQueue.preview.map.lastTrackLines.filter(l=>l.className==="mission-queue-transfer-line"&&l.dashed).length'),2,'Transfers and whole-group return are dashed');
+    assert.equal(await evaluate('document.querySelectorAll("#missionQueueLegend button").length'),2);
+    await evaluate('document.getElementById("missionQueueEdit").click()');
+    const firstBefore=await evaluate('BoatMissionQueue.queue.routes[0].points[1]');
+    await dragPin('#missionQueueMap .mission-queue-pin[title*="航点 2"]',12,-16,{beforeDrop:async()=>{
+      await wait(1100);assert.equal(await evaluate('!!BoatMissionQueue.preview.drag&&document.getElementById("missionQueueSave").disabled'),true,'Status polling preserves group drag and prevents saving midway');
+      assert.deepEqual(await evaluate('BoatMissionQueue.queue.routes[0].points[1]'),firstBefore,'Dragging changes only preview until release');
+      assert.notDeepEqual(await evaluate('BoatMissionQueue.preview.map.lastTrackLines.find(l=>l.className==="mission-queue-route-line").points.at(-1)'),firstBefore,'Actual preview path follows the pointer');
+    }});
+    const firstAfter=await evaluate('BoatMissionQueue.queue.routes[0].points[1]');assert.ok(N.distance(firstAfter,firstBefore)>.5);assert.equal(await evaluate('BoatMissionQueue.dirty'),true);
+    await dragPin('#missionQueueMap .mission-queue-pin[title*="航点 2"]',-10,9,{cancel:true});assert.deepEqual(await evaluate('BoatMissionQueue.queue.routes[0].points[1]'),firstAfter,'Esc cancels only the current group drag');
+    await evaluate('document.querySelectorAll("#missionQueueLegend button")[1].click()');
+    assert.equal(await evaluate('BoatMissionQueue.preview.index===1&&document.querySelectorAll("#missionQueuePoints li").length===2'),true);
+    const nextStart=await evaluate('BoatMissionQueue.queue.routes[1].points[0]');
+    await evaluate('document.getElementById("missionQueueAlign").click()');assert.deepEqual(await evaluate('BoatMissionQueue.queue.routes[1].points[0]'),firstAfter,'Group start snaps to previous private endpoint');
+    const setCoordinate=async(index,field,value)=>evaluate('(()=>{const input=document.querySelectorAll("#missionQueuePoints li")['+index+'].querySelectorAll("input")['+field+'];input.value='+JSON.stringify(String(value))+';input.dispatchEvent(new Event("change"));})()');
+    await setCoordinate(0,0,nextStart.latitude);await setCoordinate(0,1,nextStart.longitude);
+    await setCoordinate(1,0,nextStart.latitude);await setCoordinate(1,1,nextStart.longitude);
+    assert.equal(await evaluate('!document.getElementById("missionQueuePreviewError").hidden&&document.getElementById("missionQueueSave").disabled'),true,'Invalid copied geometry is explained before saving');
+    const revisedEnd=N.destination(queueRoutes[1].points[1],90,5);await setCoordinate(1,0,revisedEnd.latitude);await setCoordinate(1,1,revisedEnd.longitude);
+    await evaluate('document.getElementById("missionQueueMap").scrollIntoView({block:"center",behavior:"instant"});BoatMissionQueue.preview.fit()');await wait(120);
+    const controlBefore=await evaluate('BoatMissionQueue.queue.routes[1].segments[0].control');
+    await dragPin('#missionQueueMap .mission-queue-control-pin',0,6);assert.notDeepEqual(await evaluate('BoatMissionQueue.queue.routes[1].segments[0].control'),controlBefore,'Curve control edits remain private too');
+    const linesBeforeHide=await evaluate('BoatMissionQueue.preview.map.lastTrackLines.filter(l=>l.className!=="mission-queue-curve-guide")');
+    await evaluate('document.getElementById("missionQueueWaypoints").click()');assert.equal(await evaluate('BoatMissionQueue.preview.markers.length'),0);
+    assert.deepEqual(await evaluate('BoatMissionQueue.preview.map.lastTrackLines'),linesBeforeHide,'Hiding markers preserves colored curves and transfers');
+    await evaluate('document.getElementById("missionQueueEdit").click()');assert.equal(await evaluate('BoatMissionQueue.preview.pointsVisible&&BoatMissionQueue.preview.editable()'),true);
+    await evaluate('BoatMissionQueue.preview.map.switchProvider("osm")');
+    await evaluate('document.getElementById("missionQueueMapProvider").click()');await until('BoatMissionQueue.preview.map.provider==="arcgis"&&!BoatMissionQueue.preview.map.switching');
+    await evaluate('document.getElementById("missionQueueSave").click()');await until('!BoatMissionQueue.dirty&&!BoatMissions.busy');
+    await send('Emulation.setDeviceMetricsOverride',{width:375,height:812,deviceScaleFactor:1,mobile:true});await send('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
+    await send('Page.reload');await until('window.BoatMissionQueue?.queue.id==="'+queueId+'"&&BoatMissionQueue.preview.map?.ready');
+    await evaluate('BoatMissionQueue.preview.select(1);document.getElementById("missionQueueEdit").click();document.getElementById("missionQueueMap").scrollIntoView({block:"center",behavior:"instant"});BoatMissionQueue.preview.fit()');await wait(160);
+    const touchBefore=await evaluate('BoatMissionQueue.queue.routes[1].points[1]');
+    await dragPin('#missionQueueMap .mission-queue-pin[title*="航点 2"]',30,-15,{touch:true,beforeDrop:async()=>assert.equal(await evaluate('!!BoatMissionQueue.preview.drag'),true,'Mobile browser starts a genuine group waypoint drag')});assert.ok(N.distance(await evaluate('BoatMissionQueue.queue.routes[1].points[1]'),touchBefore)>.3,'Touch dragging on satellite map updates only the selected copy');
+    await send('Emulation.setTouchEmulationEnabled',{enabled:false});
+    await evaluate('document.getElementById("missionQueueMapProvider").click()');await until('BoatMissionQueue.preview.map.provider==="osm"&&!BoatMissionQueue.preview.map.switching');
+    const draftPoints=await evaluate('BoatMissionQueue.queue.routes');
+    await evaluate('boatMonitor.selectBoat("boat-02",false)');await until('BoatMissionQueue.deviceId==="boat-02"');assert.equal(await evaluate('BoatMissionQueue.preview.markers.length'),0);
+    await evaluate('boatMonitor.selectBoat("boat-01",false)');await until('BoatMissionQueue.deviceId==="boat-01"');assert.deepEqual(await evaluate('BoatMissionQueue.queue.routes'),draftPoints,'Group geometry drafts are isolated per vessel');
+    for(const theme of ['dark','light']){
+      await evaluate('document.documentElement.dataset.theme==="'+theme+'"||document.getElementById("themeToggle").click()');
+      for(const [width,height]of [[1440,1100],[375,812],[320,812]]){
+        await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<500});
+        await evaluate('document.querySelector(".mission-queue-preview").scrollIntoView({block:"start",behavior:"instant"});BoatMissionQueue.preview.fit()');await wait(100);
+        assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth+1&&document.getElementById("missionQueueMap").getBoundingClientRect().height>=300&&["missionQueueMap","missionQueuePreviewRoute","missionQueuePoints"].every(id=>{const r=document.getElementById(id).getBoundingClientRect();return r.width>0&&r.left>=0&&r.right<=innerWidth;})'),true,'Group preview fits '+width+' '+theme);
+        await shot('mission-queue-preview-'+width+'-'+theme);
+      }
+    }
+    await evaluate('document.getElementById("themeToggle").click();document.getElementById("missionQueueSave").click()');await until('!BoatMissionQueue.dirty&&!BoatMissions.busy');
+    const privateSaved=new MissionStore({env:f.env}).getQueue('boat-01',queueId);assert.deepEqual(privateSaved.routes,draftPoints);assert.deepEqual(new MissionStore({env:f.env}).list('boat-01').filter(r=>queueRoutes.some(s=>s.id===r.id)),originalQueueSources,'Editing group copies leaves the original library byte-for-byte equivalent');
+    for(let i=0;i<queueRoutes.length;i++){queueRoutes[i].points=privateSaved.routes[i].points;queueRoutes[i].segments=privateSaved.routes[i].segments;}
+    // 来源删除后仍可预览、保存和执行任务组；保留第二条来源验证活动组不会锁定原航线。
+    f.store.delete('boat-01',queueRoutes[0].id,queueRoutes[0].revision);await evaluate('BoatMissions.poll(true)');await until('!BoatMissions.routes.some(r=>r.id==="'+queueRoutes[0].id+'")');
+    assert.equal(await evaluate('!document.getElementById("missionQueueSave").disabled&&BoatMissionQueue.preview.map.lastTrackLines.some(l=>l.className==="mission-queue-route-line")'),true);
+    await evaluate('BoatWorkspace.navigate("driving",{focus:false});boatMonitor.driver.navigation.selectMode("auto");document.getElementById("driverTaskKind").value="queue";document.getElementById("driverTaskKind").dispatchEvent(new Event("change"));document.getElementById("driverQueueSettings").click()');
     assert.equal(f.commands().length,beforeQueuePlanning,'Saving and editing a queue never arms the boat');
     for(const [width,height]of [[1440,1100],[375,812],[320,812]]){
       await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
@@ -426,7 +489,8 @@ async function main(){
     assert.equal(f.mission.snapshot('boat-01').queue.completedLoops,0,'Goto only reaches the first start and stops');
     await until('!document.getElementById("driverNavStart").disabled');await evaluate('document.getElementById("driverNavStart").click()');await until('BoatMissions.run()?.queue?.id==="'+queueId+'"&&BoatMissions.run()?.status==="running"&&BoatMissions.run()?.targetIndex===1');
     const queueLease=f.mission.jobs.get('boat-01').leaseId;
-    await evaluate('BoatMissions.load("'+queueRoutes[1].id+'")');assert.equal(await evaluate('document.getElementById("missionSave").disabled&&document.getElementById("missionQueueSave").disabled&&document.getElementById("missionQueueLoopCount").disabled'),true,'Every queued route and the running queue are locked');
+    await evaluate('BoatMissions.load("'+queueRoutes[1].id+'")');assert.equal(await evaluate('!document.getElementById("missionSave").disabled&&document.getElementById("missionQueueSave").disabled&&document.getElementById("missionQueueLoopCount").disabled&&!BoatMissionQueue.preview.editable()'),true,'Running private group is locked while its original routes stay editable');
+    assert.deepEqual(f.mission.snapshot('boat-01').route.points,privateSaved.routes[0].points,'Server navigates the edited private waypoints');
     f.feed('boat-01',{...queueRoutes[0].points[1],heading:0});await until('BoatMissions.run()?.phase==="transit"&&BoatMissions.run()?.queue?.routeIndex===1');
     await evaluate('BoatWorkspace.navigate("navigation",{focus:false})');await until('boatMonitor.map._lineOverlays.get("mission")?.lines.some(l=>l.className==="map-mission-line map-mission-transfer")');
     const transferLine=await evaluate('boatMonitor.map._lineOverlays.get("mission").lines.find(l=>l.className==="map-mission-line map-mission-transfer").points');
@@ -454,7 +518,7 @@ async function main(){
     await evaluate('document.getElementById("driverEmergency").click()');await until('BoatMissions.run()?.status==="stopped"&&!boatMonitor.driver.navigation.motionPending');
     await wait(1400);assert.equal(f.mission.active('boat-01'),false,'Late queue-start HTTP response cannot revive a group cancelled from the driving emergency button');
     await evaluate('window.fetch=window.__missionFetch;delete window.__missionFetch');
-    console.log('PASS: queue UI ordering/save/reload/vessel isolation, 320/375/1440px layout, goto, all-route locks, automatic transfers, pause/resume, closed-page execution and two whole-queue loops.');
+    console.log('PASS: multicolor group preview, private coordinate/mouse/touch/curve edits, Esc/invalid-geometry feedback, original-library isolation/deletion, dark/light responsive layouts, save/reload, private execution, group locks, transfers, pause/resume and two whole-queue loops.');
     await evaluate('BoatWorkspace.navigate("missions",{focus:false});document.getElementById("themeToggle").click()');
     for(const [width,height]of [[1440,1100],[1024,900],[375,812],[320,812]]){
       await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});await wait(100);

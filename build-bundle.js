@@ -1,22 +1,26 @@
-/* 将纯工具包装为浏览器包，并从锁定的 npm 依赖复制本地播放器及许可证。 */
+/* 将纯工具包装为浏览器包，并从锁定的 npm 依赖复制地图、播放器及许可证。 */
 const fs = require('fs');
 const path = require('path');
-// 播放器与站点同源发布；部署先 npm ci，再 build，不依赖外部脚本 CDN。
-const playerAssets = [
+// 地图与播放器随站点同源发布；部署先 npm ci，再 build，不依赖外部脚本 CDN。
+const vendorAssets = [
+  { packageName: 'leaflet', directory: 'leaflet', files: ['dist/leaflet.js', 'dist/leaflet.css', 'dist/images/layers.png', 'dist/images/layers-2x.png', 'dist/images/marker-icon.png', 'dist/images/marker-icon-2x.png', 'dist/images/marker-shadow.png', 'LICENSE'] },
+  { packageName: 'leaflet-rotate', directory: 'leaflet-rotate', files: ['dist/leaflet-rotate.js', 'LICENSE'] },
   { packageName: 'hls.js', directory: 'hls', files: ['dist/hls.min.js', 'LICENSE'] },
   { packageName: 'mpegts.js', directory: 'mpegts', files: ['dist/mpegts.js', 'dist/mpegts.js.LICENSE.txt', 'LICENSE'] }
 ];
-for (const player of playerAssets) {
-  const packageDirectory = path.join(__dirname, 'node_modules', player.packageName);
-  const destination = path.join(__dirname, 'public', 'vendor', player.directory);
-  for (const file of player.files) {
+for (const asset of vendorAssets) {
+  const packageDirectory = path.join(__dirname, 'node_modules', asset.packageName);
+  const destination = path.join(__dirname, 'public', 'vendor', asset.directory);
+  for (const file of asset.files) {
     if (!fs.existsSync(path.join(packageDirectory, file))) {
-      throw new Error(`缺少 ${player.packageName}/${file}，请先运行 npm ci --omit=dev`);
+      throw new Error(`缺少 ${asset.packageName}/${file}，请先运行 npm ci --omit=dev`);
     }
   }
   fs.mkdirSync(destination, { recursive: true });
-  for (const file of player.files) {
-    fs.copyFileSync(path.join(packageDirectory, file), path.join(destination, path.basename(file)));
+  for (const file of asset.files) {
+    const target=path.join(destination,file.startsWith('dist/')?file.slice(5):file);
+    fs.mkdirSync(path.dirname(target),{recursive:true});
+    fs.copyFileSync(path.join(packageDirectory, file),target);
   }
 }
 // 可选同步将小程序纯工具和参数说明复制为快照；部署不依赖相邻工程。
@@ -55,4 +59,4 @@ const modules = files.map(name => `${JSON.stringify('utils/' + name)}: function(
 const bundle = `(function(root) {\n'use strict';\nconst modules = {\n${modules}\n};\nconst cache = Object.create(null);\nfunction normalize(from, request) {\n const parts = request.startsWith('.') ? from.split('/').slice(0, -1).concat(request.split('/')) : request.split('/');\n const result = []; for (const part of parts) { if (!part || part === '.') continue; if (part === '..') result.pop(); else result.push(part); }\n let id = result.join('/'); if (!id.endsWith('.js')) id += '.js'; return id;\n}\nfunction load(id) {\n if (cache[id]) return cache[id].exports; if (!modules[id]) throw new Error('找不到模块: ' + id);\n const module = { exports: {} }; cache[id] = module; modules[id](request => load(normalize(id, request)), module, module.exports); return module.exports;\n}\nroot.BoatModules = Object.fromEntries(Object.keys(modules).map(id => [id.split('/').pop().replace('.js', ''), load(id)]));\n})(window);\n`;
 fs.writeFileSync(path.join(__dirname, 'public', 'utils-bundle.js'), bundle, 'utf8');
 console.log(`已生成 ${files.length} 个浏览器模块`);
-console.log('已复制 HLS / HTTP-FLV 播放器与许可证至 public/vendor');
+console.log('已复制地图、旋转组件、HLS / HTTP-FLV 播放器与许可证至 public/vendor');

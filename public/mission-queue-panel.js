@@ -2,6 +2,7 @@
 (() => {
   'use strict';
   const $=id=>document.getElementById(id),copy=x=>JSON.parse(JSON.stringify(x));
+  const definition=r=>{const {name,speedMps,arrivalRadiusM,loopEnabled,loopCount,points,segments}=r;return copy({name,speedMps,arrivalRadiusM,loopEnabled,loopCount,points,...(segments?{segments}:{})});};
   class MissionQueuePanel {
     constructor(){
       this.deviceId='';this.queue=this.blank();this.dirty=false;this.drafts=new Map();
@@ -14,7 +15,7 @@
       $('missionQueueAdd').onclick=()=>{
         const id=$('missionQueueRoute').value;if(!this.m.routes.some(r=>r.id===id))return;
         if(this.queue.routeIds.length>=32)return this.notice('每个任务队列最多 32 条航线',true);
-        this.queue.routeIds.push(id);this.changed();
+        this.queue.routeIds.push(id);this.queue.routes.push(definition(this.m.routes.find(r=>r.id===id)));this.changed();
       };
       $('missionQueueSave').onclick=()=>this.perform(()=>this.save());
       $('missionQueueDelete').onclick=()=>this.perform(()=>this.remove());
@@ -22,10 +23,12 @@
       for(const [id,action]of [['missionQueuePause','pause'],['missionQueueResume','resume']])$(id).onclick=()=>this.perform(()=>this.m.submitNavigation(action));
       $('missionQueueStop').onclick=()=>{const run=this.m.run();if(run?.queue)this.m.stop(run).catch(error=>this.notice(error.message,true));};
       window.addEventListener('boat-mission-change',()=>this.sync());
+      this.preview=new window.BoatMissionQueuePreview(this);
       this.sync();
     }
     get m(){return window.BoatMissions;}
-    blank(){return {name:'新任务队列',routeIds:[],loopEnabled:false,loopCount:1};}
+    blank(){return {name:'新任务队列',routeIds:[],routes:[],loopEnabled:false,loopCount:1};}
+    canEdit(){const run=this.m.run();return this.m.admin&&!!this.deviceId&&!this.m.busy&&!(run?.active&&run.queue&&run.queue.id===this.queue.id);}
     remember(){if(this.deviceId)this.drafts.set(this.deviceId,{queue:copy(this.queue),dirty:this.dirty});}
     sync(){
       const auth=String(window.BoatAuth?.generation);
@@ -42,7 +45,11 @@
     }
     load(id){
       if(this.dirty&&!window.confirm('放弃当前未保存的队列修改？')){$('missionQueueSelect').value=this.queue.id||'';return;}
-      const saved=this.m.queues.find(q=>q.id===id);this.queue=saved?copy(saved):this.blank();this.dirty=false;this.remember();this.fill();this.notice('');this.render();
+      const saved=this.m.queues.find(q=>q.id===id);
+      if(saved&&(!Array.isArray(saved.routes)||saved.routes.length!==saved.routeIds.length)){
+        $('missionQueueSelect').value=this.queue.id||'';this.notice('任务组缺少独立副本数据，请更新任务管理组件后重新载入。',true);return;
+      }
+      this.queue=saved?copy(saved):this.blank();this.dirty=false;this.remember();this.fill();this.notice('');this.render();
     }
     changed(){this.dirty=true;this.remember();this.render();}
     notice(text,error=false){$('missionQueueNotice').textContent=text;$('missionQueueNotice').dataset.error=String(error);}
@@ -51,8 +58,8 @@
       return this.m.action(async()=>{try{await fn();}catch(error){if(id===this.deviceId)this.notice(error.name==='AbortError'?'请求超时，请刷新确认操作结果':error.message,true);throw error;}});
     }
     async save(){
-      const m=this.m,generation=m.generation,id=this.deviceId,{name,routeIds,loopEnabled,loopCount}=this.queue;
-      const data=await m.request('/queue',{method:'POST',body:JSON.stringify({deviceId:id,queue:{name,routeIds,loopEnabled,loopCount},...(this.queue.id?{id:this.queue.id,revision:this.queue.revision}:{})})});
+      const m=this.m,generation=m.generation,id=this.deviceId,{name,routeIds,routes,loopEnabled,loopCount}=this.queue;
+      const data=await m.request('/queue',{method:'POST',body:JSON.stringify({deviceId:id,queue:{name,routeIds,routes,loopEnabled,loopCount},...(this.queue.id?{id:this.queue.id,revision:this.queue.revision}:{})})});
       if(generation!==m.generation)return;
       this.queue=data.queue;this.dirty=false;this.remember();m.queues=m.queues.filter(q=>q.id!==data.queue.id).concat(data.queue);this.fill();this.render();this.notice('任务队列已保存到服务器，下次可直接调用。');
     }
@@ -73,8 +80,8 @@
     }
     render(){
       const m=this.m,q=this.queue,run=m.run(),active=!!run?.active,paused=run?.status==='paused',own=!!run?.queue&&run.queue.id===q.id;
-      const locked=m.busy||!m.admin||!this.deviceId,editingLocked=locked||(active&&own);
-      const valid=q.routeIds.length>0&&q.routeIds.length<=32&&q.routeIds.every(id=>m.routes.some(r=>r.id===id))&&Number.isSafeInteger(q.loopCount)&&q.loopCount>=1&&q.loopCount<=999;
+      const locked=m.busy||!m.admin||!this.deviceId,editingLocked=locked||(active&&own)||!!this.preview?.drag;
+      const valid=q.routeIds.length>0&&q.routeIds.length<=32&&q.routes?.length===q.routeIds.length&&q.routes.every((r,i)=>r?.points?.length>=2&&!this.preview.geometry(r,i).error)&&Number.isSafeInteger(q.loopCount)&&q.loopCount>=1&&q.loopCount<=999;
       const signature=JSON.stringify([m.queues.map(q=>[q.id,q.name,q.revision]),m.routes.map(r=>[r.id,r.name,r.revision])]);
       if(signature!==this.optionsKey){
         this.optionsKey=signature;const old=$('missionQueueRoute').value;
@@ -95,24 +102,26 @@
       $('missionQueueResume').disabled=locked||!own||!paused||!run.resumable||!!m.statusError;
       $('missionQueueStop').disabled=!m.admin||!own||(!active&&!paused)||run.status==='stopping'||m.stops.has(this.deviceId);
       $('missionQueueHelp').textContent=q.loopEnabled?'首条 → 依次执行 → 末条 → 返回首条起点算一轮；最后一轮也返回起点后停止。':'按列表依次执行，每条航线保留自己的循环设置；整组只执行一次。';
-      $('missionQueueSummary').textContent=q.routeIds.length+' 条航线 · '+(this.dirty?'有未保存修改':q.id?'已保存 v'+q.revision:'尚未保存')+(m.dirty&&q.routeIds.includes(m.route.id)?' · 请先保存航线修改':'');
+      $('missionQueueSummary').textContent=q.routeIds.length+' 条航线副本 · '+(this.dirty?'有未保存修改':q.id?'已保存 v'+q.revision:'尚未保存')+' · 调整副本不改变原航线';
       $('missionQueueProgress').textContent=run?.queue?m.statusError?'队列状态同步中断，请刷新':m.runTitle(run)+' · '+(run.queue.currentLoop===null?'前往起点':'第 '+run.queue.currentLoop+' / '+run.queue.loopCount+' 轮，已完成 '+run.queue.completedLoops+' 轮')+' · '+run.message:'当前没有执行中的任务队列';
-      const key=JSON.stringify([q.routeIds,m.routes.map(r=>[r.id,r.name,r.speedMps,r.loopEnabled,r.loopCount]),editingLocked,own&&run?.queue?.routeIndex,active,paused]);
+      const key=JSON.stringify([q.routeIds,q.routes?.map(r=>[r.name,r.speedMps,r.loopEnabled,r.loopCount]),editingLocked,own&&run?.queue?.routeIndex,active,paused]);
       if(key!==this.listKey){
         this.listKey=key;const list=$('missionQueueList');list.replaceChildren();$('missionQueueEmpty').hidden=q.routeIds.length>0;
         q.routeIds.forEach((id,index)=>{
-          const route=m.routes.find(r=>r.id===id),row=document.createElement('li');row.className='mission-queue-row';row.dataset.current=String(own&&(active||paused)&&run.queue.routeIndex===index);
+          const route=q.routes?.[index],row=document.createElement('li');row.className='mission-queue-row';row.dataset.current=String(own&&(active||paused)&&run.queue.routeIndex===index);
+          row.style.setProperty('--queue-route-color',this.preview.color(index));
           const label=document.createElement('div'),name=document.createElement('strong'),detail=document.createElement('span');
           name.textContent=(index+1)+' · '+(route?.name||'航线已不存在，请移除');detail.textContent=route?route.speedMps+' m/s · '+(route.loopEnabled?'自身循环 '+route.loopCount+' 圈':'单次'):'请选择有效航线';label.append(name,detail);row.append(label);
           const tools=document.createElement('div');tools.className='mission-point-tools';
           for(const [text,offset]of [['↑',-1],['↓',1],['移除',0]]){
             const button=document.createElement('button');button.type='button';button.textContent=text;button.setAttribute('aria-label','队列第 '+(index+1)+' 条航线'+text);
             button.disabled=editingLocked||(offset===-1&&index===0)||(offset===1&&index===q.routeIds.length-1);
-            button.onclick=()=>{if(offset)[q.routeIds[index],q.routeIds[index+offset]]=[q.routeIds[index+offset],q.routeIds[index]];else q.routeIds.splice(index,1);this.changed();};tools.append(button);
+            button.onclick=()=>{if(offset){[q.routeIds[index],q.routeIds[index+offset]]=[q.routeIds[index+offset],q.routeIds[index]];[q.routes[index],q.routes[index+offset]]=[q.routes[index+offset],q.routes[index]];}else{q.routeIds.splice(index,1);q.routes.splice(index,1);}this.changed();};tools.append(button);
           }
           row.append(tools);list.append(row);
         });
       }
+      this.preview.render();
     }
   }
   window.BoatMissionQueue=new MissionQueuePanel();

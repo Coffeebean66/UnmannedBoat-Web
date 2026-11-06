@@ -29,6 +29,7 @@
       this.ready = false;
       this.switching = false;
       this.provider = 'osm';
+      this._rotation = 0;
       this.status = { message: '正在准备地图', tone: 'loading' };
       this.map = null;
       this.lastTrackLines = [];
@@ -76,6 +77,7 @@
     _setSwitching(value) {
       this.switching = value;
       this._renderLayerControls();
+      this._renderRotationControls();
       this._emit('switching', value);
     }
 
@@ -303,11 +305,12 @@
       const center = this.project({ latitude: 31.23, longitude: 121.47 });
       this.map = new scope.AMap.Map(this.container, {
         viewMode: '2D', zoom: 5, center: [center.longitude, center.latitude],
-        rotation: 0, pitch: 0, rotateEnable: false, pitchEnable: false,
+        rotation: this._rotation, pitch: 0, rotateEnable: true, pitchEnable: false,
         showLabel: true, zooms: [3, 20]
       });
       this._bindMap('dragstart', event => this._emit('dragstart', event));
       this._bindMap('resize', event => this._emit('resize', event));
+      this._bindRotation('rotatechange');
       this._bindMap('click', event => {
         const p=event.lnglat;
         const location=this.unproject({latitude:p?.getLat?.()??p?.lat,longitude:p?.getLng?.()??p?.lng});
@@ -363,6 +366,7 @@
     }
 
     _createLayerControls() {
+      this._createRotationControls();
       if (this._destroyed || !this.container || this._layerControls) return;
       const controls = scope.document.createElement('div');
       controls.className = 'boat-map-layers';
@@ -416,9 +420,13 @@
 
     _createOsm() {
       if (!scope.L?.map) throw new Error('本地地图组件未加载');
-      this.map = scope.L.map(this.container, { zoomControl: true, minZoom: 3, maxZoom: this.maxZoom }).setView([31.23, 121.47], 5);
+      this.map = scope.L.map(this.container, { zoomControl: true, minZoom: 3, maxZoom: this.maxZoom,
+        rotate: true, bearing: this._rotation, rotateControl: false, touchRotate: true,
+        shiftKeyRotate: true, pitch: 0, pitchDrag: false, touchPitch: false, compassBearing: false
+      }).setView([31.23, 121.47], 5);
       this._bindMap('dragstart', event => this._emit('dragstart', event));
       this._bindMap('resize', event => this._emit('resize', event));
+      this._bindRotation('rotate');
       this._bindMap('click', event => {const location=fix(event.latlng);if(location)this._emit('click',location);});
       const currentMap = this.map;
       let layers;
@@ -453,6 +461,60 @@
             if (!this._destroyed && this.map === currentMap && !failed.size) this._mapReadyStatus();
           }).addTo(this.map);
       });
+    }
+
+    // 所有角度统一为地图相对朝北的顺时针旋转量；复位只改变方向，不改变船位与缩放。
+    getRotation() {
+      const value=this.provider==='amap'?this.map?.getRotation?.():this.map?.getBearing?.();
+      return Number.isFinite(value)?((value%360)+360)%360:this._rotation;
+    }
+
+    setRotation(degrees) {
+      if(!this.ready||this.switching||!Number.isFinite(degrees))return this;
+      const angle=((degrees%360)+360)%360;
+      if(this.provider==='amap')this.map.setRotation?.(angle,true);
+      else this.map.setBearing?.(angle);
+      this._rotationChanged();return this;
+    }
+
+    resetRotation() { return this.setRotation(0); }
+
+    _bindRotation(name) {
+      const current=this.map;
+      this._bindMap(name,()=>{if(!this._destroyed&&this.map===current)this._rotationChanged();});
+    }
+
+    _rotationChanged() {
+      const previous=this._rotation;this._rotation=this.getRotation();this._renderRotationControls();
+      if(previous!==this._rotation)this._emit('rotationchange',{rotation:this._rotation});
+    }
+
+    _createRotationControls() {
+      if(this._destroyed||!this.container||this._rotationControls)return;
+      const controls=scope.document.createElement('div');controls.className='boat-map-rotation';
+      controls.setAttribute('role','group');controls.setAttribute('aria-label','地图旋转与朝北复位');
+      this._rotationButtons=[];
+      for(const [action,text,label]of [['left','↶','地图向左旋转15度'],['reset','复位','地图朝北复位'],['right','↷','地图向右旋转15度']]){
+        const button=scope.document.createElement('button');button.type='button';button.textContent=text;
+        button.setAttribute('data-map-rotation',action);button.setAttribute('aria-label',label);button.title=label;
+        if(action==='reset'){
+          const arrow=scope.document.createElement('span');arrow.className='boat-map-north-arrow';arrow.textContent='↑';arrow.setAttribute('aria-hidden','true');
+          const angle=scope.document.createElement('small');button.appendChild(arrow);button.appendChild(angle);this._rotationArrow=arrow;this._rotationLabel=angle;
+        }
+        button.addEventListener('click',()=>{if(action==='reset')this.resetRotation();else this.setRotation(this.getRotation()+(action==='left'?-15:15));});
+        controls.appendChild(button);this._rotationButtons.push(button);
+      }
+      for(const event of ['click','dblclick','pointerdown','mousedown','touchstart','wheel','keydown'])controls.addEventListener(event,e=>e.stopPropagation());
+      const parent=this.container.parentElement,host=parent?.classList?.contains('map-stage')?parent:this.container;
+      host.appendChild(controls);this._rotationControls=controls;this._renderRotationControls();
+    }
+
+    _renderRotationControls() {
+      if(!this._rotationControls)return;
+      const rotation=this.getRotation(),display=Math.round(rotation>180?rotation-360:rotation);
+      for(const button of this._rotationButtons)button.disabled=!this.ready||this.switching;
+      this._rotationControls.setAttribute('data-rotation',String(rotation));
+      this._rotationArrow.style.transform='rotate('+rotation+'deg)';this._rotationLabel.textContent=display+'°';
     }
 
     project(value) {
@@ -777,6 +839,7 @@
 
     _disposeMap(preserveMarkers = false) {
       this._cancelMapReady?.();
+      this._rotation=this.getRotation();
       this.ready = false;
       for (const marker of this._markers) {
         if (preserveMarkers) marker._detach(); else marker.remove();
@@ -792,9 +855,15 @@
       this._zoomControls = null;
       this._layerControls?.remove();
       this._layerControls = null; this._sourceSelect = null; this._controlMode = null;
+      this._rotationControls?.remove();this._rotationControls=null;this._rotationButtons=[];this._rotationArrow=null;this._rotationLabel=null;
       for (const layer of this._tileLayers) layer.off?.();
       this._tileLayers = [];
-      if (this.provider === 'amap') this.map?.destroy?.(); else this.map?.remove?.();
+      if (this.provider === 'amap') this.map?.destroy?.();
+      else {
+        // 旋转插件的滚轮处理器没有注册进 Leaflet 的统一清理列表，换图前需主动解绑。
+        this.map?.shiftKeyRotate?.disable?.();
+        this.map?.remove?.();
+      }
       this.map = null;
       this._tiles = null;
       this._amapPolicyBlocked = false;
