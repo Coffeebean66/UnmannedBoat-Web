@@ -110,7 +110,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">无人船监测 <span>v1.50.0</span></div>
+      <div class="sidebar-version">无人船监测 <span>v1.51.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -139,10 +139,11 @@
         <div class="mission-toolbar"><div><strong id="missionBoatName">请选择无人船</strong><p class="muted">服务器独立执行 · 关闭网页后继续 · 重启后手动开始</p></div><button id="missionRefresh" type="button" class="small-button">刷新任务</button></div>
         <div class="mission-layout">
           <section class="mission-map-card" aria-label="航线地图">
-            <div class="mission-map-tools"><button id="missionEdit" type="button" class="small-button" aria-pressed="false">开启点选航点</button><button id="missionFit" type="button" class="small-button">显示整条航线</button><button id="missionCenter" type="button" class="small-button">定位船只</button><button id="missionProvider" type="button" class="small-button">切换地图</button></div>
+            <div class="mission-map-tools"><button id="missionEdit" type="button" class="small-button" aria-pressed="false">开启点选航点</button><label class="mission-segment-type">新增航段<select id="missionSegmentType" aria-label="新增航段形式"><option value="line">直线</option><option value="curve">曲线</option></select></label><button id="missionFit" type="button" class="small-button">显示整条航线</button><button id="missionCenter" type="button" class="small-button">定位船只</button><button id="missionProvider" type="button" class="small-button">切换地图</button></div>
+            <div id="missionCurveEdit" class="mission-curve-edit" hidden><span id="missionCurveHint" role="status"></span><button id="missionCurveCancel" type="button" class="small-button">取消选择</button></div>
             <div id="missionMap" role="application" aria-label="点击地图依次添加开始点、中间点和结束点"></div>
             <p id="missionMapStatus" class="mission-map-status" role="status">打开任务页后加载地图</p>
-            <div class="mission-map-legend"><span><i class="mission-start-dot"></i>开始点</span><span><i></i>中间点</span><span><i class="mission-end-dot"></i>结束点</span><span id="missionLoopLegend" hidden><i class="mission-return-line"></i>终点 → 起点</span><span>WGS84 · 依次直线连接</span></div>
+            <div class="mission-map-legend"><span><i class="mission-start-dot"></i>开始点</span><span><i></i>中间点</span><span><i class="mission-end-dot"></i>结束点</span><span><i class="mission-curve-dot"></i>弯曲控制点</span><span id="missionLoopLegend" hidden><i class="mission-return-line"></i>终点 → 起点</span><span>WGS84 · 直线 / 曲线航段</span></div>
           </section>
           <div class="mission-sidebar">
             <section class="mission-card" aria-labelledby="missionRouteTitle">
@@ -166,7 +167,7 @@
           </div>
         </div>
         <section class="mission-card mission-waypoint-card" aria-labelledby="missionPointsTitle">
-          <div class="mission-card-heading"><div><h2 id="missionPointsTitle">航点序列</h2><p class="muted">首点为开始点，末点为结束点；经纬度可手动校准。</p></div><div class="mission-actions"><button id="missionAddPosition" type="button" class="small-button">加入当前船位</button><button id="missionAddCenter" type="button" class="small-button">加入地图中心</button><button id="missionClear" type="button" class="small-button">清空航点</button></div></div>
+          <div class="mission-card-heading"><div><h2 id="missionPointsTitle">航点序列</h2><p class="muted">首点为开始点，末点为结束点；每段可选直线或曲线。弯曲控制点决定形状，船不必经过该点。</p></div><div class="mission-actions"><button id="missionAddPosition" type="button" class="small-button">加入当前船位</button><button id="missionAddCenter" type="button" class="small-button">加入地图中心</button><button id="missionClear" type="button" class="small-button">清空航点</button></div></div>
           <p id="missionPointsEmpty" class="mission-empty">开启地图点选，依次添加开始点、中间点和结束点。</p><ol id="missionPoints" class="mission-points" aria-label="航点列表"></ol>
         </section>
         <p id="missionNotice" class="mission-notice" role="status">请登录并选择需要规划任务的无人船。</p>

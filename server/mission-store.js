@@ -3,6 +3,7 @@
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const {resolveMapConfigFile}=require('./map-config');
 const {distance}=require('../public/utils/missionNavigation');
+const nav=require('../public/utils/missionNavigation'),paths=require('../public/utils/missionPath');
 const {DEVICE}=require('./control-service');
 const fault=(status,message)=>Object.assign(Error(message),{status});
 const ID=/^[a-f0-9]{16}$/;
@@ -12,7 +13,7 @@ function normalizePoint(p){
   return {latitude:p.latitude,longitude:p.longitude};
 }
 function normalizeRoute(input){
-  const required=['name','speedMps','arrivalRadiusM','points'],keys=[...required,'loopEnabled','loopCount'];
+  const required=['name','speedMps','arrivalRadiusM','points'],keys=[...required,'loopEnabled','loopCount','segments'];
   if(!plain(input)||required.some(k=>!Object.hasOwn(input,k))||Object.keys(input).some(k=>!keys.includes(k)))throw fault(400,'航线字段不正确');
   if(typeof input.name!=='string'||!input.name.trim()||input.name.trim().length>80||/[\x00-\x1f]/.test(input.name))throw fault(400,'任务名称须为 1—80 个字符');
   if(!Number.isFinite(input.speedMps)||input.speedMps<0.1||input.speedMps>20)throw fault(400,'任务航速须为 0.1—20 m/s，且执行时不能超过船端最大速度');
@@ -26,15 +27,30 @@ function normalizeRoute(input){
     if(!plain(p)||Object.keys(p).length!==2||!Number.isFinite(p.latitude)||!Number.isFinite(p.longitude)||Math.abs(p.latitude)>85||Math.abs(p.longitude)>180)throw fault(400,'航点须为有效 WGS84 经纬度（纬度 ±85° 内）');
     return {latitude:p.latitude,longitude:p.longitude};
   });
-  let lengthM=0;
-  for(let i=1;i<points.length;i++){const d=distance(points[i-1],points[i]);if(d<0.5||d>20000)throw fault(400,'相邻航点距离须为 0.5 米—20 千米');lengthM+=d;}
+  let segments;
+  if(Object.hasOwn(input,'segments')){
+    if(!Array.isArray(input.segments)||input.segments.length!==points.length-1)throw fault(400,'航段数量须等于航点数减一');
+    segments=input.segments.map((segment,index)=>{
+      if(!plain(segment)||!['line','curve'].includes(segment.type)||Object.keys(segment).length!==(segment.type==='line'?1:2))throw fault(400,'航段须为直线或含弯曲控制点的曲线');
+      if(segment.type==='line')return {type:'line'};
+      const control=normalizePoint(segment.control),start=points[index],end=points[index+1],projection=nav.guide(control,start,end,0);
+      if(distance(start,control)>20000||distance(end,control)>20000||projection.alongM<-.01||projection.alongM>projection.lengthM+.01)throw fault(400,'弯曲控制点须位于航段两端之间，且距两端均不超过 20 千米；大弯请增加航点');
+      return {type:'curve',control};
+    });
+    if(!segments.some(s=>s.type==='curve'))segments=undefined;
+  }
+  for(let i=1;i<points.length;i++){const d=distance(points[i-1],points[i]);if(d<0.5||d>20000)throw fault(400,'相邻航点距离须为 0.5 米—20 千米');}
+  let geometry;
+  try{geometry=paths.compile({points,segments});}catch(error){throw fault(400,error.message);}
+  if(geometry.segments.some(segment=>segment.lengthM>20000))throw fault(400,'每个曲线航段的实际长度不能超过 20 千米，请增加航点拆分');
+  let lengthM=geometry.lengthM;
   if(loopEnabled){
     const closingM=distance(points[points.length-1],points[0]);
     if(closingM>20000)throw fault(400,'终点返回起点的直线距离不能超过 20 千米');
     lengthM+=closingM;
   }
   if(lengthM>100000)throw fault(400,'单圈航线总长（含启用循环后的返回航段）不能超过 100 千米');
-  return {name:input.name.trim(),speedMps:input.speedMps,arrivalRadiusM:input.arrivalRadiusM,loopEnabled,loopCount,points};
+  return {name:input.name.trim(),speedMps:input.speedMps,arrivalRadiusM:input.arrivalRadiusM,loopEnabled,loopCount,points,...(segments?{segments}:{})};
 }
 class MissionStore{
   constructor({env=process.env,file,now=Date.now}={}){
@@ -43,16 +59,16 @@ class MissionStore{
       const target=file||env.BOAT_MISSION_FILE;
       this.file=target?resolveMapConfigFile(env,target):path.join(path.dirname(resolveMapConfigFile({...env,BOAT_MAP_CONFIG_FILE:undefined})),'missions.json');
       const stat=fs.lstatSync(this.file);
-      if(!stat.isFile()||stat.isSymbolicLink()||stat.size>4*1024*1024)throw Error('Invalid mission file');
+      if(!stat.isFile()||stat.isSymbolicLink()||stat.size>8*1024*1024)throw Error('Invalid mission file');
       const data=JSON.parse(fs.readFileSync(this.file,'utf8'));
-      if(!plain(data)||![1,2,3].includes(data.version)||Object.keys(data).length!==(data.version===3?3:2)||!Array.isArray(data.routes)||data.routes.length>128)throw Error('Invalid mission library');
+      if(!plain(data)||![1,2,3,4].includes(data.version)||Object.keys(data).length!==(data.version>=3?3:2)||!Array.isArray(data.routes)||data.routes.length>128)throw Error('Invalid mission library');
       for(const r of data.routes){
-        if(!plain(r)||Object.keys(r).length!==(data.version===1?8:10)||!ID.test(r.id)||!DEVICE.test(r.deviceId)||!Number.isSafeInteger(r.revision)||r.revision<1||!Number.isFinite(r.updatedAt)||this.routes.has(r.id))throw Error('Invalid mission metadata');
+        if(!plain(r)||Object.keys(r).length!==(data.version===1?8:data.version>=4&&Object.hasOwn(r,'segments')?11:10)||!ID.test(r.id)||!DEVICE.test(r.deviceId)||!Number.isSafeInteger(r.revision)||r.revision<1||!Number.isFinite(r.updatedAt)||this.routes.has(r.id))throw Error('Invalid mission metadata');
         const {id,deviceId,revision,updatedAt,...definition}=r;
         if(data.version>=2&&(!Object.hasOwn(definition,'loopEnabled')||!Object.hasOwn(definition,'loopCount')))throw Error('Missing mission loop settings');
         this.routes.set(id,{id,deviceId,revision,updatedAt,...normalizeRoute(definition)});
       }
-      if(data.version===3){
+      if(data.version>=3){
         if(!Array.isArray(data.homes)||data.homes.length>128)throw Error('Invalid home library');
         for(const home of data.homes){
           if(!plain(home)||Object.keys(home).length!==5||!DEVICE.test(home.deviceId)||!Number.isSafeInteger(home.revision)||home.revision<1||!Number.isFinite(home.updatedAt)||this.homes.has(home.deviceId))throw Error('Invalid home metadata');
@@ -78,7 +94,9 @@ class MissionStore{
     const dir=path.dirname(this.file),tmp=path.join(dir,'.missions-'+crypto.randomBytes(12).toString('hex')+'.tmp');let fd;
     try{
       fs.mkdirSync(dir,{recursive:true,mode:0o700});fd=fs.openSync(tmp,'wx',0o640);fs.fchmodSync(fd,0o640);
-      fs.writeFileSync(fd,JSON.stringify({version:3,routes:[...next.values()],homes:[...homes.values()]})+'\n');fs.fsyncSync(fd);fs.closeSync(fd);fd=undefined;
+      const content=JSON.stringify({version:4,routes:[...next.values()],homes:[...homes.values()]})+'\n';
+      if(Buffer.byteLength(content)>8*1024*1024)throw fault(409,'航线库超过 8 MiB，请删除不用的航线');
+      fs.writeFileSync(fd,content);fs.fsyncSync(fd);fs.closeSync(fd);fd=undefined;
       authorize();fs.renameSync(tmp,this.file);this.routes=next;this.homes=homes;
     }finally{if(fd!==undefined)fs.closeSync(fd);try{fs.unlinkSync(tmp);}catch(_){/* rename 后无需删除。 */}}
   }

@@ -20,7 +20,7 @@ function fixture(initial, saved, brokenStorage = false) {
   }]));
   const localStorage = { getItem(key) { if (brokenStorage) throw Error('blocked'); return storage.get(key); },
     setItem(key, value) { if (brokenStorage) throw Error('blocked'); storage.set(key, value); } };
-  const window = { BoatMissions: { navigationState: () => initial },
+  const window = { BoatModules:{missionPath:require('../public/utils/missionPath')},BoatMissions: { navigationState: () => initial },
     addEventListener(key, fn) { listeners.set(key, fn); }, removeEventListener(key) { listeners.delete(key); } };
   const map = { ready: true, provider: 'osm', draws: 0,
     on(key, fn) { mapListeners.set(key, fn); }, off(key) { mapListeners.delete(key); },
@@ -98,4 +98,14 @@ test('底图完成或切换后恢复航点，销毁解绑监听与覆盖物', ()
   f.map.provider = 'amap'; f.mapListeners.get('providerchange')(); assert.equal(f.view.markers.length, 3);
   assert.deepEqual(f.layers.get('mission')[0].points, points, 'Projection belongs to the map facade');
   f.view.destroy(); assert.equal(f.layers.size, 0); assert.equal(f.listeners.size, 0); assert.equal(f.mapListeners.size, 0);
+});
+
+test('当前曲线任务绘制实际曲线，弯点调整触发更新且不增加必达航点',()=>{
+  const N=require('../public/utils/missionNavigation'),P=require('../public/utils/missionPath');
+  const state=active(),control=P.defaultControl(points[0],points[1]);state.route.segments=[{type:'curve',control},{type:'line'}];
+  const f=fixture(state),line=f.layers.get('mission')[0].points;
+  assert.ok(line.length>points.length);assert.deepEqual(line,P.compile(state.route).points);assert.equal(f.view.markers.length,3);
+  const changed=structuredClone(state);changed.route.segments[0].control=N.destination(control,90,10);f.emit(changed);
+  assert.notDeepEqual(f.layers.get('mission')[0].points,line);assert.equal(f.view.markers.length,3);
+  f.click();assert.equal(f.layers.size,0);f.click();assert.deepEqual(f.layers.get('mission')[0].points,P.compile(changed.route).points);
 });

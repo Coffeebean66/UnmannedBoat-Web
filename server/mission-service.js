@@ -2,6 +2,7 @@
 'use strict';
 const crypto=require('node:crypto');
 const nav=require('../public/utils/missionNavigation');
+const paths=require('../public/utils/missionPath');
 const optimal=require('./optimal-guidance');
 const optimalParameters=require('../public/utils/optimalParameters');
 const {decodeParameterFrame}=require('../public/utils/uart4Protocol');
@@ -66,6 +67,7 @@ class MissionService{
       status:'preparing',message:'正在读取船端最大速度参数',startedAt:this.now(),index:0,sequence:0,arrivalCount:0,controller:new AbortController(),
       algorithm:this.bridge.get(id).controlAlgorithm?.id??0,origin:{latitude:position.latitude,longitude:position.longitude},
       loopEnabled:action==='start'&&route.loopEnabled,loopCount:action==='start'&&route.loopEnabled?route.loopCount:1,completedLoops:resuming?.completedLoops||0,phase:resuming?.phase||(action==='goto'?'goto':action==='home'?'home':action==='hold'?'hold':'route'),resuming:!!resuming,holdHeading:position.heading};
+    job.geometry=paths.compile(route);
     if(resuming){job.index=resuming.index;job.resumedFrom=resuming.runId;}
     job.onlineTuning=job.algorithm===1&&this.bridge.get(id).controlAlgorithm?.onlineTuning===true;
     if(job.algorithm===1&&!job.onlineTuning)job.optimal=optimal.create(route.speedMps);
@@ -144,14 +146,21 @@ class MissionService{
     if(job.action==='hold'&&d>Math.max(30,radius*5))throw fault(409,'船位偏离守位点过远，定点保持已停止');
     job.position={latitude:p.latitude,longitude:p.longitude};job.distanceM=d;
     // 连续两份不同 RTK 样本确认到点；同一个定位不能连续跨过多个相邻航点。
-    if(isNew){job.arrivalCount=d<=radius?job.arrivalCount+1:0;}
+    const currentSegment=job.action==='start'&&job.phase==='route'&&job.index>0?job.geometry.segments[job.index-1]:null;
+    const curvePosition=currentSegment?.curved?paths.guide(p,currentSegment,0):null;
+    if(isNew){job.arrivalCount=d<=radius&&(!curvePosition||curvePosition.remainingM<=radius)?job.arrivalCount+1:0;}
     if(job.arrivalCount>=2&&job.action!=='hold'){
       this.arrived(job,now);if(job.status!=='running')return;
     }
     const target=job.route.points[job.index];
     // 返回航段沿“终点 → 起点”引导，也接受原有横向偏差/进度保护。
     const from=job.phase==='returning'?job.route.points[job.route.points.length-1]:job.index>0?job.route.points[job.index-1]:null;
-    const g=job.optimal?job.optimal.guide(p,from||job.origin,target,radius):from?nav.guide(p,from,target,Math.max(5,radius*2,job.route.speedMps*4)):{heading:nav.bearing(p,target),distanceM:nav.distance(p,target),crossM:0};
+    const segment=job.action==='start'&&job.phase==='route'&&job.index>0?job.geometry.segments[job.index-1]:null;
+    let g;
+    if(segment?.curved){
+      const geometry=paths.guide(p,segment,Math.max(5,radius*2,job.route.speedMps*4));
+      g=job.optimal?job.optimal.guideCurve(p,geometry,radius):geometry;
+    }else g=job.optimal?job.optimal.guide(p,from||job.origin,target,radius):from?nav.guide(p,from,target,Math.max(5,radius*2,job.route.speedMps*4)):{heading:nav.bearing(p,target),distanceM:nav.distance(p,target),crossM:0};
     job.distanceM=g.distanceM;job.crossTrackM=g.crossM;job.heading=job.action==='hold'&&g.distanceM<=radius?job.holdHeading:g.distanceM<0.2?p.heading:g.heading;
     if(Math.abs(g.crossM)>Math.max(30,radius*5))throw fault(409,'船位偏离航线过远，任务停止');
     if(g.distanceM<job.bestDistance-0.5){job.bestDistance=g.distanceM;job.lastProgressAt=now;}

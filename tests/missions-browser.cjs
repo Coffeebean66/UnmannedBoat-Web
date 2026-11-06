@@ -175,8 +175,53 @@ async function main(){
     await until('!boatMonitor.params.busy&&document.getElementById("parameterStatus").dataset.tone==="success"');
     assert.equal(f.algorithms.get('boat-01'),0);await evaluate('document.getElementById("settingsClose").click()');
     await shot('missions-loops-completed');
+    // 曲线通过真实地图选弯点并保存，刷新与驾驶页调速后不能悄悄变回直线。
+    await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
+    await evaluate('BoatWorkspace.navigate("missions",{focus:false});document.getElementById("missionNew").click();document.getElementById("missionMap").scrollIntoView({block:"center",behavior:"instant"});BoatMissions.map.setView('+JSON.stringify(ORIGIN)+',18,{animate:false});document.getElementById("missionSegmentType").value="curve";if(!BoatMissions.editing)document.getElementById("missionEdit").click()');await wait(150);
+    const curveEnd=N.destination(ORIGIN,0,60),curveControl=N.destination(N.destination(ORIGIN,0,30),90,22);
+    await clickPoint(ORIGIN);await clickPoint(curveEnd);
+    await evaluate('document.getElementById("missionSegmentType").value="line"');await clickPoint(N.destination(curveEnd,90,40));
+    assert.deepEqual(await evaluate('BoatMissions.route.segments.map(s=>s.type)'),['curve','line']);
+    assert.ok(await evaluate('BoatMissions.map.lastTrackLines[0].points.length')>3,'Curve preview follows the bend instead of connecting only its anchors');
+    await evaluate('document.querySelector("[data-curve-pick]").click();document.getElementById("missionMap").scrollIntoView({block:"center",behavior:"instant"})');await wait(250);
+    assert.equal(await evaluate('document.getElementById("missionCurveEdit").hidden'),false);await clickPoint(curveControl);
+    assert.equal(await evaluate('BoatMissions.route.points.length'),3,'Choosing a bend never inserts a compulsory waypoint');
+    assert.equal(await evaluate('BoatMissions.curveEditing'),-1);
+    assert.ok(N.distance(await evaluate('BoatMissions.route.segments[0].control'),curveControl)<1,'Real map clicks store WGS84 control coordinates');
+    await evaluate('document.getElementById("missionName").value="曲线巡航 B";document.getElementById("missionName").dispatchEvent(new Event("input"));document.getElementById("missionSave").click()');await until('!!BoatMissions.route.id&&!BoatMissions.busy&&!BoatMissions.dirty');
+    const curveId=await evaluate('BoatMissions.route.id');let savedCurve=new MissionStore({env:f.env}).get('boat-01',curveId);
+    assert.deepEqual(savedCurve.segments,await evaluate('BoatMissions.route.segments'));
+    await send('Page.reload');await until('window.BoatMissions?.routes?.some(r=>r.id==="'+curveId+'")&&BoatMissions.map?.ready');
+    await evaluate('document.getElementById("missionRouteSelect").value="'+curveId+'";document.getElementById("missionRouteSelect").dispatchEvent(new Event("change"))');
+    assert.deepEqual(await evaluate('BoatMissions.route.segments'),savedCurve.segments,'Refreshing restores mixed straight and curved segments');
+    await evaluate('BoatMissions.saveNavigationSpeed("'+curveId+'",1.1,3)');assert.deepEqual(new MissionStore({env:f.env}).get('boat-01',curveId).segments,savedCurve.segments,'Driving speed settings preserve curve definitions');
+    const adjustedLatitude=Number((savedCurve.segments[0].control.latitude+.00001).toFixed(7));
+    await evaluate('(()=>{const input=document.querySelector(".mission-curve-coordinates input");input.value='+JSON.stringify(String(adjustedLatitude))+';input.dispatchEvent(new Event("change"));})()');
+    assert.equal(await evaluate('BoatMissions.route.segments[0].control.latitude'),adjustedLatitude,'Coordinates still edit the live route after saving or changing its speed');
+    assert.equal(await evaluate('BoatMissions.dirty'),true);await evaluate('document.getElementById("missionSave").click()');await until('!BoatMissions.busy&&!BoatMissions.dirty');savedCurve=new MissionStore({env:f.env}).get('boat-01',curveId);assert.equal(savedCurve.segments[0].control.latitude,adjustedLatitude);
+    await evaluate('document.querySelectorAll(".mission-point-tools")[1].querySelectorAll("button")[1].click()');
+    assert.equal(await evaluate('BoatMissions.route.segments===undefined'),true,'Reordered endpoints do not inherit an unrelated curve');
+    await evaluate('BoatMissions.load("'+curveId+'");document.querySelectorAll(".mission-point-tools")[2].lastElementChild.click()');
+    assert.deepEqual(await evaluate('BoatMissions.route.segments'),[savedCurve.segments[0]],'Deleting an unrelated endpoint retains the remaining curve');
+    await evaluate('BoatMissions.load("'+curveId+'")');
+    for(const [width,height]of [[1440,1100],[375,812],[320,812]]){
+      await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
+      await evaluate('document.getElementById("missionPoints").scrollIntoView({block:"center",behavior:"instant"})');await wait(100);
+      assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth+1&&[...document.querySelectorAll(".mission-segment-editor input,.mission-segment-editor select")].every(n=>{const r=n.getBoundingClientRect();return r.width>0&&r.left>=0&&r.right<=innerWidth;})'),true,'Curve editor controls fit '+width);
+      await shot('missions-curve-editor-'+width);
+    }
+    await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
+    await evaluate('document.getElementById("missionMap").scrollIntoView({block:"center",behavior:"instant"});BoatMissions.fit()');await wait(120);await shot('missions-curve-map');
+    f.feed('boat-01',{...ORIGIN,heading:0});await evaluate('document.getElementById("missionStart").click()');await until('BoatMissions.run()?.status==="running"&&BoatMissions.run()?.targetIndex===1');
+    assert.equal(await evaluate('document.querySelector("[data-segment-index]").disabled'),true,'Running route shape is locked');
+    await evaluate('BoatWorkspace.navigate("navigation",{focus:false})');await until('boatMonitor.map._lineOverlays.get("mission")?.lines[0]?.points.length>3');
+    const displayedCurve=await evaluate('boatMonitor.map._lineOverlays.get("mission").lines[0].points'),expectedCurve=require('../public/utils/missionPath').compile(savedCurve).points;
+    assert.equal(displayedCurve.length,expectedCurve.length);assert.ok(displayedCurve.every((p,i)=>N.distance(p,expectedCurve[i])<.00001),'Monitoring and driving use the same actual curved route within cross-runtime floating point precision');
+    await evaluate('BoatWorkspace.navigate("missions",{focus:false});document.getElementById("missionStop").click()');await until('BoatMissions.run()?.status==="stopped"&&BoatMissions.run()?.stopConfirmed');
+    await evaluate('document.getElementById("missionRouteSelect").value="'+routeId+'";document.getElementById("missionRouteSelect").dispatchEvent(new Event("change"));window.scrollTo(0,0)');
     // 驾驶页直接使用同一任务 API：修改航速、暂停确认、继续新租约和独立急停。
     await evaluate('BoatWorkspace.navigate("driving",{focus:false});window.scrollTo(0,0);boatMonitor.driver.navigation.selectMode("auto")');
+    await evaluate('document.getElementById("driverRouteSelect").value="'+routeId+'";document.getElementById("driverRouteSelect").dispatchEvent(new Event("change"))');
     await until('!document.getElementById("driverNavSave").disabled');
     await evaluate('document.getElementById("driverNavSpeed").value="1.2";document.getElementById("driverNavRadius").value="4";document.getElementById("driverNavSave").click()');
     await until('!boatMonitor.driver.navigation.busy&&BoatMissions.routes[0]?.speedMps===1.2');

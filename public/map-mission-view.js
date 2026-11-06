@@ -51,12 +51,15 @@ class MapMissionView {
     // 只在航线/当前航点变化时重绘，避免每次状态轮询重建全部地图对象。
     const current = run?.status === 'running' && !state.stale ? run.targetIndex : -1;
     const returning = run?.action === 'start' && route?.loopEnabled === true;
-    const key = JSON.stringify([show, state.deviceId, run?.runId, points, current, returning, this.map.provider]);
+    const key = JSON.stringify([show, state.deviceId, run?.runId, points, route?.segments, current, returning, this.map.provider]);
     if (key === this.drawKey) return;
     this.drawKey = key;
     this.clear();
     if (!show) return;
-    const lines = points.length>1?[{ points, color: '#467dff', width: 3, dashed: true, behind: true, className: 'map-mission-line' }]:[];
+    let path;
+    try { path=window.BoatModules.missionPath.compile(route).points; }
+    catch (_) { this.status.textContent='当前任务曲线无效，请刷新任务状态'; return; }
+    const lines = points.length>1?[{ points:path, color: '#467dff', width: 3, dashed: true, behind: true, className: 'map-mission-line' }]:[];
     if (returning) lines.push({ points: [points.at(-1), points[0]], color: '#d5952b', width: 3,
       dashed: true, behind: true, className: 'map-mission-line map-mission-return' });
     this.map.setOverlayLines('mission', lines);

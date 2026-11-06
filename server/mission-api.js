@@ -28,7 +28,7 @@ function createMissionApi({bridge,control,accounts,env=process.env,store,service
         json(res,200,{routes:id?library.list(id):[],home:id?library.getHome(id):null,runs,storageError:library.error,position});return true;
       }
       if(!['POST','DELETE'].includes(req.method)||url.search)throw fault(405,'任务接口方法不正确');
-      const input=await readJson(req,40000);authorize(req,res,session,true);
+      const input=await readJson(req,100000);authorize(req,res,session,true);
       const fields=url.pathname==='/api/missions/route'?['deviceId','route','id','revision']:url.pathname==='/api/missions/home'?['deviceId','point','revision']:['deviceId','routeId','action','runId','revision','speedMps','arrivalRadiusM','homeRevision'];
       if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(k=>!fields.includes(k))||!DEVICE.test(input.deviceId||''))throw fault(400,'任务请求字段不正确');
       const id=input.deviceId;

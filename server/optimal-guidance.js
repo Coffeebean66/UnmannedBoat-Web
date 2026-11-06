@@ -41,6 +41,13 @@ function create(speedMps,config=CONFIG){
     const offset=Math.max(-config.maxOffsetDeg,Math.min(config.maxOffsetDeg,
       (-gain[0]*geometry.crossM-gain[1]*error)*180/Math.PI));
     return {...geometry,heading:nav.wrap(course+offset)};
+  },guideCurve(position,geometry,radius){
+    // 曲线使用当前投影处的切向航向与横向误差，临近真正航点才进入终端捕获。
+    if(geometry.remainingM<=Math.max(3,radius*2))return geometry;
+    const error=nav.angleError(position.heading,geometry.courseHeading)*Math.PI/180;
+    const offset=Math.max(-config.maxOffsetDeg,Math.min(config.maxOffsetDeg,
+      (-gain[0]*geometry.crossM-gain[1]*error)*180/Math.PI));
+    return {...geometry,heading:nav.wrap(geometry.courseHeading+offset)};
   },gain:[...gain]};
 }
 module.exports={CONFIG,solve,create};
