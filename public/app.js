@@ -27,7 +27,7 @@
   const state={latest:{},history:[],chartMode:'speed',lastReceived:null,lastUpdateAt:null,forwardDelayMs:null,
     uplinkDelayMs:null,uplinkRttMs:null,uplinkUncertaintyMs:null,deviceId:null,
     historical:null,historyEnd:null,historyMessage:'选择无人船后自动载入记录',trackDisplayEnabled:true,liveTrackPoints:[]};
-  let map,marker,mapVectors,mapMission,trackRevision=-1,lastLocation,hadFix=false,viewResizeFrame;
+  let map,marker,mapVectors,mapMission,trackRevision=-1,trackDisplayMode='',lastLocation,hadFix=false,viewResizeFrame;
   let autoSelectInFlight=null,autoSelectionSuppressed=false,historyRequest=0,historyController=null;
   let chartPalette;
   let compassVisible=true;
@@ -205,9 +205,10 @@
     renderTrack(view.fixFresh);
   }
   function renderTrack(fresh) {
-    if(map?.ready&&trackRevision!==track.revision) {
-      map.setTrackLines(track.polylines());
-      trackRevision=track.revision;
+    const driving=window.BoatWorkspace?.current==='driving',displayMode=driving?'driving':'monitor';
+    if(map?.ready&&(trackRevision!==track.revision||trackDisplayMode!==displayMode)) {
+      const lines=track.polylines();map.setTrackLines(driving?lines.map(line=>({...line,color:'#00bcd9'})):lines);
+      trackRevision=track.revision;trackDisplayMode=displayMode;
     }
     set('trackStatus',(track.active?(fresh?'更新本页轨迹':'显示云端历史'):'本页轨迹已暂停')+' · '+track.pointCount+'点'+(track.truncated?' · 已裁剪最早轨迹':''));
     $('trackStart').textContent=track.active?'停止追踪':'开始追踪';
@@ -270,7 +271,8 @@
     const driverMotors=renderMotor(x.status?.frame,x.status?.at||0,now);
     // 驾驶遥测与图传 HUD 共用有效期判断，断流后一起清空，避免显示旧定位或姿态。
     driver.setTelemetry({...b,actualHeading:Number.isFinite(driverHeading)?driverHeading.toFixed(2):'--',
-      latitude:v.latitude,longitude:v.longitude,fixStatus:v.fixStatus,fixValid:v.fixFresh,imuStatus:imu.status,imuValid:imu.fresh,imu,motors:driverMotors});
+      latitude:v.latitude,longitude:v.longitude,fixStatus:v.fixStatus,fixValid:v.fixFresh,imuStatus:imu.status,imuValid:imu.fresh,imu,motors:driverMotors,
+      networkDelayMs:link.connected&&state.deviceId==='cloud:'+cloud.selectedId&&Number.isFinite(state.forwardDelayMs)&&Number.isFinite(state.uplinkDelayMs)?state.forwardDelayMs+state.uplinkDelayMs:null});
     for(const key of ['roll','pitch','yaw','gyroX','gyroY','gyroZ'])set(key,imu[key]);
     for(const [id,key] of Object.entries({imuStatus:'status',imuSequence:'sequence',imuAge:'ageText',imuAlignment:'alignmentText',imuHeadingUpdate:'headingUpdateText'}))set(id,imu[key]);
     // 角速度与欧拉角独立有效，部分数据可用时以黄色提示。

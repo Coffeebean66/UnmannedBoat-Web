@@ -2,10 +2,10 @@
 (() => {
   'use strict';
   const $=id=>document.getElementById(id),clone=x=>JSON.parse(JSON.stringify(x));
-  const labels={preparing:'读取参数',acquiring:'等待接管',running:'执行中',stopping:'正在停止',completed:'已完成',stopped:'已停止',failed:'异常停止'};
+  const labels={preparing:'读取参数',acquiring:'等待接管',running:'执行中',stopping:'正在停止',paused:'已暂停',completed:'已完成',stopped:'已停止',failed:'异常停止'};
   class BoatMissionPanel {
     constructor(){
-      this.deviceId='';this.routes=[];this.runs=[];this.route=this.blank();this.dirty=false;this.editing=false;this.busy=false;this.drafts=new Map();this.stops=new Set();this.activeRows=new Map();this.markers=[];this.position=null;this.generation=0;
+      this.deviceId='';this.routes=[];this.runs=[];this.home=null;this.route=this.blank();this.dirty=false;this.editing=false;this.busy=false;this.drafts=new Map();this.stops=new Set();this.activeRows=new Map();this.markers=[];this.position=null;this.generation=0;
       for(const id of ['missionName','missionSpeed','missionRadius','missionLoopEnabled','missionLoopCount'])$(id).addEventListener('input',()=>{this.readForm();this.dirty=true;this.render();this.draw();});
       $('missionRouteSelect').addEventListener('change',()=>this.load($('missionRouteSelect').value));
       $('missionNew').onclick=()=>{this.route=this.blank();this.dirty=false;this.drafts.set(this.deviceId,{route:clone(this.route),dirty:false});this.fillForm();this.renderPoints();this.render();this.draw();};
@@ -30,7 +30,7 @@
       window.addEventListener('boat-theme-change',()=>this.map?.setTheme(document.documentElement.dataset.theme));
       window.BoatAuth?.addEventListener('change',()=>{
         const key=String(BoatAuth.generation);
-        if(this.authKey!==key){this.authKey=key;this.generation++;this.controller?.abort();this.polling=false;this.routes=[];this.runs=[];this.position=null;this.editing=false;this.drafts.clear();this.route=this.blank();this.dirty=false;this.fillForm();this.renderPoints();this.draw();}
+        if(this.authKey!==key){this.authKey=key;this.generation++;this.controller?.abort();this.polling=false;this.routes=[];this.runs=[];this.home=null;this.position=null;this.editing=false;this.drafts.clear();this.route=this.blank();this.dirty=false;this.fillForm();this.renderPoints();this.draw();}
         if(this.admin)this.poll(true);this.render();
       });
       this.timer=setInterval(()=>{if(!document.hidden)this.poll();},1000);
@@ -44,8 +44,8 @@
     navigationState(){
       const run=this.admin?this.run():null;
       // 始终采用服务器正在执行的航线，编辑器可同时载入其他草稿。
-      const route=run?.active?(run.route||this.routes.find(route=>route.id===run.routeId)):null;
-      return {allowed:this.admin,deviceId:this.deviceId,run:run?.active?run:null,route,stale:!!this.statusError};
+      const visible=run?.active||run?.status==='paused',route=visible?(run.route||this.routes.find(route=>route.id===run.routeId)):null;
+      return {allowed:this.admin,deviceId:this.deviceId,run:visible?run:null,route,home:this.admin?this.home:null,stale:!!this.statusError,updatedAt:this.updatedAt||0};
     }
     readForm(){
       this.route.name=$('missionName').value;this.route.speedMps=Number($('missionSpeed').value);this.route.arrivalRadiusM=Number($('missionRadius').value);
@@ -56,7 +56,7 @@
     select(id){
       if(id===this.deviceId)return;
       if(this.deviceId){this.readForm();this.drafts.set(this.deviceId,{route:clone(this.route),dirty:this.dirty});}
-      this.deviceId=id;this.generation++;this.controller?.abort();this.routes=[];this.position=null;
+      this.deviceId=id;this.generation++;this.controller?.abort();this.routes=[];this.home=null;this.position=null;
       const draft=this.drafts.get(id);this.route=draft?clone(draft.route):this.blank();this.dirty=!!draft?.dirty;this.editing=false;
       this.fillForm();this.renderPoints();this.render();this.draw();this.poll(true);
     }
@@ -76,7 +76,7 @@
       try{
         const data=await this.request('?deviceId='+encodeURIComponent(id),{signal:controller.signal});
         if(generation!==this.generation||this.controller!==controller)return;
-        this.routes=data.routes;this.runs=data.runs;this.position=data.position;this.storageError=data.storageError||'';this.statusError='';
+        this.routes=data.routes;this.runs=data.runs;this.home=data.home||null;this.position=data.position;this.storageError=data.storageError||'';this.statusError='';this.updatedAt=Date.now();
         if(!this.route.id&&!this.dirty&&!this.route.points.length&&this.routes.length&&!this.drafts.has(id)){
           this.route=clone(this.routes.find(r=>r.id===this.run()?.routeId&&this.run()?.active)||this.routes[0]);this.fillForm();this.renderPoints();
         }
@@ -115,6 +115,34 @@
       const data=await this.request('/run',{method:'POST',body:JSON.stringify({deviceId:id,routeId:this.route.id,revision:this.route.revision,action})});
       if(authKey!==this.authKey)return;
       this.runs=this.runs.filter(r=>r.deviceId!==id).concat(data.run);this.notice('任务已提交服务器，关闭网页后仍会继续；可随时点击停止任务。');this.render();
+    }
+    async submitNavigation(action,options={}){
+      const id=this.deviceId,generation=this.generation,run=this.run(),requestedAt=Date.now();let body={deviceId:id,action};
+      if(['pause','resume','stop'].includes(action))body.runId=run?.runId;
+      else if(['start','goto'].includes(action)){
+        const route=this.routes.find(r=>r.id===options.routeId);if(!route)throw Error('请先选择已保存的航线');
+        body={...body,routeId:route.id,revision:route.revision};
+      }else body={...body,speedMps:options.speedMps,arrivalRadiusM:options.arrivalRadiusM,...(action==='home'?{homeRevision:this.home?.revision}:{})};
+      const data=await this.request('/run',{method:'POST',body:JSON.stringify(body)});
+      if(generation===this.generation){
+        const current=this.run(),newer=current&&(current.startedAt>data.run.startedAt||current.runId===data.run.runId&&this.updatedAt>requestedAt);
+        if(!newer){this.runs=this.runs.filter(r=>r.deviceId!==id).concat(data.run);this.render();}
+      }
+      return data.run;
+    }
+    async saveHome(point){
+      const generation=this.generation,data=await this.request('/home',{method:'POST',body:JSON.stringify({deviceId:this.deviceId,point,revision:this.home?.revision||0})});
+      if(generation===this.generation){this.home=data.home;this.render();}return data.home;
+    }
+    async saveNavigationSpeed(routeId,speedMps,arrivalRadiusM){
+      const route=this.routes.find(r=>r.id===routeId);if(!route)throw Error('请先选择已保存的航线');
+      if(this.route.id===routeId&&this.dirty)throw Error('任务页有未保存的航线修改，请先在任务页保存');
+      const generation=this.generation,{name,points,loopEnabled,loopCount}=route;
+      const data=await this.request('/route',{method:'POST',body:JSON.stringify({deviceId:this.deviceId,id:route.id,revision:route.revision,route:{name,points,loopEnabled,loopCount,speedMps,arrivalRadiusM}})});
+      if(generation!==this.generation)return;
+      this.routes=this.routes.map(r=>r.id===routeId?data.route:r);
+      if(this.route.id===routeId){this.route=clone(data.route);this.fillForm();this.drafts.set(this.deviceId,{route:clone(this.route),dirty:false});}
+      this.render();
     }
     async stop(run){
       if(this.stops.has(run.deviceId)||!this.admin)return;
@@ -169,8 +197,8 @@
       $('missionDelete').disabled=locked||routeLocked||!this.route.id;
       $('missionAddPosition').disabled=locked||routeLocked||!this.position;
       $('missionGoto').disabled=$('missionStart').disabled=locked||active||!this.route.id||this.dirty||!!this.storageError;
-      $('missionStop').disabled=!this.admin||this.stops.has(this.deviceId)||!active||run.status==='stopping';
-      $('driverMissionStop').hidden=!this.admin||!active;$('driverMissionStop').disabled=$('missionStop').disabled;
+      $('missionStop').disabled=!this.admin||this.stops.has(this.deviceId)||(!active&&run?.status!=='paused')||run?.status==='stopping';
+      $('driverMissionStop').hidden=!this.admin||(!active&&run?.status!=='paused');$('driverMissionStop').disabled=$('missionStop').disabled;
       $('missionEdit').setAttribute('aria-pressed',String(this.editing&&!locked&&!routeLocked));$('missionEdit').textContent=this.editing?'停止点选':'开启点选航点';
       $('missionMap').dataset.editing=String(this.editing&&!locked&&!routeLocked);
       for(const el of document.querySelectorAll('[data-mission-editor]'))el.disabled=locked||routeLocked||el.dataset.fixedDisabled==='true';
@@ -184,7 +212,7 @@
       $('missionLoopProgress').title=run?'已完成 '+(run.completedLoops??0)+' 圈':'';
       const algorithm=run?.active?run.algorithm:window.boatMonitor?.link?.devices?.find(d=>d.id===this.deviceId)?.controlAlgorithm?.id;
       $('missionAlgorithm').textContent='任务算法：'+(algorithm===1?'最优控制 · LQR航线＋船速LQI/航向LQR':algorithm===0?'原算法 · 前视航线＋PID':'等待船端状态；旧固件沿用原算法');
-      $('missionPhase').textContent=run?.status==='running'?({route:'沿线航行',returning:'返回起点',goto:'前往起点'}[run.phase]||'沿线航行'):(labels[run?.status]||'--');
+      $('missionPhase').textContent=run?.status==='running'?({route:'沿线航行',returning:'返回起点',goto:'前往起点',home:'返回返航点',hold:'定点保持'}[run.phase]||'沿线航行'):(labels[run?.status]||'--');
       // 驾驶台展示服务器的真实执行状态；查询失败时保留数据并明确标为状态过期。
       const driverRun=this.admin?run:null;
       $('driverMissionState').textContent=this.statusError?'状态过期':labels[driverRun?.status]||'待命';
@@ -192,7 +220,7 @@
       $('driverMissionName').textContent=driverRun?.routeName||'暂无运行中的任务';
       $('driverMissionProgress').textContent=driverRun?(driverRun.targetIndex+1)+' / '+driverRun.pointCount:'--';
       $('driverMissionDistance').textContent=Number.isFinite(driverRun?.distanceM)?driverRun.distanceM.toFixed(1)+' m':'--';
-      $('driverMissionPhase').textContent=driverRun?.status==='running'?({route:'沿线航行',returning:'返回起点',goto:'前往起点'}[driverRun.phase]||'沿线航行'):(labels[driverRun?.status]||'--');
+      $('driverMissionPhase').textContent=driverRun?.status==='running'?({route:'沿线航行',returning:'返回起点',goto:'前往起点',home:'返回返航点',hold:'定点保持'}[driverRun.phase]||'沿线航行'):(labels[driverRun?.status]||'--');
       $('driverMissionLoop').textContent=driverRun?.action==='start'?(driverRun.loopEnabled?driverRun.currentLoop+' / '+driverRun.loopCount+' 圈':'单次'):'--';
       this.renderRunningBar();
       window.dispatchEvent(new CustomEvent('boat-mission-change',{detail:this.navigationState()}));

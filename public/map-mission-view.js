@@ -31,18 +31,18 @@ class MapMissionView {
 
   render() {
     const state = this.state || {}, allowed = state.allowed === true && !!state.deviceId;
-    const run = state.run?.active && state.run.deviceId === state.deviceId ? state.run : null;
+    const run = (state.run?.active || state.run?.status === 'paused') && state.run.deviceId === state.deviceId ? state.run : null;
     const route = run && state.route?.id === run.routeId ? state.route : null;
     const points = route?.points || [];
-    const valid = points.length >= 2 && points.length <= 256 && points.every(p =>
+    const valid = points.length >= (['hold','home'].includes(run?.action)?1:2) && points.length <= 256 && points.every(p =>
       Number.isFinite(p.latitude) && Number.isFinite(p.longitude) && Math.abs(p.latitude) <= 85 && Math.abs(p.longitude) <= 180);
     const show = allowed && this.visible && !!run && valid && !state.stale;
     this.button.hidden = this.info.hidden = !allowed;
     this.button.textContent = this.visible ? '任务路线：显示' : '任务路线：隐藏';
     this.button.setAttribute('aria-pressed', String(this.visible));
     this.info.dataset.visible = String(show);
-    const phase = { preparing: '读取参数', acquiring: '等待接管', stopping: '正在停止' }[run?.status] ||
-      (run?.action === 'goto' ? '前往起点' : run?.phase === 'returning' ? '返回起点' : '沿线航行');
+    const phase = { preparing: '读取参数', acquiring: '等待接管', stopping: '正在停止', paused:'已暂停' }[run?.status] ||
+      ({goto:'前往起点',home:'返回返航点',hold:'定点保持'}[run?.action] || (run?.phase === 'returning' ? '返回起点' : '沿线航行'));
     const text = !allowed ? '' : state.stale ? '任务状态同步中断，恢复后更新路线' : !run ? '当前无人船暂无执行中任务' :
       !valid ? '正在同步当前任务路线…' : (run.routeName || route.name || '当前任务') + ' · ' + phase +
       (run.loopEnabled ? ' · 第 ' + run.currentLoop + ' / ' + run.loopCount + ' 圈' : '') +
@@ -56,7 +56,7 @@ class MapMissionView {
     this.drawKey = key;
     this.clear();
     if (!show) return;
-    const lines = [{ points, color: '#467dff', width: 3, dashed: true, behind: true, className: 'map-mission-line' }];
+    const lines = points.length>1?[{ points, color: '#467dff', width: 3, dashed: true, behind: true, className: 'map-mission-line' }]:[];
     if (returning) lines.push({ points: [points.at(-1), points[0]], color: '#d5952b', width: 3,
       dashed: true, behind: true, className: 'map-mission-line map-mission-return' });
     this.map.setOverlayLines('mission', lines);

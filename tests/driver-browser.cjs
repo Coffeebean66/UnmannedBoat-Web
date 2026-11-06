@@ -59,7 +59,7 @@ async function main(){
     const follow=await evaluate('(()=>{const b=document.getElementById("driverMapFollow"),original=document.getElementById("mapFollow");b.click();const disabled=!original.checked&&b.getAttribute("aria-pressed")==="false";b.click();return {disabled,enabled:original.checked&&b.getAttribute("aria-pressed")==="true"};})()');
     assert.deepEqual(follow,{disabled:true,enabled:true},'Map follow buttons control the shared map preference');
     await evaluate('document.getElementById("driverMapCenter").click()');
-    const hud=await evaluate('(()=>{const h=boatMonitor.driver.hud;h.setTelemetry({actual:"1.250",target:"2.000",actualHeading:"359",imu:{eulerFresh:true,rollDegrees:10,pitchDegrees:5}});const valid={speed:document.getElementById("driverHudSpeed").textContent,roll:document.getElementById("driverHudRoll").getAttribute("transform"),pitch:document.getElementById("driverHudPitch").getAttribute("transform"),north:document.getElementById("driverHudHeadingTicks").textContent.includes("N")};h.setTelemetry({actual:"--",actualHeading:"--",imu:{eulerFresh:false,rollDegrees:10,pitchDegrees:5}});return {valid,stale:{speed:document.getElementById("driverHudSpeed").textContent,roll:document.getElementById("driverHudRollValue").textContent,pose:document.getElementById("driverHud").dataset.attitudeValid,heading:document.getElementById("driverHudHeadingTicks").style.display}};})()');
+    const hud=await evaluate('(()=>{const h=boatMonitor.driver.hud;h.setTelemetry({actual:"1.250",target:"2.000",actualHeading:"359",imu:{eulerFresh:true,rollDegrees:10,pitchDegrees:5}});const valid={speed:document.getElementById("driverHudSpeed").textContent,roll:document.getElementById("driverHudRoll").getAttribute("transform"),pitch:document.getElementById("driverHudPitch").getAttribute("transform"),north:document.getElementById("driverHudHeadingTicks").textContent.includes("北")};h.setTelemetry({actual:"--",actualHeading:"--",imu:{eulerFresh:false,rollDegrees:10,pitchDegrees:5}});return {valid,stale:{speed:document.getElementById("driverHudSpeed").textContent,roll:document.getElementById("driverHudRollValue").textContent,pose:document.getElementById("driverHud").dataset.attitudeValid,heading:document.getElementById("driverHudHeadingTicks").style.display}};})()');
     assert.deepEqual(hud,{valid:{speed:'1.25',roll:'rotate(-10 300 180)',pitch:'translate(0 -20)',north:true},stale:{speed:'--',roll:'--',pose:'false',heading:'none'}},'HUD follows the boat axes, wraps north and clears stale motion');
     server.driverFixture.ackDelay=350;
     await evaluate('document.getElementById("driverEnable").click()');await wait(40);await key('KeyW');
@@ -149,7 +149,7 @@ async function main(){
       const defaultLayout=await evaluate('(()=>{const box=selector=>{const r=document.querySelector(selector).getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height};};return {view:box("#view-driving"),video:box(".driver-region-video .video-stage"),map:box(".driver-region-map"),navigation:box(".driver-navigation-data"),instruments:box(".driver-instrument-grid"),console:box(".driver-console"),motors:box(".driver-propulsion")};})()');
       if(width>760){
         assert.ok(defaultLayout.video.width>defaultLayout.view.width*.55&&defaultLayout.video.right<=defaultLayout.map.left-6,'Desktop has a large left video and a separate right map at '+width+': '+JSON.stringify(defaultLayout));
-        assert.ok(defaultLayout.map.top<defaultLayout.view.top+60&&defaultLayout.map.bottom>=defaultLayout.console.bottom-2,'The right map spans the video and bottom panels');
+        assert.ok(defaultLayout.map.top<defaultLayout.view.top+100&&Math.abs(defaultLayout.map.bottom-defaultLayout.video.bottom)<3,'The right map aligns with the main video within the shared platform shell');
         assert.ok(defaultLayout.video.bottom<=defaultLayout.navigation.top-6&&defaultLayout.navigation.right<=defaultLayout.console.left-6,'Telemetry and commands dock below the video without covering it');
       }else{
         assert.ok(defaultLayout.map.top>=defaultLayout.video.bottom+6&&defaultLayout.navigation.top>=defaultLayout.map.bottom+6,'Mobile stacks the video, map and telemetry');
@@ -168,8 +168,9 @@ async function main(){
       }
       if(width>=1440){
         assert.equal(await evaluate("['#driverHud','.driver-region-video .video-stage','.driver-region-map .map-stage'].every(selector=>{const r=document.querySelector(selector).getBoundingClientRect();return r.width>0&&r.height>0&&r.top>=0&&r.bottom<=innerHeight;})"),true,'Video, tactical map and HUD fit the desktop viewport at '+width);
-        assert.ok(defaultLayout.navigation.height<=234&&defaultLayout.instruments.height<120&&defaultLayout.console.height<=234,'Bottom panels remain compact: '+JSON.stringify(defaultLayout));
-        assert.equal(await evaluate('(()=>{const r=document.getElementById("view-driving").getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return !!hit?.closest(".driver-region-video");})()'),true,'The centre of the picture is unobstructed');
+        assert.ok(defaultLayout.navigation.height<=270&&defaultLayout.instruments.height<120&&defaultLayout.console.height<=270,'Bottom panels remain compact: '+JSON.stringify(defaultLayout));
+        assert.equal(await evaluate('(()=>{const r=document.querySelector(".driver-region-video .video-stage").getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return !!hit?.closest(".driver-region-video");})()'),true,'The centre of the picture is unobstructed');
+        assert.equal(await evaluate('getComputedStyle(document.querySelector(".topbar")).display!=="none"&&getComputedStyle(document.querySelector(".sidebar")).display!=="none"'),true,'Driving shares the same platform navigation as monitoring');
         await evaluate('document.getElementById("driverDetailsToggle").click()');
         assert.equal(await evaluate('!document.getElementById("driverDetailsPanel").hidden&&document.querySelector(".driver-propulsion").getBoundingClientRect().width>0'),true,'Motor and coordinate details remain available on request');
         if(width===1440)await shot('driver-details');
@@ -241,7 +242,7 @@ async function main(){
         assert.equal(await evaluate('["video","map"].every(type=>getComputedStyle(document.querySelector(".driver-region-"+type)).display!=="none")'),true,'Restoring layout shows both media panels again');
         assert.equal(await evaluate('document.getElementById("driverFocusTools").hidden'),false,'Normal driving also exposes data transparency controls');
         assert.equal(await evaluate('document.getElementById("view-driving").dataset.primary'),'video','Restoring returns to the split cockpit');
-        assert.equal(await evaluate('getComputedStyle(document.getElementById("view-driving")).position'), 'fixed','Restoring retains the dedicated full-screen console');
+        assert.equal(await evaluate('getComputedStyle(document.getElementById("view-driving")).position'), 'relative','Restoring returns driving to the platform page shell');
       }
     }
     await enable();const settingsReleaseStart=server.driverFixture.calls.length;
@@ -319,11 +320,11 @@ async function main(){
     assert.equal(await evaluate('document.querySelector("[data-driver-layout-module=horizon]").inert'),true,'Fully hidden parts leave keyboard and pointer access to the media');
     assert.equal(await evaluate('getComputedStyle(document.querySelector(".driver-console")).opacity'),'0.2');
     assert.equal(await evaluate('getComputedStyle(document.querySelector(".driver-emergency-dock")).opacity'),'0.35','Emergency opacity is independent of console opacity');
-    const savedLayout=await evaluate('localStorage.getItem("boat-driver-console-layout-v1")');
+    const savedLayout=await evaluate('localStorage.getItem("boat-driver-platform-layout-v1")');
     await send('Page.reload');await until('window.boatMonitor?.driver?.layout&&BoatAuth.ready');
     await evaluate('connectTestBoat()');await until('!document.getElementById("driverEnable").disabled');await wait(160);
     assert.equal(await evaluate('boatMonitor.driver.active'),false,'Reloading a layout never restores control authority');
-    assert.equal(await evaluate('localStorage.getItem("boat-driver-console-layout-v1")'),savedLayout,'Layout positions and opacity survive an actual reload');
+    assert.equal(await evaluate('localStorage.getItem("boat-driver-platform-layout-v1")'),savedLayout,'Layout positions and opacity survive an actual reload');
     assert.equal(await evaluate('getComputedStyle(document.querySelector(".driver-navigation-data")).opacity'),'0.4');
     assert.equal(await evaluate('document.querySelector(".driver-propulsion").parentElement.id'),'driverStage','Floating panels are restored');
     await go('attitude');
@@ -358,7 +359,7 @@ async function main(){
     assert.equal(await evaluate('document.querySelector(".driver-propulsion").closest("#driverDetailsPanel")!==null&&!document.getElementById("driverModelPreview").open'),true,'Reset returns floating panels to details and pauses the model');
     assert.equal(await evaluate('getComputedStyle(document.querySelector(".driver-emergency-dock")).opacity'),'1');
     assert.equal(await evaluate('document.querySelector(".driver-instrument-grid").hidden'),true,'Reset returns to the reference layout with optional round instruments closed');
-    await evaluate('localStorage.removeItem("boat-driver-console-layout-v1");localStorage.setItem("boat-driver-layout-v2",JSON.stringify({version:2,profiles:{"desktop:dock":{navigation:{opacity:55,x:.2,y:.3}},"desktop:map":{compass:{opacity:75,x:.4,y:.5}}}}))');
+    await evaluate('localStorage.removeItem("boat-driver-platform-layout-v1");localStorage.setItem("boat-driver-layout-v2",JSON.stringify({version:2,profiles:{"desktop:dock":{navigation:{opacity:55,x:.2,y:.3}},"desktop:map":{compass:{opacity:75,x:.4,y:.5}}}}))');
     await send('Page.reload');await until('window.boatMonitor?.driver?.layout&&BoatAuth.ready');
     await evaluate('connectTestBoat()');await until('!document.getElementById("driverEnable").disabled');
     const migration=await evaluate('({key:boatMonitor.driver.layout.key(),profiles:boatMonitor.driver.layout.profiles,opacity:getComputedStyle(document.querySelector(".driver-navigation-data")).opacity,legacy:JSON.parse(localStorage.getItem("boat-driver-layout-v2")).version})');

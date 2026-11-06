@@ -44,7 +44,7 @@ test('loop settings are finite integers, validated with the return leg and persi
   assert.doesNotThrow(()=>normalizeRoute({...definition,points:long}));assert.throws(()=>normalizeRoute({...definition,points:long,loopEnabled:true}),/100 千米/);
   const a=f.store.save('boat-01',{...definition,loopEnabled:true,loopCount:3},r.id,r.revision),b=f.route('boat-02',{loopEnabled:true,loopCount:7});
   const reopened=new MissionStore({env:f.env});assert.equal(reopened.error,'');assert.deepEqual(reopened.get('boat-01',a.id),a);assert.equal(reopened.get('boat-02',b.id).loopCount,7);
-  assert.equal(JSON.parse(fs.readFileSync(f.store.file,'utf8')).version,2);
+  assert.equal(JSON.parse(fs.readFileSync(f.store.file,'utf8')).version,3);
 });
 
 test('legacy route libraries retain single-run behavior and migrate on save; invalid loop files fail closed',t=>{
@@ -192,4 +192,106 @@ test('mission HTTP enforces roles, origin, route ownership/revisions and preserv
   const fresh=(await login('admin')).cookie,run=f.mission.snapshot('boat-01');
   assert.equal((await call('/api/missions/run',{method:'POST',cookie:fresh,body:{deviceId:'boat-01',action:'stop',runId:'0000000000000000'}})).status,409);
   assert.equal((await call('/api/missions/run',{method:'POST',cookie:fresh,body:{deviceId:'boat-01',action:'stop',runId:run.runId}})).status,202);await flush(f);assert.equal(f.mission.snapshot('boat-01').status,'stopped');
+});
+
+test('home points migrate version 2, persist per boat, reject stale revisions and never overwrite after authorization expires',t=>{
+  const f=fixture(t),route=f.route();
+  fs.writeFileSync(f.store.file,JSON.stringify({version:2,routes:[route]}));
+  const store=new MissionStore({env:f.env});assert.equal(store.error,'');assert.equal(store.getHome('boat-01'),null);
+  const home=store.saveHome('boat-01',ORIGIN,0),other=store.saveHome('boat-02',N.destination(ORIGIN,90,100),0);
+  assert.throws(()=>store.saveHome('boat-01',ORIGIN,0),{status:409});
+  assert.throws(()=>store.saveHome('boat-01',{...ORIGIN,latitude:86},1),{status:400});
+  assert.throws(()=>store.saveHome('boat-01',{...ORIGIN,extra:1},1),{status:400});
+  const saved=fs.readFileSync(store.file,'utf8');
+  assert.throws(()=>store.saveHome('boat-01',N.destination(ORIGIN,0,10),1,()=>{throw Object.assign(Error('expired'),{status:401});}),{status:401});
+  assert.equal(fs.readFileSync(store.file,'utf8'),saved);assert.deepEqual(store.getHome('boat-01'),home);
+  const reloaded=new MissionStore({env:f.env});assert.equal(reloaded.error,'');assert.deepEqual(reloaded.get('boat-01',route.id),route);assert.deepEqual(reloaded.getHome('boat-02'),other);
+  assert.equal(reloaded.getHome('boat-03'),null);
+  const bad=JSON.parse(saved);bad.homes.push({...home});fs.writeFileSync(store.file,JSON.stringify(bad));assert.match(new MissionStore({env:f.env}).error,/读取失败/);
+});
+
+test('pause waits for a real stop acknowledgement; resume revalidates feedback and parameters with a fresh zero-input lease',async t=>{
+  const f=fixture(t),route=f.route('boat-01',{loopEnabled:true,loopCount:2}),job=await running(f,route);
+  f.advance(100);await flush(f);assert.equal(job.index,1);const original=job.runId,lease=job.leaseId;
+  f.autoAck=false;f.mission.pause('boat-01');assert.equal(job.status,'stopping');assert.equal(f.commands().at(-1).payload.readInt16LE(30),0);
+  assert.throws(()=>f.mission.resume('boat-01',original),{status:409});
+  const count=f.commands().length;f.advance(100);assert.equal(f.commands().length,count,'A stopping task never sends more movement');
+  f.ack(f.commands().at(-1));f.mission.refresh();assert.equal(job.status,'paused');assert.equal(job.stopConfirmed,true);
+  f.advance(1000);await flush(f);assert.equal(job.status,'paused');assert.equal(f.commands().length,count,'Paused tasks do not renew motion');
+  f.flags.set('boat-01',{fix:false});f.advance(100);assert.throws(()=>f.mission.resume('boat-01',original),{status:503});assert.equal(job.status,'paused');
+  f.flags.clear();f.advance(100);f.autoAck=true;
+  f.mission.resume('boat-01',original);await until(()=>f.mission.snapshot('boat-01').status==='running');
+  const resumed=f.mission.jobs.get('boat-01');assert.notEqual(resumed.runId,original);assert.notEqual(resumed.leaseId,lease);assert.equal(resumed.index,1);assert.equal(resumed.loopCount,2);
+  assert.equal(f.client.sent.filter(p=>p.topic.endsWith('parameter-command')).length,2);
+  assert.equal(f.commands().filter(p=>p.payload[28]===1).at(-1).payload.readInt16LE(30),0);
+  assert.throws(()=>f.mission.resume('boat-01',original),{status:409});
+});
+
+test('a missing pause ACK cannot be resumed and restart never restores a paused command',async t=>{
+  const f=fixture(t);await running(f);f.autoAck=false;f.mission.pause('boat-01');f.advance(1300);f.mission.refresh();
+  const run=f.mission.snapshot('boat-01');assert.equal(run.status,'failed');assert.equal(run.stopConfirmed,false);assert.throws(()=>f.mission.resume('boat-01',run.runId),{status:409});
+  const other=new MissionService({bridge:f.bridge,control:f.control,store:new MissionStore({env:f.env}),now:f.now,pollMs:60000});t.after(()=>other.close());assert.equal(other.list().length,0);
+});
+
+test('emergency stop while a pause awaits acknowledgement cannot leave a resumable task',async t=>{
+  const f=fixture(t),job=await running(f);f.autoAck=false;f.mission.pause('boat-01');
+  const stop=f.commands().at(-1),count=f.commands().length;
+  const pending=f.mission.stop('boat-01');assert.equal(pending.status,'stopping');assert.equal(pending.resumable,false);
+  assert.equal(f.commands().length,count,'Reuse the in-flight zero-input stop instead of issuing another control command');
+  f.ack(stop);f.mission.refresh();const ended=f.mission.snapshot('boat-01');
+  assert.equal(ended.status,'stopped');assert.equal(ended.stopConfirmed,true);assert.equal(ended.resumable,false);
+  assert.throws(()=>f.mission.resume('boat-01',job.runId),{status:409});
+});
+
+test('return home uses only the current boat saved point and stops after two fresh arrival samples',async t=>{
+  const f=fixture(t),point=N.destination(ORIGIN,0,20),home=f.store.saveHome('boat-01',point,0);
+  assert.throws(()=>f.mission.navigate('boat-01','home',1,3,2),{status:409});f.feed('boat-02');assert.throws(()=>f.mission.navigate('boat-02','home',1,3,home.revision),{status:409});
+  f.mission.navigate('boat-01','home',1,3,home.revision);await until(()=>f.mission.snapshot('boat-01').status==='running');
+  assert.deepEqual(f.mission.snapshot('boat-01').route.points,[point]);assert.ok(f.commands().at(-1).payload.readInt16LE(30)>0);
+  f.advance(100,'boat-01',point);await flush(f);assert.equal(f.mission.snapshot('boat-01').status,'running');
+  f.advance(100);await flush(f);assert.equal(f.mission.snapshot('boat-01').status,'completed');assert.equal(f.mission.snapshot('boat-01').stopConfirmed,true);
+});
+
+test('station keeping stays at zero speed in its radius, corrects drift and stops on invalid feedback',async t=>{
+  const f=fixture(t);f.mission.navigate('boat-01','hold',.5,3);await until(()=>f.mission.snapshot('boat-01').status==='running');
+  for(let i=0;i<4;i++){f.advance(100);await flush(f);assert.equal(f.mission.snapshot('boat-01').commandSpeedMps,0);}
+  const anchor=f.mission.snapshot('boat-01').route.points[0];assert.deepEqual(anchor,ORIGIN);
+  f.advance(100,'boat-01',{...N.destination(ORIGIN,0,10),heading:180});await flush(f);
+  assert.ok(f.mission.snapshot('boat-01').commandSpeedMps>0);assert.ok(f.mission.snapshot('boat-01').commandSpeedMps<=.5);
+  f.flags.set('boat-01',{fix:false});f.advance(100);await flush(f);assert.equal(f.mission.snapshot('boat-01').status,'failed');assert.equal(f.commands().at(-1).payload.readInt16LE(30),0);
+  f.flags.clear();f.advance(100);assert.equal(f.mission.snapshot('boat-01').status,'failed','Feedback recovery never automatically resumes station keeping');
+});
+
+test('station keeping can wait beyond the progress deadline but stops when drift exceeds its boundary',async t=>{
+  const f=fixture(t);f.mission.progressTimeoutMs=200;
+  f.mission.navigate('boat-01','hold',.5,3);await until(()=>f.mission.snapshot('boat-01').status==='running');
+  for(let i=0;i<10;i++){f.advance(100);await flush(f);}
+  assert.equal(f.mission.snapshot('boat-01').status,'running');assert.equal(f.mission.snapshot('boat-01').commandSpeedMps,0);
+  f.advance(100,'boat-01',N.destination(ORIGIN,0,31));await flush(f);
+  const run=f.mission.snapshot('boat-01');assert.equal(run.status,'failed');assert.match(run.message,/偏离守位点过远/);
+  assert.equal(f.commands().at(-1).payload.readInt16LE(30),0);assert.equal(run.resumable,false);
+});
+
+test('home and navigation HTTP writes enforce account roles, same origin, strict fields and run revisions',async t=>{
+  const f=fixture(t,{server:true});await new Promise(resolve=>f.server.listen(0,'127.0.0.1',resolve));const base='http://127.0.0.1:'+f.server.address().port;
+  const call=async(path,body,cookie,origin=base)=>{const res=await fetch(base+path,{method:body?'POST':'GET',headers:{origin,...(cookie?{cookie}:{}),...(body?{'content-type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});return {status:res.status,data:await res.json(),cookie:res.headers.get('set-cookie')?.split(';')[0]};};
+  const admin=(await call('/api/auth/login',{username:'operator',password:'browser-admin-test-only'})).cookie,guest=(await call('/api/auth/login',{username:'observer',password:'browser-guest-test-only'})).cookie;
+  const home={deviceId:'boat-01',point:ORIGIN,revision:0};
+  assert.equal((await call('/api/missions/home',home)).status,401);assert.equal((await call('/api/missions/home',home,guest)).status,403);
+  assert.equal((await call('/api/missions/home',home,admin,'https://elsewhere.test')).status,403);
+  assert.equal((await call('/api/missions/home',{...home,owner:'spoof'},admin)).status,400);
+  assert.equal((await call('/api/missions/home',home,admin)).status,200);assert.equal((await call('/api/missions?deviceId=boat-01',null,admin)).data.home.revision,1);
+  const hold={deviceId:'boat-01',action:'hold',speedMps:.5,arrivalRadiusM:3};
+  assert.equal((await call('/api/missions/run',hold,guest)).status,403);
+  assert.equal((await call('/api/missions/run',{...hold,homeRevision:1},admin)).status,400);
+  assert.equal((await call('/api/missions/run',hold,admin)).status,202);await until(()=>f.mission.snapshot('boat-01').status==='running');
+  const selected=(await call('/api/missions?deviceId=boat-01',null,admin)).data.runs.find(run=>run.deviceId==='boat-01');
+  assert.equal(selected.action,'hold');assert.deepEqual(selected.route.points,[ORIGIN],'Selected one-point navigation retains its actual route across polls');
+  assert.equal((await call('/api/missions?deviceId=boat-02',null,admin)).data.runs.find(run=>run.deviceId==='boat-01').route,undefined,'Other boats retain compact summaries');
+  assert.equal((await call('/api/missions/home',{...home,revision:1},admin)).status,409);
+  let run=f.mission.snapshot('boat-01');const pause={deviceId:'boat-01',action:'pause',runId:run.runId};
+  assert.equal((await call('/api/missions/run',{...pause,runId:'0000000000000000'},admin)).status,409);
+  assert.equal((await call('/api/missions/run',pause,admin)).status,202);await flush(f);assert.equal(f.mission.snapshot('boat-01').status,'paused');
+  f.advance(100);assert.equal((await call('/api/missions/run',{...pause,action:'resume'},admin)).status,202);await until(()=>f.mission.snapshot('boat-01').status==='running');
+  assert.notEqual(f.mission.snapshot('boat-01').runId,run.runId);
 });

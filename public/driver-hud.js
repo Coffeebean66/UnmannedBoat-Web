@@ -10,8 +10,11 @@
       this.nodes=Object.fromEntries(['driverHud','driverHudRollValue','driverHudPitchValue','driverHudAttitudeStatus','driverHudRollPointer','driverHudRoll','driverHudPitch','driverHudSpeed','driverHudTarget','driverHudHeadingValue','driverHudHeadingTicks','driverHudPosition'].map(id=>[id,document.getElementById(id)]));
       this.ticks=[];
       for(const id of ['driverHudRollMarker','driverHudSpeedTicks','driverHudRpmTicks','driverHudRpm','driverHudOutput','driverHudOutputFill'])this.nodes[id]=document.getElementById(id);
+      for(const id of ['driverHudAuxTicks','driverHudAuxPitch','driverHudGuidance','driverHudGuideArrow','driverHudGuideText'])this.nodes[id]=document.getElementById(id);
+      this.horizon=new window.BoatArtificialHorizon(document.getElementById('driverHudHorizon'));
       this.speedTicks=this.createTape(this.nodes.driverHudSpeedTicks,9,38,100,23);
       this.rpmTicks=this.createTape(this.nodes.driverHudRpmTicks,7,22,75,20);
+      this.auxTicks=this.createTape(this.nodes.driverHudAuxTicks,9,22,100,23);
       for(let angle=-90;angle<=90;angle+=10){
         const y=180+angle*4,major=angle===0;
         this.svg('path',{d:major?'M215 '+y+' H385':'M250 '+y+' h34 m32 0 h34',class:angle<0?'driver-hud-negative':''},this.nodes.driverHudPitch);
@@ -53,6 +56,17 @@
     }
     text(id,value){const text=String(value??'--');if(this.nodes[id].textContent!==text)this.nodes[id].textContent=text;}
     attribute(node,name,value){if(node.getAttribute(name)!==value)node.setAttribute(name,value);}
+    setNavigation(state){
+      this.navigation=state;
+      const run=state?.run,heading=number(run?.targetHeading),distance=number(run?.distanceM);
+      const show=state?.allowed&&!state.stale&&run?.status==='running'&&this.lastHeading!==null&&this.fixValid&&heading!==null&&distance!==null&&Date.now()-(state.updatedAt||0)<2500;
+      this.nodes.driverHudGuidance.hidden=!show;
+      if(!show)return;
+      const error=((heading-this.lastHeading+540)%360)-180;
+      this.nodes.driverHudGuideArrow.style.left=(50+Math.max(-45,Math.min(45,error))*.8)+'%';
+      this.nodes.driverHudGuideArrow.textContent=error< -45?'◀':error>45?'▶':'◇';
+      this.text('driverHudGuideText',(run.action==='hold'?'守位点':run.action==='home'?'返航点':'航点 '+(run.targetIndex+1))+' · '+distance.toFixed(1)+' m · '+heading.toFixed(1)+'°');
+    }
     setTelemetry(value={}) {
       const imu=value.imu||{},roll=number(imu.rollDegrees),pitch=number(imu.pitchDegrees);
       const attitude=imu.eulerFresh===true&&roll!==null&&pitch!==null&&Math.abs(roll)<=180&&Math.abs(pitch)<=90;
@@ -60,6 +74,9 @@
       this.text('driverHudRollValue',attitude?roll.toFixed(1):'--');
       this.text('driverHudPitchValue',attitude?pitch.toFixed(1):'--');
       this.text('driverHudAttitudeStatus',attitude?'姿态实时':'姿态不可用');
+      this.horizon.setTelemetry(imu);
+      this.setTape(this.nodes.driverHudAuxTicks,this.auxTicks,attitude?pitch:null,5);
+      this.text('driverHudAuxPitch',attitude?pitch.toFixed(1):'--');
       // 与三维船模、人工地平仪一致：正 roll 右倾，正 pitch 船头向下。
       this.attribute(this.nodes.driverHudRoll,'transform',attitude?'rotate('+(-roll)+' 300 180)':'');
       this.attribute(this.nodes.driverHudPitch,'transform',attitude?'translate(0 '+(-pitch*4)+')':'');
@@ -84,10 +101,12 @@
       if(heading!==this.lastHeading)for(let i=0;i<this.ticks.length;i++){
         const tick=this.ticks[i],degree=heading===null?0:Math.floor(heading/10)*10+(i-7)*10,normal=((degree%360)+360)%360;
         this.attribute(tick.group,'transform','translate('+(150+(degree-(heading??0))*3)+',0)');
-        const label=({0:'N',90:'E',180:'S',270:'W'})[normal]||String(normal).padStart(3,'0');
+        const label=({0:'北',90:'东',180:'南',270:'西'})[normal]||String(normal).padStart(3,'0');
         if(tick.label.textContent!==label)tick.label.textContent=label;
       }
       this.lastHeading=heading;
+      this.fixValid=value.fixValid===true;
+      this.setNavigation(this.navigation);
       this.text('driverHudPosition',value.fixValid?'WGS84 · '+value.latitude+' / '+value.longitude:'WGS84 · 等待有效定位');
     }
   }

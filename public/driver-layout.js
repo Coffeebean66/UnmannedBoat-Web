@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   // 新控制台单独保存布局，旧驾驶页的位置和透明度不覆盖照片对应的默认排布。
-  const STORAGE='boat-driver-console-layout-v1';
+  const STORAGE='boat-driver-platform-layout-v1';
   const clamp=(value,min,max)=>Math.max(min,Math.min(max,value));
   const PARTS=[
     ['navigation','航行读数','.driver-navigation-data'],

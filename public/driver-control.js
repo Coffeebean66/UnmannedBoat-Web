@@ -11,6 +11,7 @@
       this.nodes=Object.fromEntries(['view-driving','driverBoatName','driverLinkStatus','driverState','driverEnable','driverRelease','driverEmergency','driverTestMode','driverTestNotice','driverTestAck','driverNotice','driverActualSpeed','driverTargetSpeed','driverActualHeading','driverActualMode','driverInput','driverLatitude','driverLongitude','driverFixStatus','driverImuStatus','driverModelPreview','driverMode','driverLimit','driverLimitValue','driverHeading','driverHoldHeading','driverVideoExpand','driverMapExpand','driverOverlayOpacity','driverOverlayOpacityValue','driverFocusTools','driverDetailsPanel','driverDetailsToggle','driverDetailsClose','driverDisplayOptions','driverControlOptions','driverInstrumentToggle'].map(id=>[id,document.getElementById(id)]));
       this.hud=new window.BoatDriverHud({document});
       for(const id of ['driverDeviceSelect','driverOperator','driverConnectionToggle','driverAccount','driverLogout','driverSystemSettings','driverCommonOutput','driverMotorRpm','driverMotorVoltage','driverAttitudeAngles','driverMapLayer','driverMapFollow'])this.nodes[id]=document.getElementById(id);
+      for(const id of ['driverSystemMode','driverTopFix','driverTopPower','driverUtc','driverMqttStatus','driverNetworkDelay','driverLeftRpmBar','driverRightRpmBar','driverLeftPwm','driverRightPwm','driverLeftOutput','driverRightOutput','driverVideoResolution','driverVideoDelay','driverVideoNetwork'])this.nodes[id]=document.getElementById(id);
       const random=new Uint8Array(8);window.crypto.getRandomValues(random);
       this.clientId=Array.from(random,value=>value.toString(16).padStart(2,'0')).join('');
       this.context={deviceId:'',connected:false,authenticated:false,canManage:false,parameterBusy:false};
@@ -107,6 +108,7 @@
         else if(this.stopReason==='已进入布局编辑，已停船并退出操控'){this.stopReason='';this.message='布局已保存，点击启用操控继续驾驶。';}
         this.render();
       },onReset:()=>{this.setOverlayOpacity(100);this.setInstrumentsVisible(false);}});
+      this.navigation=new window.BoatDriverNavigation(this);
       this.timer=window.setInterval(()=>this.pulse(),100);
       this.headingMode();this.render();
     }
@@ -114,7 +116,7 @@
     text(id,value){const text=String(value??'--');if(this.nodes[id].textContent!==text)this.nodes[id].textContent=text;}
     visible(){return window.BoatWorkspace?.current==='driving'&&!this.document.hidden;}
     admin(){return this.auth?.enabled===true&&this.auth?.ready===true&&['admin','driver'].includes(this.auth?.user?.role);}
-    permitted(){return this.visible()&&this.admin()&&this.context.connected&&this.context.authenticated&&DEVICE.test(this.context.deviceId)&&!this.context.parameterBusy&&!this.layout?.editing;}
+    permitted(){return this.visible()&&this.admin()&&this.context.connected&&this.context.authenticated&&DEVICE.test(this.context.deviceId)&&!this.context.parameterBusy&&!this.layout?.editing&&(!this.navigation||this.navigation.mode==='manual'&&!this.navigation.editingHome&&!this.navigation.busy);}
     editing(target){return !!(target?.isContentEditable||target?.closest?.('input,select,textarea,[contenteditable="true"],dialog[open]'));}
     held(direction){return [...this.keys].some(code=>KEYS[code]===direction);}
     state(){return {deviceId:this.context.deviceId,active:this.active,pending:this.pending,testMode:this.testMode,leaseId:this.leaseId,sequence:this.sequence,keys:[...this.keys],remote:this.remote};}
@@ -149,8 +151,30 @@
       const motors=value.motors||[];
       this.text('driverMotorRpm',motors.map(m=>m.Rpm).concat(['--','--']).slice(0,2).join(' / '));
       this.text('driverMotorVoltage',motors.map(m=>m.Voltage).concat(['--','--']).slice(0,2).join(' / '));
+      this.text('driverTopFix','RTK · '+(value.fixStatus||'--'));
+      this.text('driverTopPower','供电 · '+motors.map(m=>m.Voltage).concat(['--','--']).slice(0,2).join(' / ')+' V');
+      if(this.rpmDevice!==this.context.deviceId){this.rpmDevice=this.context.deviceId;this.rpmScale=1000;}
+      const rpm=motors.slice(0,2).map(m=>Number(m.Rpm));
+      this.rpmScale=Math.max(this.rpmScale,...rpm.filter(Number.isFinite).map(n=>Math.ceil(Math.abs(n)/1000)*1000));
+      for(let i=0;i<2;i++){
+        const side=i?'Right':'Left',pwm=Number(motors[i]?.Pwm),valid=motors[i]?.Pwm!==undefined&&motors[i]?.Pwm!=='--'&&Number.isFinite(pwm);
+        const bar=this.nodes['driver'+side+'RpmBar'];bar.style.width=(Number.isFinite(rpm[i])?Math.min(100,Math.abs(rpm[i])/this.rpmScale*100):0)+'%';bar.parentElement.title='转速自动量程 · '+this.rpmScale+' RPM';
+        this.text('driver'+side+'Pwm',valid?pwm.toFixed(1)+'%':'--');
+        this.nodes['driver'+side+'Output'].style.width=(valid?Math.min(100,Math.abs(pwm)):0)+'%';
+        this.nodes['driver'+side+'Output'].dataset.reverse=String(valid&&pwm<0);
+      }
+      this.text('driverNetworkDelay',Number.isFinite(value.networkDelayMs)?Math.round(value.networkDelayMs):'--');
       this.text('driverAttitudeAngles',value.imu?.eulerFresh?[value.imu.rollDegrees,value.imu.pitchDegrees].map(n=>Number.isFinite(n)?n.toFixed(1):'--').join(' / '):'-- / --');
       this.actualHeading=typeof value.actualHeading==='string'&&value.actualHeading.trim()!==''&&value.actualHeading!=='--'?Number(value.actualHeading):Number.isFinite(value.actualHeading)?value.actualHeading:null;
+      this.renderVideoMetadata();
+    }
+    renderVideoMetadata(){
+      const view=window.boatMonitor?.videoView,video=view?.video,ready=view?.deviceId===this.context.deviceId&&view.active&&view.playing;
+      this.text('driverVideoResolution',ready&&video.videoWidth>0?video.videoWidth+' × '+video.videoHeight:'-- × --');
+      const latency=ready&&view.format==='hls'?view.player?.latency:null;
+      this.text('driverVideoDelay',Number.isFinite(latency)&&latency>=0?'直播落后 · '+latency.toFixed(1)+' s':'视频延迟 · --');
+      this.text('driverVideoNetwork',ready?'视频已连接':view?.status||'等待视频');
+      this.nodes.driverVideoNetwork.dataset.connected=String(!!ready);
     }
     setDevices(devices=[],selected='',authenticated=false) {
       const select=this.nodes.driverDeviceSelect,signature=JSON.stringify([devices.map(d=>[d.id,!!d.online]),selected,authenticated]);
@@ -378,6 +402,9 @@
       this.text('driverBoatName',this.context.deviceId||'未选择无人船');
       this.nodes.driverLinkStatus.dataset.connected=String(this.context.connected);
       this.text('driverLinkStatus',this.context.connected?'实时遥测已连接':'等待实时连接');
+      this.text('driverMqttStatus',this.context.connected?'MQTT · 已连接':'MQTT · 未连接');
+      this.text('driverSystemMode',this.active?(this.testMode?'手动驾驶 · 测试场景':'手动驾驶 · 已接管'):this.pending?'手动驾驶 · 等待确认':'监测待机');
+      const utc=new Date();this.text('driverUtc','UTC '+utc.toISOString().slice(11,19));this.nodes.driverUtc.dateTime=utc.toISOString();
       this.text('driverOperator',this.auth?.user?this.auth.user.username+' · '+({admin:'管理员',driver:'驾驶员',guest:'访客'}[this.auth.user.role]):'未登录');
       this.nodes.driverAccount.title=this.auth?.user?'切换登录账户':'登录平台';
       this.nodes.driverLogout.hidden=!this.auth?.user;
@@ -427,8 +454,9 @@
       }
       this.text('driverNotice',message);this.nodes.driverNotice.dataset.tone=this.tone;
       this.renderKeys();
+      this.navigation?.render();
     }
-    destroy(){if(this.destroyed)return;this.stop('驾驶界面已关闭，已请求停船');this.setMediaFocus('');this.layout?.destroy();this.destroyed=true;window.clearInterval(this.timer);for(const [target,event,handler]of this.handlers)target.removeEventListener(event,handler);this.handlers=[];}
+    destroy(){if(this.destroyed)return;this.stop('驾驶界面已关闭，已请求停船');this.setMediaFocus('');this.navigation?.destroy();this.layout?.destroy();this.destroyed=true;window.clearInterval(this.timer);for(const [target,event,handler]of this.handlers)target.removeEventListener(event,handler);this.handlers=[];}
   }
   window.BoatDriverControl=BoatDriverControl;
 })();
