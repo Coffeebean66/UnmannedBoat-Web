@@ -161,3 +161,7 @@ html[data-driver-focus="true"],html[data-driver-focus="true"] body { overflow:hi
   .driving-workspace[data-focus] .driver-navigation-inputs input { width:44px; }
   .driving-workspace[data-focus] .driver-navigation-inputs button { padding:4px 6px; font-size:9px; }
 }
+@media(max-width:400px) {
+  .driving-workspace[data-focus] .driver-focus-tools>button,.driving-workspace[data-focus] .driver-display-options>summary { padding-inline:5px; }
+  .driving-workspace[data-focus] .driver-immersive-toggle svg { display:none; }
+}

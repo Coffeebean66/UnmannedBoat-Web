@@ -127,12 +127,25 @@
       this.runs=this.runs.filter(r=>r.deviceId!==id).concat(data.run);this.notice('任务已提交服务器，关闭网页后仍会继续；可随时点击停止任务。');this.render();
     }
     async submitNavigation(action,options={}){
-      const id=this.deviceId,generation=this.generation,run=this.run(),requestedAt=Date.now();let body={deviceId:id,action};
+      const id=this.deviceId,run=this.run();let body={deviceId:id,action};
       if(['pause','resume','stop'].includes(action))body.runId=run?.runId;
       else if(['start','goto'].includes(action)){
         const route=this.routes.find(r=>r.id===options.routeId);if(!route)throw Error('请先选择已保存的航线');
         body={...body,routeId:route.id,revision:route.revision};
       }else body={...body,speedMps:options.speedMps,arrivalRadiusM:options.arrivalRadiusM,...(action==='home'?{homeRevision:this.home?.revision}:{})};
+      return this.submitRun(body);
+    }
+    async submitQueue(action,{queueId}={}){
+      if(!['queueGoto','queueStart'].includes(action))throw Error('无效的任务组操作');
+      const queue=this.queues.find(q=>q.id===queueId);if(!queue)throw Error('请先选择已保存的任务组');
+      const editor=window.BoatMissionQueue;
+      if(editor?.deviceId===this.deviceId&&editor.queue.id===queueId&&editor.dirty)throw Error('任务组有未保存修改，请先保存任务组');
+      if(this.dirty&&queue.routeIds.includes(this.route.id))throw Error('任务组中的航线有未保存修改，请先保存航线');
+      return this.submitRun({deviceId:this.deviceId,action,queueId:queue.id,revision:queue.revision,routeRevisions:queue.routeIds.map(id=>this.routes.find(r=>r.id===id)?.revision)});
+    }
+    async submitRun(body){
+      // 单航线与任务组共用快照更新和迟到响应保护；调用方仍能取得结果并补发急停。
+      const id=body.deviceId,generation=this.generation,requestedAt=Date.now();
       const data=await this.request('/run',{method:'POST',body:JSON.stringify(body)});
       if(generation===this.generation){
         const current=this.run(),newer=current&&(current.startedAt>data.run.startedAt||current.runId===data.run.runId&&this.updatedAt>requestedAt);

@@ -111,7 +111,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">无人船监测 <span>v1.54.0</span></div>
+      <div class="sidebar-version">无人船监测 <span>v1.55.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -168,8 +168,8 @@
             </section>
           </div>
         </div>
-        <section class="mission-card mission-queue-card" aria-labelledby="missionQueueTitle">
-          <div class="mission-card-heading"><div><h2 id="missionQueueTitle">多任务队列</h2><p class="muted">按顺序执行多条航线 · 按船保存 · 关闭网页后继续</p></div><button id="missionQueueNew" type="button" class="small-button">新建队列</button></div>
+        <section id="missionQueueCard" class="mission-card mission-queue-card" aria-labelledby="missionQueueTitle">
+          <div class="mission-card-heading"><div><h2 id="missionQueueTitle">任务组 · 多任务队列</h2><p class="muted">按顺序执行多条航线 · 按船保存 · 关闭网页后继续</p></div><button id="missionQueueNew" type="button" class="small-button">新建任务组</button></div>
           <div class="mission-queue-layout">
             <div>
               <label class="mission-field">已保存队列<select id="missionQueueSelect"><option value="">新任务队列</option></select></label>
@@ -186,7 +186,7 @@
             </div>
           </div>
           <p id="missionQueueProgress" class="mission-queue-progress" role="status">当前没有执行中的任务队列</p>
-          <div class="mission-actions"><button id="missionQueueGoto" type="button">前往队列起点</button><button id="missionQueueStart" type="button" class="primary">开始队列</button><button id="missionQueuePause" type="button">暂停队列</button><button id="missionQueueResume" type="button">继续队列</button><button id="missionQueueStop" type="button" class="mission-danger">停止队列</button></div>
+          <div class="mission-actions mission-queue-execution"><button id="missionQueueGoto" type="button">前往队列起点</button><button id="missionQueueStart" type="button" class="primary">开始队列</button><button id="missionQueuePause" type="button">暂停队列</button><button id="missionQueueResume" type="button">继续队列</button><button id="missionQueueStop" type="button" class="mission-danger">停止队列</button></div>
           <p class="mission-note">相邻航线之间自动直线转场；各航线按自己的航速、到点半径和循环次数执行。整组循环最后一轮也会返回首条航线起点后停止。航线与转场均不自动避障。</p>
           <p id="missionQueueNotice" class="mission-notice" role="status"></p>
         </section>
@@ -369,7 +369,17 @@
           <p id="driverTestNotice" class="driver-test-notice" role="status" hidden>测试场景 · 真实 PWM 输出 · 电调反馈 / RTK / IMU 可离线。<span id="driverTestAck">尚未接管</span></p>
           <div class="driver-inputs"><label class="driver-mode-select"><span class="sr-only">控制模式</span><select id="driverMode" aria-label="控制模式"><option value="0">PWM 油门</option><option value="1" selected>船速闭环</option><option value="2">航向闭环</option></select></label><label class="driver-limit">运动幅度 <input id="driverLimit" type="range" min="5" max="100" step="5" value="20" aria-label="键盘运动幅度百分比"><output id="driverLimitValue" for="driverLimit">20%</output></label><label class="driver-heading">目标航向<input id="driverHeading" type="number" min="0" max="359.99" step="1" value="0" inputmode="decimal"><span>°</span></label><button id="driverHoldHeading" type="button" class="small-button" title="以当前真北船头航向设定目标">取航向</button><div class="driver-keyboard" aria-label="W/S 前进后退，A/D 左右转向，按住运动，松开归零"><kbd data-driver-key="KeyW">W</kbd><kbd data-driver-key="KeyA">A</kbd><kbd data-driver-key="KeyS">S</kbd><kbd data-driver-key="KeyD">D</kbd></div></div>
           <div class="driver-command-footer"><div class="driver-mode-buttons" role="group" aria-label="驾驶模式"><button type="button" data-driver-mode="0" aria-pressed="false"><i data-icon="gauge"></i><span>PWM</span></button><button type="button" data-driver-mode="1" aria-pressed="true"><i data-icon="activity"></i><span>定速</span></button><button type="button" data-driver-mode="2" aria-pressed="false"><i data-icon="compass"></i><span>定向</span></button></div><div class="driver-actions"><button id="driverEnable" type="button" class="primary" disabled>启用操控</button><button id="driverRelease" type="button" class="ghost" disabled>停船退出</button></div></div>
-          <div id="driverAutonomy" class="driver-autonomy" hidden><label class="driver-route-field">已保存航线<select id="driverRouteSelect"><option value="">请选择航线</option></select></label><div class="driver-navigation-inputs"><label>航速<input id="driverNavSpeed" type="number" min="0.1" max="20" step="0.1" value="1"><small>m/s</small></label><label>到点半径<input id="driverNavRadius" type="number" min="1" max="50" step="1" value="3"><small>m</small></label><button id="driverNavSave" type="button" class="small-button">保存设置</button></div><div class="driver-navigation-actions"><button id="driverGoto" type="button" class="small-button">前往起点</button><button id="driverNavStart" type="button" class="primary">启动导航</button><button id="driverNavPause" type="button" class="small-button" disabled>暂停</button><button id="driverNavResume" type="button" class="small-button" disabled>继续</button></div><p class="driver-navigation-hint">自动航行使用已保存的航速与半径；定点保持使用此处设定的回位速度与范围。</p></div>
+          <div id="driverAutonomy" class="driver-autonomy" hidden>
+            <div id="driverTaskSelection" class="driver-task-selection">
+              <label class="driver-task-kind"><span class="sr-only">任务类型</span><select id="driverTaskKind" aria-label="任务类型"><option value="route">单航线</option><option value="queue">任务组</option></select></label>
+              <label id="driverRouteField" class="driver-route-field"><span class="sr-only">已保存航线</span><select id="driverRouteSelect" aria-label="已保存航线"><option value="">请选择航线</option></select></label>
+              <label id="driverQueueField" class="driver-route-field" hidden><span class="sr-only">已保存任务组</span><select id="driverQueueSelect" aria-label="已保存任务组"><option value="">请选择任务组</option></select></label>
+              <button id="driverQueueSettings" type="button" class="small-button" aria-haspopup="dialog" aria-controls="driverQueueDialog">设置任务组</button>
+            </div>
+            <div id="driverNavParameters" class="driver-navigation-inputs"><label>航速<input id="driverNavSpeed" type="number" min="0.1" max="20" step="0.1" value="1"><small>m/s</small></label><label>到点半径<input id="driverNavRadius" type="number" min="1" max="50" step="1" value="3"><small>m</small></label><button id="driverNavSave" type="button" class="small-button">保存设置</button></div>
+            <p id="driverQueueSummary" class="driver-queue-summary" hidden>请先设置并保存任务组。</p>
+            <div class="driver-navigation-actions"><button id="driverGoto" type="button" class="small-button">前往起点</button><button id="driverNavStart" type="button" class="primary">启动导航</button><button id="driverNavPause" type="button" class="small-button" disabled>暂停</button><button id="driverNavResume" type="button" class="small-button" disabled>继续</button></div><p class="driver-navigation-hint">自动航行使用已保存航线的航速与半径；任务组按顺序执行并支持整组循环。</p>
+          </div>
           <p id="driverNavNotice" class="driver-nav-notice" role="status" aria-live="polite"></p>
           <p class="driver-keyboard-hint">建议使用带实体键盘的电脑；手机端可查看驾驶画面。</p>
         </article>
@@ -411,7 +421,7 @@
           <details id="driverModelPreview" class="driver-model-preview"><summary><span><i data-icon="boat"></i>三维船体预览</span><i data-icon="chevron"></i></summary><div class="workspace-slot" data-workspace-slot="driving-model"></div></details>
         </aside>
         <div id="driverFocusTools" class="driver-focus-tools">
-          <button id="driverImmersiveToggle" type="button" class="small-button driver-immersive-toggle" aria-pressed="false" title="进入沉浸驾驶，Esc 返回后台布局"><i data-icon="maximize"></i><span>沉浸驾驶</span></button><button id="driverSwapMedia" type="button" class="small-button" hidden><i data-icon="map"></i><span>地图主画面</span></button>
+          <button id="driverImmersiveToggle" type="button" class="small-button driver-immersive-toggle" title="返回进入驾驶前的页面，也可按 Esc"><i data-icon="arrow"></i><span>返回后台 · Esc</span></button><button id="driverSwapMedia" type="button" class="small-button"><i data-icon="map"></i><span>地图主画面</span></button>
           <button id="driverDetailsToggle" type="button" class="small-button" aria-expanded="false" aria-controls="driverDetailsPanel"><i data-icon="activity"></i>航行详情</button>
           <details id="driverDisplayOptions" class="driver-display-options"><summary><i data-icon="layers"></i>显示</summary><div class="driver-display-options-panel"><button id="driverInstrumentToggle" type="button" class="small-button" aria-pressed="false">仪表：隐藏</button><label for="driverOverlayOpacity" title="0% 隐藏 HUD，操控与急停保持可见">HUD 可见度 <output id="driverOverlayOpacityValue" for="driverOverlayOpacity">100%</output></label><input id="driverOverlayOpacity" type="range" min="0" max="100" step="5" value="100" aria-label="驾驶 HUD 可见度，0为隐藏100为完全显示"></div></details>
           <button id="driverLayoutToggle" type="button" class="driver-layout-launch" aria-expanded="false" aria-controls="driverLayoutEditor" title="拖动模块并设置单独透明度">布局编辑</button>
@@ -496,6 +506,10 @@
       <footer><span>UNMANNED VESSEL MONITOR <b>/</b> 无人船监测平台</span><span>MQTT 云端监测与调参</span></footer>
     </main>
   </div>
+  <dialog id="driverQueueDialog" class="driver-queue-dialog" aria-labelledby="driverQueueTitle" aria-describedby="driverQueueIntro">
+    <div class="dialog-head"><div><p class="eyebrow">MISSION GROUP</p><h2 id="driverQueueTitle">设置任务组</h2></div><button id="driverQueueClose" type="button" class="ghost">返回驾驶</button></div>
+    <div class="dialog-scroll"><p id="driverQueueIntro" class="muted">为当前无人船编排多条已保存航线，调整执行顺序和整组循环。保存后返回驾驶，可选择并一键启动。</p><div id="driverQueueEditorSlot"></div></div>
+  </dialog>
   <dialog id="accountLoginDialog" class="account-login-dialog" aria-labelledby="accountLoginTitle">
     <form id="accountLoginForm">
       <div class="dialog-head"><div><p class="eyebrow">PLATFORM ACCOUNT</p><h2 id="accountLoginTitle">登录无人船监测平台</h2></div><button id="accountLoginClose" type="button" class="ghost" aria-label="关闭账户登录窗口">关闭</button></div>

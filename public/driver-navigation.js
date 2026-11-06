@@ -3,13 +3,21 @@
   'use strict';
   class BoatDriverNavigation {
     constructor(driver){
-      this.driver=driver;this.document=driver.document;this.mode='manual';this.deviceId='';this.routeId='';this.busy=false;this.draft=null;this.editingHome=false;this.handlers=[];
-      this.nodes=Object.fromEntries(['driverAutonomy','driverRouteSelect','driverNavSpeed','driverNavRadius','driverNavSave','driverGoto','driverNavStart','driverNavPause','driverNavResume','driverNavNotice','driverHomeSet','driverReturnHome','driverHomeEditor','driverHomeDraft','driverHomeSave','driverHomeCancel','driverHomeStatus'].map(id=>[id,this.document.getElementById(id)]));
+      this.driver=driver;this.document=driver.document;this.mode='manual';this.deviceId='';this.routeId='';this.queueId='';this.taskKind='route';this.busy=false;this.draft=null;this.editingHome=false;this.handlers=[];
+      this.nodes=Object.fromEntries(['driverAutonomy','driverRouteSelect','driverNavSpeed','driverNavRadius','driverNavSave','driverGoto','driverNavStart','driverNavPause','driverNavResume','driverNavNotice','driverHomeSet','driverReturnHome','driverHomeEditor','driverHomeDraft','driverHomeSave','driverHomeCancel','driverHomeStatus','driverTaskSelection','driverTaskKind','driverRouteField','driverQueueField','driverQueueSelect','driverQueueSettings','driverQueueSummary','driverNavParameters','driverQueueDialog','driverQueueClose','driverQueueEditorSlot','missionQueueCard'].map(id=>[id,this.document.getElementById(id)]));
+      this.queueAnchor=this.document.createComment('任务组编辑器原位置');this.nodes.missionQueueCard.before(this.queueAnchor);
       for(const button of this.document.querySelectorAll('[data-navigation-mode]'))this.listen(button,'click',()=>this.selectMode(button.dataset.navigationMode));
       this.listen(this.nodes.driverRouteSelect,'change',()=>{this.routeId=this.nodes.driverRouteSelect.value;this.fillRoute();this.render();});
+      this.listen(this.nodes.driverTaskKind,'change',()=>{this.taskKind=this.nodes.driverTaskKind.value;this.notice('');this.render();});
+      this.listen(this.nodes.driverQueueSelect,'change',()=>{this.queueId=this.nodes.driverQueueSelect.value;this.notice('');this.render();});
+      this.listen(this.nodes.driverQueueSettings,'click',()=>this.openQueueSettings());
+      this.listen(this.nodes.driverQueueClose,'click',()=>this.closeQueueSettings());
+      this.listen(this.nodes.driverQueueDialog,'cancel',event=>{event.preventDefault();this.closeQueueSettings();});
+      this.listen(this.nodes.driverQueueDialog,'close',()=>this.restoreQueueEditor());
       for(const action of ['goto','start','pause','resume'])this.listen(this.nodes[{goto:'driverGoto',start:'driverNavStart',pause:'driverNavPause',resume:'driverNavResume'}[action]],'click',()=>this.perform(async operation=>{
-        if(['goto','start'].includes(action)&&this.mode==='auto'&&this.routeDirty())throw Error('航速或半径已修改，请先点击保存设置');
-        const run=await this.missions.submitNavigation(action==='start'&&this.mode==='hold'?'hold':action,{routeId:this.routeId,...this.values()});
+        const queue=this.mode==='auto'&&this.taskKind==='queue'&&['goto','start'].includes(action);
+        if(['goto','start'].includes(action)&&this.mode==='auto'&&!queue&&this.routeDirty())throw Error('航速或半径已修改，请先点击保存设置');
+        const run=queue?await this.missions.submitQueue(action==='goto'?'queueGoto':'queueStart',{queueId:this.queueId}):await this.missions.submitNavigation(action==='start'&&this.mode==='hold'?'hold':action,{routeId:this.routeId,...this.values()});
         if(operation?.cancelled&&run?.active){await this.missions.stop(run);return;}
         this.notice(action==='pause'?'已请求停船；收到船端确认后可以继续。':action==='resume'?'正在重新校验反馈并申请接管。':'已提交服务器；关闭网页后继续，可暂停或急停。');
       },{motion:['goto','start','resume'].includes(action)}));
@@ -24,8 +32,8 @@
         this.notice('急停已请求，等待服务器和船端停止确认。');this.missions.poll(true);this.render();
       });
       this.listen(window,'boat-mission-change',()=>this.render());
-      this.listen(window,'boat-view-change',event=>{if(event.detail?.view!=='driving')this.setHomeEditing(false);});
-      this.listen(window,'boat-selection-change',event=>{if(event.detail?.selectedId!==this.deviceId)this.setHomeEditing(false);this.render();});
+      this.listen(window,'boat-view-change',event=>{if(event.detail?.view!=='driving'){this.setHomeEditing(false);this.closeQueueSettings(false);}});
+      this.listen(window,'boat-selection-change',event=>{if(event.detail?.selectedId!==this.deviceId){this.setHomeEditing(false);this.closeQueueSettings(false);}this.render();});
       this.listen(window,'boat-theme-change',()=>this.render());
       this.render();
     }
@@ -35,6 +43,25 @@
     values(){return {speedMps:Number(this.nodes.driverNavSpeed.value),arrivalRadiusM:Number(this.nodes.driverNavRadius.value)};}
     fillRoute(){const route=this.missions?.routes.find(r=>r.id===this.routeId);if(route){this.nodes.driverNavSpeed.value=route.speedMps;this.nodes.driverNavRadius.value=route.arrivalRadiusM;}}
     routeDirty(){const route=this.missions?.routes.find(r=>r.id===this.routeId),v=this.values();return !!route&&(route.speedMps!==v.speedMps||route.arrivalRadiusM!==v.arrivalRadiusM);}
+    openQueueSettings(){
+      const m=this.missions,d=this.driver;
+      if(!m?.admin||this.busy||m.busy||m.run()?.active||!this.deviceId||m.deviceId!==this.deviceId||d.layout?.editing)return;
+      d.stop('已打开任务组设置，已停船并退出键盘操控');this.setHomeEditing(false);
+      this.queueDialogDevice=this.deviceId;this.queueDialogAuth=window.BoatAuth?.generation;
+      const editor=window.BoatMissionQueue;
+      if(this.queueId&&editor?.queue.id!==this.queueId)editor?.load(this.queueId);
+      this.nodes.driverQueueEditorSlot.append(this.nodes.missionQueueCard);
+      this.nodes.driverQueueDialog.showModal();this.render();
+    }
+    restoreQueueEditor(){if(this.nodes.missionQueueCard.parentNode!==this.queueAnchor.parentNode)this.queueAnchor.after(this.nodes.missionQueueCard);}
+    closeQueueSettings(adopt=true){
+      if(!this.nodes.driverQueueDialog.open){this.restoreQueueEditor();return;}
+      const m=this.missions,editor=window.BoatMissionQueue;
+      if(adopt&&m?.admin&&this.queueDialogDevice===this.deviceId&&this.queueDialogAuth===window.BoatAuth?.generation&&m.queues.some(q=>q.id===editor?.queue.id)){
+        this.queueId=editor.queue.id;this.taskKind='queue';
+      }
+      this.restoreQueueEditor();this.nodes.driverQueueDialog.close();this.render();
+    }
     selectMode(mode){
       if(!['manual','auto','hold'].includes(mode)||this.busy)return;
       const run=this.missions?.run();
@@ -44,7 +71,7 @@
     }
     async perform(fn,{motion=false}={}){
       const id=this.driver.context.deviceId,generation=window.BoatAuth?.generation;
-      if(this.busy||!this.missions?.admin||!id||id!==this.missions.deviceId||this.driver.layout?.editing)return;
+      if(this.busy||!this.missions?.admin||!id||id!==this.missions.deviceId||this.driver.layout?.editing||this.nodes.driverQueueDialog.open)return;
       const operation=motion?{deviceId:id,cancelled:false}:null;
       this.busy=true;this.motionPending=motion;this.pendingMotion=operation;if(motion)this.cancelMotion=false;this.render();
       try{await fn(operation);}catch(error){if(id===this.driver.context.deviceId&&generation===window.BoatAuth?.generation)this.notice(error.name==='AbortError'?'请求超时，结果未知，请等待状态刷新后核对。':error.message,true);}
@@ -71,11 +98,15 @@
     }
     render(){
       const m=this.missions,d=this.driver;if(!m)return;
-      if(this.deviceId!==d.context.deviceId){this.deviceId=d.context.deviceId;this.mode='manual';this.routeId='';this.seenRun='';this.routeSignature='';this.cancelMotion=false;this.setHomeEditing(false);this.notice('');}
+      if(this.deviceId!==d.context.deviceId){this.closeQueueSettings(false);this.deviceId=d.context.deviceId;this.mode='manual';this.routeId='';this.queueId='';this.taskKind='route';this.seenRun='';this.routeSignature='';this.queueSignature='';this.cancelMotion=false;this.setHomeEditing(false);this.notice('');}
       const same=!!this.deviceId&&m.deviceId===this.deviceId,run=same?m.run():null,active=run?.active===true,paused=run?.status==='paused';
-      if((active||paused)&&this.seenRun!==run.runId){this.seenRun=run.runId;this.mode=run.action==='hold'?'hold':'auto';}
-      if(!m.admin)this.setHomeEditing(false);
-      const locked=this.busy||m.busy||!m.admin||!same||!!m.statusError||!!m.storageError||d.layout?.editing;
+      if(active||(paused&&this.seenRun!==run.runId)){
+        this.seenRun=run.runId;this.mode=run.action==='hold'?'hold':'auto';this.taskKind=run.queue?'queue':'route';
+        if(run.queue)this.queueId=run.queue.id;
+        else if(run.routeId&&this.routeId!==run.routeId){this.routeId=run.routeId;this.fillRoute();}
+      }
+      if(!m.admin){this.setHomeEditing(false);this.closeQueueSettings(false);}
+      const locked=this.busy||m.busy||!m.admin||!same||!!m.statusError||!!m.storageError||d.layout?.editing||this.nodes.driverQueueDialog.open;
       const ready=!locked&&d.context.connected&&!d.active&&!d.pending&&d.remote?.ready===true&&!d.context.parameterBusy&&!this.editingHome;
       const routes=same?m.routes:[],signature=JSON.stringify(routes.map(r=>[r.id,r.revision,r.name]));
       if(signature!==this.routeSignature){
@@ -85,15 +116,29 @@
         if(previous!==this.routeId||!this.formRouteRevision)this.fillRoute();
         this.formRouteRevision=routes.find(r=>r.id===this.routeId)?.revision||0;
       }
+      const queues=same?m.queues:[],queueSignature=JSON.stringify(queues.map(q=>[q.id,q.revision,q.name]));
+      if(queueSignature!==this.queueSignature){
+        this.queueSignature=queueSignature;
+        if(!queues.some(q=>q.id===this.queueId))this.queueId=queues.find(q=>q.id===run?.queue?.id)?.id||queues[0]?.id||'';
+        this.nodes.driverQueueSelect.replaceChildren(new Option('请选择已保存任务组',''),...queues.map(q=>new Option(q.name,q.id)));
+      }
+      this.nodes.driverRouteSelect.value=this.routeId;this.nodes.driverQueueSelect.value=this.queueId;
       d.nodes['view-driving'].dataset.navigationMode=this.mode;
       this.nodes.driverAutonomy.hidden=this.mode==='manual';
       for(const button of this.document.querySelectorAll('[data-navigation-mode]')){button.setAttribute('aria-pressed',String(button.dataset.navigationMode===this.mode));button.disabled=locked||active||d.pending;}
-      const auto=this.mode==='auto';this.nodes.driverRouteSelect.closest('label').hidden=!auto;this.nodes.driverNavSave.hidden=!auto;
+      const auto=this.mode==='auto',group=auto&&this.taskKind==='queue',selectedQueue=queues.find(q=>q.id===this.queueId);
+      this.nodes.driverTaskKind.value=this.taskKind;this.nodes.driverTaskKind.disabled=locked||active;
+      this.nodes.driverTaskSelection.hidden=!auto;this.nodes.driverRouteField.hidden=!auto||group;this.nodes.driverQueueField.hidden=!group;
+      this.nodes.driverQueueSettings.disabled=locked||active;this.nodes.driverQueueSelect.disabled=locked||active;
+      this.nodes.driverNavParameters.hidden=group;this.nodes.driverNavSave.hidden=!auto;
+      this.nodes.driverQueueSummary.hidden=!group;
+      this.nodes.driverQueueSummary.textContent=selectedQueue?selectedQueue.routeIds.length+' 条航线 · '+(selectedQueue.loopEnabled?'整组循环 '+selectedQueue.loopCount+' 轮':'整组执行 1 轮')+' · 使用各航线已保存的航速与半径':'暂无任务组，请点击“设置任务组”创建并保存。';
       this.nodes.driverNavSave.disabled=locked||active||!this.routeId;
       this.nodes.driverRouteSelect.disabled=locked||active;
       for(const id of ['driverNavSpeed','driverNavRadius'])this.nodes[id].disabled=locked||active;
-      this.nodes.driverGoto.hidden=!auto;this.nodes.driverGoto.disabled=!ready||!this.routeId||active;
-      this.nodes.driverNavStart.textContent=auto?'开始任务':'启动定点保持';this.nodes.driverNavStart.disabled=!ready||active||(auto&&!this.routeId);
+      const selection=group?this.queueId:this.routeId;
+      this.nodes.driverGoto.hidden=!auto;this.nodes.driverGoto.textContent=group?'前往组起点':'前往起点';this.nodes.driverGoto.disabled=!ready||!selection||active;
+      this.nodes.driverNavStart.textContent=group?'启动任务组':auto?'开始任务':'启动定点保持';this.nodes.driverNavStart.disabled=!ready||active||(auto&&!selection);
       this.nodes.driverNavPause.disabled=locked||!active||run.status==='stopping';this.nodes.driverNavResume.disabled=!ready||!paused||!run.resumable;
       this.nodes.driverHomeSet.disabled=locked||active||d.active||d.pending;this.nodes.driverHomeSet.setAttribute('aria-pressed',String(this.editingHome));
       this.nodes.driverReturnHome.disabled=!ready||active||!m.home;
@@ -116,7 +161,7 @@
       d.hud.setNavigation(same?m.navigationState():null);
       this.bindMap();this.drawHome();
     }
-    destroy(){for(const [node,event,handler]of this.handlers)node.removeEventListener(event,handler);this.map?.off('click',this.mapClick);this.map?.off('ready',this.mapRestore);this.map?.off('providerchange',this.mapRestore);this.marker?.remove();}
+    destroy(){this.closeQueueSettings(false);for(const [node,event,handler]of this.handlers)node.removeEventListener(event,handler);this.queueAnchor.remove();this.map?.off('click',this.mapClick);this.map?.off('ready',this.mapRestore);this.map?.off('providerchange',this.mapRestore);this.marker?.remove();}
   }
   window.BoatDriverNavigation=BoatDriverNavigation;
 })();

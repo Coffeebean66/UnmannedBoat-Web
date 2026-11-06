@@ -82,8 +82,8 @@
       });
       this.listen(this.nodes.driverVideoExpand,'click',()=>this.focusMedia('video'));
       this.listen(this.nodes.driverMapExpand,'click',()=>this.focusMedia('map'));
-      // 沉浸入口和主画面交换只改变同一组媒体的排布，不重建播放器或申请接管。
-      this.listen(this.nodes.driverImmersiveToggle,'click',()=>this.setMediaFocus(this.nodes['view-driving'].dataset.focus?'':'video'));
+      // 驾驶只使用沉浸布局；返回后台沿用正常离页流程，释放手动接管。
+      this.listen(this.nodes.driverImmersiveToggle,'click',()=>window.BoatWorkspace.exitDriving());
       this.listen(this.nodes.driverSwapMedia,'click',()=>this.setMediaFocus(this.nodes['view-driving'].dataset.primary==='map'?'video':'map'));
       this.listen(this.nodes.driverModelPreview,'toggle',()=>window.dispatchEvent(new CustomEvent('boat-driver-layout-change')));
       this.listen(document,'keydown',event=>this.keyDown(event));
@@ -100,7 +100,7 @@
           this.setDetailsOpen(false);
           this.nodes.driverDisplayOptions.open=this.nodes.driverControlOptions.open=false;
           this.nodes.driverMapOptions.open=false;
-        }
+        }else this.setMediaFocus(this.nodes['view-driving'].dataset.focus||'video');
         this.render();if(event.detail?.view==='driving'){this.lastPoll=0;this.poll();}
       });
       this.listen(window,'boat-selection-change',event=>{
@@ -113,6 +113,7 @@
         this.render();
       },onReset:()=>{this.setOverlayOpacity(100);this.setInstrumentsVisible(false);}});
       this.navigation=new window.BoatDriverNavigation(this);
+      if(this.visible())this.setMediaFocus('video');
       this.timer=window.setInterval(()=>this.pulse(),100);
       this.headingMode();this.render();
     }
@@ -306,12 +307,15 @@
       this.lastPoll=0;this.render();
     }
     keyDown(event) {
+      // 原生弹窗先处理自己的 Esc，避免关闭设置时同时离开驾驶。
+      if(event.defaultPrevented)return;
+      if(event.code==='Escape'&&this.document.querySelector('dialog[open]'))return;
       if(event.code==='Escape'&&this.layout?.editing){event.preventDefault();this.layout.setEditing(false);return;}
       if(event.code==='Escape'&&this.visible()){
         if(!this.nodes.driverDetailsPanel.hidden){event.preventDefault();this.setDetailsOpen(false,true);return;}
         for(const id of ['driverDisplayOptions','driverControlOptions','driverMapOptions'])if(this.nodes[id].open){event.preventDefault();this.nodes[id].open=false;this.nodes[id].querySelector('summary').focus({preventScroll:true});return;}
       }
-      if(event.code==='Escape'&&this.nodes['view-driving'].hasAttribute('data-focus')){event.preventDefault();this.setMediaFocus('');return;}
+      if(event.code==='Escape'&&this.visible()){event.preventDefault();window.BoatWorkspace.exitDriving();return;}
       if(!this.active||!this.permitted())return;
       if(event.code==='Space'){event.preventDefault();this.stop('急停已触发；需要重新启用操控',true);return;}
       if(event.ctrlKey||event.metaKey||event.altKey||this.editing(event.target))return;
@@ -349,24 +353,23 @@
       this.nodes['view-driving'].dataset.mode=this.nodes.driverMode.value;
     }
     focusMedia(name) {
-      this.setMediaFocus(this.nodes['view-driving'].dataset.focus===name?'':name);
+      this.setMediaFocus(name);
     }
     setMediaFocus(name) {
       const panel=this.nodes['view-driving'];
       if(name)panel.dataset.focus=name;else delete panel.dataset.focus;
       panel.scrollTop=0;
-      // 放大时保留另一媒体的小窗；还原后恢复左右分栏驾驶台。
+      // 地图和图传交换主画面，另一画面始终保留为小窗。
       panel.dataset.primary=name||'video';
       if(name)this.document.documentElement.dataset.driverFocus='true';else delete this.document.documentElement.dataset.driverFocus;
       for(const [type,id]of [['video','driverVideoExpand'],['map','driverMapExpand']]){
         const active=panel.dataset.focus===type;this.nodes[id].setAttribute('aria-pressed',String(active));
-        const label=active?'还原布局':type==='video'?'放大图传':'放大地图';
+        const label=active?(type==='video'?'图传已为主画面':'地图已为主画面'):type==='video'?'切换为图传主画面':'切换为地图主画面';
         this.nodes[id].title=label;this.nodes[id].setAttribute('aria-label',label);
       }
       this.nodes.driverFocusTools.hidden=false;
-      this.nodes.driverImmersiveToggle.setAttribute('aria-pressed',String(!!name));
-      this.nodes.driverImmersiveToggle.querySelector('span').textContent=name?'退出沉浸':'沉浸驾驶';
-      this.nodes.driverImmersiveToggle.title=name?'返回后台驾驶布局，也可按 Esc':'进入沉浸驾驶，Esc 返回后台布局';
+      this.nodes.driverImmersiveToggle.querySelector('span').textContent='返回后台 · Esc';
+      this.nodes.driverImmersiveToggle.title='返回进入驾驶前的页面，也可按 Esc';
       this.nodes.driverSwapMedia.hidden=!name;
       this.nodes.driverSwapMedia.querySelector('span').textContent=name==='map'?'图传主画面':'地图主画面';
       this.nodes.driverMapOptions.open=false;

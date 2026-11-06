@@ -50,6 +50,15 @@ test('explicit permission or lease rejection still stops immediately',async()=>{
     assert.equal(f.stops.length,1);assert.equal(f.driver.active,false);
   }
 });
+
+test('a modal handles its own Escape while the driving Space emergency remains available',()=>{
+  const f=fixture();let prevented=false;
+  f.driver.document={querySelector:()=>({open:true})};
+  f.driver.keyDown({code:'Escape',preventDefault(){prevented=true;}});
+  assert.equal(prevented,false,'Native dialog cancel handles Escape');assert.equal(f.driver.active,true);
+  f.driver.keyDown({code:'Space',preventDefault(){prevented=true;}});
+  assert.equal(prevented,true);assert.equal(f.driver.active,false);assert.match(f.stops[0],/急停/);
+});
 test('a retired lease response cannot delete a request with the same browser sequence in a new generation',async()=>{
   const f=fixture(),old=f.driver.sendInput();
   f.driver.generation++;f.driver.sequence=0;f.driver.inputRequests.clear();f.driver.lastInputSignature='';

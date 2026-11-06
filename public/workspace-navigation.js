@@ -29,7 +29,7 @@
     motors:document.getElementById('motors')
   };
   const title = document.getElementById('viewTitle');
-  let current = null, selectedBoatId = '', deferredView = null;
+  let current = null, selectedBoatId = '', deferredView = null, drivingReturnView = null;
 
   function canAccessView(id) {
     const auth = window.BoatAuth;
@@ -117,6 +117,8 @@
     if (!permitted && (!window.BoatAuth?.ready || (window.BoatAuth?.enabled === true && !window.BoatAuth.user))) deferredView = requested;
     else deferredView = null;
     const view = permitted ? requested : defaultView(), previous = current, changed = view !== previous;
+    // 只在真正进入驾驶时记住来源；重复点击入口或交换主画面不会覆盖返回位置。
+    if (changed && view === 'driving') drivingReturnView = previous || defaultView();
     if (recordHistory) writeHash(view,replace);
     if (boatNav) boatNav.open = !!selectedBoatId && view !== 'fleet';
     if (changed) {
@@ -160,12 +162,17 @@
     // 地址栏直达、刷新、前进/后退与点击入口走同一权限校验，不增加额外历史。
     navigate(routeFromLocation(),{replace:true,focus:false});
   }
+  function exitDriving() {
+    if (current !== 'driving') return current;
+    const destination = drivingReturnView !== 'driving' && panels.has(drivingReturnView) && canAccessView(drivingReturnView) ? drivingReturnView : defaultView();
+    return navigate(destination,{replace:true});
+  }
   window.addEventListener('popstate',restoreLocation);
   window.addEventListener('hashchange',restoreLocation);
   window.addEventListener('boat-selection-change',event=>setBoatSelected(event.detail?.selectedId));
   if ('scrollRestoration' in window.history) window.history.scrollRestoration = 'manual';
   window.BoatAuth?.addEventListener('change',updateAccess);
-  window.BoatWorkspace = Object.freeze({get current(){return current;},navigate,setBoatSelected,canAccessView});
+  window.BoatWorkspace = Object.freeze({get current(){return current;},get drivingReturnView(){return drivingReturnView;},navigate,exitDriving,setBoatSelected,canAccessView});
   setBoatSelected('');
   navigate(routeFromLocation(),{replace:true,focus:false});
   updateAccess();

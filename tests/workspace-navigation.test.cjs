@@ -159,6 +159,26 @@ test('驾驶页共享视频地图姿态仪表和电机，返回原页恢复原�
   assert.equal(s.document.title,'船况概览 · 无人船监测平台');
 });
 
+test('退出驾驶返回真正的来源页面，重复进入驾驶不覆盖来源且不重复挂载媒体',()=>{
+  const s=setup('#navigation',true),map=s.nodes.get('navigation');map.savedCenter=[31,121];
+  s.click('driving');s.click('driving');
+  assert.equal(s.window.BoatWorkspace.drivingReturnView,'navigation');
+  assert.equal(s.window.BoatWorkspace.exitDriving(),'navigation');
+  assert.equal(s.window.location.hash,'#navigation');assert.equal(map.parentElement,s.slots.get('navigation-map'));
+  assert.deepEqual(map.savedCenter,[31,121]);assert.equal(s.events.at(-1).previous,'driving');
+  s.click('missions');s.click('driving');assert.equal(s.window.BoatWorkspace.exitDriving(),'missions');
+  assert.equal(s.window.BoatWorkspace.exitDriving(),'missions','非驾驶页面调用退出不会再次跳转');
+});
+
+test('直接打开驾驶使用默认返回页，历史再次进入驾驶时更新来源并保持权限限制',()=>{
+  const direct=setup('#driving',true);assert.equal(direct.window.BoatWorkspace.exitDriving(),'fleet');
+  const simple=setup('#driving');assert.equal(simple.window.BoatWorkspace.exitDriving(),'overview');
+  const s=setup('#navigation',true);s.click('driving');s.click('analysis');s.window.history.back();
+  assert.equal(s.window.BoatWorkspace.current,'driving');assert.equal(s.window.BoatWorkspace.exitDriving(),'analysis');
+  s.click('missions');s.click('driving');s.setAuth({user:{username:'observer',role:'guest'}});
+  assert.equal(s.window.BoatWorkspace.exitDriving(),'fleet');assert.equal(s.window.BoatWorkspace.canAccessView('missions'),false);
+});
+
 test('多船页面默认和无效地址进入船队总览，单船面板在返回船队时保留同一实例',()=>{
   for(const hash of ['', '#fleet', '#unknown']){
     const s=setup(hash,true);assert.equal(s.window.BoatWorkspace.current,'fleet');assert.equal(s.window.location.hash,'#fleet');

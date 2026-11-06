@@ -65,13 +65,11 @@
     }
     async execute(action){
       if(this.dirty)throw Error('请先保存修改后的任务队列');
-      const m=this.m,generation=m.generation,id=this.deviceId;
-      if(m.dirty&&this.queue.routeIds.includes(m.route.id))throw Error('队列中的航线有未保存修改，请先保存航线');
-      const routeRevisions=this.queue.routeIds.map(id=>m.routes.find(r=>r.id===id)?.revision);
-      const data=await m.request('/run',{method:'POST',body:JSON.stringify({deviceId:id,action,queueId:this.queue.id,revision:this.queue.revision,routeRevisions})});
-      if(generation!==m.generation)return;
-      m.runs=m.runs.filter(r=>r.deviceId!==id).concat(data.run);m.render();
+      const m=this.m,generation=m.generation;
+      const run=await m.submitQueue(action,{queueId:this.queue.id});
+      if(generation!==m.generation)return run;
       this.notice(action==='queueGoto'?'正在前往首条航线起点，到达后停止。':'队列已交给服务器，关闭网页后继续执行。');
+      return run;
     }
     render(){
       const m=this.m,q=this.queue,run=m.run(),active=!!run?.active,paused=run?.status==='paused',own=!!run?.queue&&run.queue.id===q.id;

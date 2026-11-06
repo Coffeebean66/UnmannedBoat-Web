@@ -123,6 +123,8 @@ async function main(){
       assert.ok(taskButtons.every(button=>button.visible&&button.clear),'Navigation actions remain visible and unobstructed by emergency stop at '+width+'x'+height+': '+JSON.stringify(taskButtons));
       await shot('driver-mission-immersive-'+width);
       await evaluate('document.getElementById("driverImmersiveToggle").click()');
+      assert.equal(await evaluate('BoatWorkspace.current'),'missions','Return restores the mission page without stopping server execution');
+      await evaluate('BoatWorkspace.navigate("driving",{focus:false})');
     }
     await send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});await wait(100);
     const staleMission=await evaluate('(()=>{BoatMissions.statusError="同步失败";BoatMissions.render();const state=document.getElementById("driverMissionState").textContent;BoatMissions.statusError="";BoatMissions.render();return state;})()');
@@ -380,6 +382,8 @@ async function main(){
     const queueRoutes=[f.route('boat-01',{name:'队列轨迹一',points:[ORIGIN,N.destination(ORIGIN,0,20)]}),f.route('boat-01',{name:'队列轨迹二',speedMps:1.2,points:[N.destination(ORIGIN,90,20),N.destination(ORIGIN,90,45)]})];
     await evaluate('BoatWorkspace.navigate("missions",{focus:false});BoatMissions.poll(true)');await until('BoatMissions.routes.some(r=>r.id==="'+queueRoutes[1].id+'")&&window.BoatMissionQueue&&!BoatMissions.busy');
     const beforeQueuePlanning=f.commands().length;
+    await evaluate('BoatWorkspace.navigate("driving",{focus:false});boatMonitor.driver.navigation.selectMode("auto");document.getElementById("driverTaskKind").value="queue";document.getElementById("driverTaskKind").dispatchEvent(new Event("change"));document.getElementById("driverQueueSettings").click()');
+    assert.equal(await evaluate('document.getElementById("driverQueueDialog").open&&document.querySelectorAll("#missionQueueCard").length===1&&document.getElementById("driverQueueEditorSlot").contains(document.getElementById("missionQueueCard"))'),true,'Driving settings reuse the single queue editor in a native modal');
     await evaluate('document.getElementById("missionQueueNew").click();document.getElementById("missionQueueName").value="双轨迹巡航";document.getElementById("missionQueueName").dispatchEvent(new Event("input"))');
     for(const route of [queueRoutes[1],queueRoutes[0],queueRoutes[1]])await evaluate('document.getElementById("missionQueueRoute").value="'+route.id+'";document.getElementById("missionQueueAdd").click()');
     await evaluate('document.querySelectorAll("#missionQueueList li")[1].querySelectorAll("button")[0].click();document.querySelectorAll("#missionQueueList li")[2].querySelectorAll("button")[2].click()');
@@ -392,19 +396,35 @@ async function main(){
     assert.equal(f.commands().length,beforeQueuePlanning,'Saving and editing a queue never arms the boat');
     for(const [width,height]of [[1440,1100],[375,812],[320,812]]){
       await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
-      await evaluate('document.getElementById("missionQueueTitle").scrollIntoView({block:"start",behavior:"instant"})');await wait(100);
+      await evaluate('document.getElementById("missionQueueTitle").scrollIntoView({block:"nearest",behavior:"instant"})');await wait(100);
       assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth+1&&["missionQueueName","missionQueueRoute","missionQueueLoopCount"].every(id=>{const r=document.getElementById(id).getBoundingClientRect();return r.width>0&&r.left>=0&&r.right<=innerWidth;})'),true,'Queue editor fits '+width);
-      await shot('mission-queue-'+width+'-dark');
+      await shot('driver-queue-settings-'+width+'-dark');
     }
+    await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+    assert.equal(await evaluate('!document.getElementById("driverQueueDialog").open&&BoatWorkspace.current==="driving"&&document.getElementById("view-missions").contains(document.getElementById("missionQueueCard"))'),true,'Escape closes only group settings and restores the original editor');
+    assert.equal(await evaluate('document.getElementById("driverQueueSelect").value'),queueId,'The saved group is selected for one-click start');
+    assert.match(await evaluate('document.getElementById("driverQueueSummary").textContent'),/2 条航线.*2 轮/);
+    for(const [width,height]of [[1440,900],[375,667],[320,667]]){
+      await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<500});await wait(100);
+      assert.equal(await evaluate('["driverTaskKind","driverQueueSelect","driverQueueSettings","driverGoto","driverNavStart","driverNavPause","driverNavResume"].every(id=>{const node=document.getElementById(id),r=node.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return r.width>0&&r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight&&(hit===node||node.contains(hit));})'),true,'Driver group selection and start controls fit '+width);
+      await shot('driver-queue-'+width+'-dark');
+    }
+    await evaluate('document.getElementById("driverQueueSettings").click();document.getElementById("missionQueueName").value="临时未保存修改";document.getElementById("missionQueueName").dispatchEvent(new Event("input"));document.getElementById("driverQueueClose").click()');
+    await until('!document.getElementById("driverNavStart").disabled');await evaluate('document.getElementById("driverNavStart").click()');await until('!boatMonitor.driver.navigation.busy');
+    assert.match(await evaluate('document.getElementById("driverNavNotice").textContent'),/未保存/);assert.equal(f.mission.active('boat-01'),false,'Driving cannot start a group with unsaved edits');
+    await evaluate('document.getElementById("driverQueueSettings").click();document.getElementById("missionQueueName").value="双轨迹巡航";document.getElementById("missionQueueName").dispatchEvent(new Event("input"));document.getElementById("missionQueueSave").click()');await until('!BoatMissionQueue.dirty&&!BoatMissions.busy');
+    await evaluate('boatMonitor.selectBoat("boat-02",false)');await until('!document.getElementById("driverQueueDialog").open&&BoatMissions.deviceId==="boat-02"');
+    assert.equal(await evaluate('document.getElementById("driverQueueSelect").options.length'),1,'Switching boats closes settings and clears the previous group list');
     await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1100,deviceScaleFactor:1,mobile:false});
     await evaluate('boatMonitor.selectBoat("boat-02",false)');await until('BoatMissions.deviceId==="boat-02"&&BoatMissionQueue.deviceId==="boat-02"');
     assert.equal(await evaluate('BoatMissionQueue.queue.routeIds.length'),0,'Queue drafts and definitions belong to one vessel');
     await evaluate('boatMonitor.selectBoat("boat-01",false)');await until('BoatMissionQueue.queue.id==="'+queueId+'"&&BoatMissions.queues.length===1');
-    await send('Page.reload');await until('window.BoatMissionQueue?.queue.id==="'+queueId+'"&&BoatMissions.map?.ready');
+    await send('Page.reload');await until('window.BoatMissionQueue?.queue.id==="'+queueId+'"&&boatMonitor.driver?.remote?.ready');
     assert.equal(await evaluate('document.getElementById("missionQueueLoopCount").value'),'2','Saved queue and loops restore after reload');
-    f.feed('boat-01',{...ORIGIN,heading:0});await evaluate('document.getElementById("missionQueueGoto").click()');await until('BoatMissions.run()?.queue?.id==="'+queueId+'"&&BoatMissions.run()?.status==="completed"');
+    await evaluate('boatMonitor.driver.navigation.selectMode("auto");document.getElementById("driverTaskKind").value="queue";document.getElementById("driverTaskKind").dispatchEvent(new Event("change"));document.getElementById("driverQueueSelect").value="'+queueId+'";document.getElementById("driverQueueSelect").dispatchEvent(new Event("change"))');
+    f.feed('boat-01',{...ORIGIN,heading:0});await until('!document.getElementById("driverGoto").disabled');await evaluate('document.getElementById("driverGoto").click()');await until('BoatMissions.run()?.queue?.id==="'+queueId+'"&&BoatMissions.run()?.status==="completed"');
     assert.equal(f.mission.snapshot('boat-01').queue.completedLoops,0,'Goto only reaches the first start and stops');
-    await evaluate('document.getElementById("missionQueueStart").click()');await until('BoatMissions.run()?.queue?.id==="'+queueId+'"&&BoatMissions.run()?.status==="running"&&BoatMissions.run()?.targetIndex===1');
+    await until('!document.getElementById("driverNavStart").disabled');await evaluate('document.getElementById("driverNavStart").click()');await until('BoatMissions.run()?.queue?.id==="'+queueId+'"&&BoatMissions.run()?.status==="running"&&BoatMissions.run()?.targetIndex===1');
     const queueLease=f.mission.jobs.get('boat-01').leaseId;
     await evaluate('BoatMissions.load("'+queueRoutes[1].id+'")');assert.equal(await evaluate('document.getElementById("missionSave").disabled&&document.getElementById("missionQueueSave").disabled&&document.getElementById("missionQueueLoopCount").disabled'),true,'Every queued route and the running queue are locked');
     f.feed('boat-01',{...queueRoutes[0].points[1],heading:0});await until('BoatMissions.run()?.phase==="transit"&&BoatMissions.run()?.queue?.routeIndex===1');
@@ -412,8 +432,9 @@ async function main(){
     const transferLine=await evaluate('boatMonitor.map._lineOverlays.get("mission").lines.find(l=>l.className==="map-mission-line map-mission-transfer").points');
     assert.ok(N.distance(transferLine[0],queueRoutes[0].points[1])<.02);assert.deepEqual(transferLine[1],queueRoutes[1].points[0]);
     await evaluate('BoatWorkspace.navigate("driving",{focus:false})');assert.match(await evaluate('document.getElementById("driverMissionName").textContent'),/双轨迹巡航.*2 \/ 2/);assert.equal(f.mission.jobs.get('boat-01').leaseId,queueLease);
-    await evaluate('BoatWorkspace.navigate("missions",{focus:false});document.getElementById("missionQueuePause").click()');await until('BoatMissions.run()?.status==="paused"&&BoatMissions.run()?.resumable');
-    await evaluate('document.getElementById("missionQueueResume").click()');await until('BoatMissions.run()?.status==="running"&&BoatMissions.run()?.phase==="transit"');
+    assert.equal(await evaluate('document.getElementById("driverTaskKind").value==="queue"&&document.getElementById("driverQueueSelect").value==="'+queueId+'"&&document.getElementById("driverQueueSelect").disabled'),true,'A running group restores and locks its driving selection');
+    await evaluate('document.getElementById("driverNavPause").click()');await until('BoatMissions.run()?.status==="paused"&&BoatMissions.run()?.resumable');
+    await until('!document.getElementById("driverNavResume").disabled');await evaluate('document.getElementById("driverNavResume").click()');await until('BoatMissions.run()?.status==="running"&&BoatMissions.run()?.phase==="transit"');
     assert.notEqual(f.mission.jobs.get('boat-01').leaseId,queueLease,'Resume acquires a fresh lease and preserves the current route');
     await send('Page.navigate',{url:'about:blank'});const beforeQueueClosed=f.commands().length;await wait(1100);assert.equal(f.mission.active('boat-01'),true);assert.ok(f.commands().length>beforeQueueClosed+5,'Server keeps the sequence active with no browser');
     await send('Page.navigate',{url:base+'/#missions'});await until('window.BoatMissionQueue?.queue.id==="'+queueId+'"&&BoatMissions.run()?.phase==="transit"');
@@ -427,6 +448,12 @@ async function main(){
     assert.equal(f.mission.snapshot('boat-01').queue.completedLoops,2);assert.match(await evaluate('document.getElementById("missionQueueProgress").textContent'),/已完成 2 轮/);
     await evaluate('document.getElementById("missionQueueStart").click()');await until('BoatMissions.run()?.status==="running"');
     await evaluate('document.getElementById("missionQueueStop").click()');await until('BoatMissions.run()?.status==="stopped"&&BoatMissions.run()?.stopConfirmed');
+    await evaluate('BoatWorkspace.navigate("driving",{focus:false})');await until('!document.getElementById("driverNavStart").disabled');
+    await evaluate('window.__missionFetch=window.fetch;window.fetch=async function(input,options){const response=await window.__missionFetch(input,options);if(input==="/api/missions/run"&&JSON.parse(options?.body||"{}").action==="queueStart")await new Promise(resolve=>setTimeout(resolve,1200));return response;};document.getElementById("driverNavStart").click()');
+    await until('boatMonitor.driver.navigation.motionPending&&BoatMissions.run()?.active');
+    await evaluate('document.getElementById("driverEmergency").click()');await until('BoatMissions.run()?.status==="stopped"&&!boatMonitor.driver.navigation.motionPending');
+    await wait(1400);assert.equal(f.mission.active('boat-01'),false,'Late queue-start HTTP response cannot revive a group cancelled from the driving emergency button');
+    await evaluate('window.fetch=window.__missionFetch;delete window.__missionFetch');
     console.log('PASS: queue UI ordering/save/reload/vessel isolation, 320/375/1440px layout, goto, all-route locks, automatic transfers, pause/resume, closed-page execution and two whole-queue loops.');
     await evaluate('BoatWorkspace.navigate("missions",{focus:false});document.getElementById("themeToggle").click()');
     for(const [width,height]of [[1440,1100],[1024,900],[375,812],[320,812]]){
@@ -436,7 +463,10 @@ async function main(){
       assert.equal(await evaluate('document.getElementById("missionMap").getBoundingClientRect().height>=300'),true);
       await evaluate('document.getElementById("view-missions").scrollIntoView({block:"start",behavior:"instant"})');await shot('missions-'+width+'-light');
     }
+    await evaluate('BoatWorkspace.navigate("driving",{focus:false});boatMonitor.driver.navigation.selectMode("auto");document.getElementById("driverQueueSettings").click()');
+    assert.equal(await evaluate('document.getElementById("driverQueueDialog").open'),true);
     await evaluate('BoatAuth.logout()');await evaluate('BoatAuth.login("observer","browser-guest-test-only")');await until('BoatAuth.user?.role==="guest"');
+    assert.equal(await evaluate('!document.getElementById("driverQueueDialog").open&&document.getElementById("view-missions").contains(document.getElementById("missionQueueCard"))'),true,'Losing driving rights closes group settings and restores the shared editor');
     assert.equal(await evaluate('document.getElementById("view-missions").hidden&&document.getElementById("view-driving").hidden&&document.getElementById("missionActiveBar").hidden'),true,'Guest cannot see task, driver or global task interface');
     assert.equal(await evaluate('BoatMissions.routes.length===0&&BoatMissions.queues.length===0&&BoatMissions.runs.length===0&&BoatMissionQueue.queue.routeIds.length===0'),true,'Role change clears private task and queue UI state');
     await evaluate('BoatMissions.poll(true)');assert.equal(await evaluate('BoatMissions.routes.length'),0,'Guest does not poll or repopulate the task interface');
