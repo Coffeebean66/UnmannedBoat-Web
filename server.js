@@ -13,10 +13,11 @@ const {createVideoRecordingApi}=require('./server/video-recording-api');
 const {createFirmwareApi}=require('./server/firmware-api');
 const {createControlApi}=require('./server/control-api');
 const {createMissionApi}=require('./server/mission-api');
+const {createDriverLayoutApi}=require('./server/driver-layout-api');
 const {version:packageVersion}=require('./package.json');
 const ROOT=path.join(__dirname,'public');
 const MIME={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json; charset=utf-8','.glb':'model/gltf-binary','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon','.txt':'text/plain; charset=utf-8'};
-function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},apiOptions={},updateOptions={},accountOptions={},mapOptions={},mqttAdminOptions={},videoMediaOptions={},videoRecordingOptions={},firmwareOptions={},controlOptions={},missionOptions={}}={}) {
+function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},apiOptions={},updateOptions={},accountOptions={},mapOptions={},mqttAdminOptions={},videoMediaOptions={},videoRecordingOptions={},firmwareOptions={},controlOptions={},missionOptions={},driverLayoutOptions={}}={}) {
   const base=fs.realpathSync(root);
   const contentSecurityPolicy=getVideoContentSecurityPolicy(MAP_CONTENT_SECURITY_POLICY,env);
   const bridge=cloud||new CloudBridge({env,...cloudOptions});
@@ -26,6 +27,7 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
   const current=readCurrentRelease({version:packageVersion,releasePath:updateOptions.releasePath,instanceId:updateOptions.instanceId});
   const updateApi=createUpdateApi({...updateOptions,env,current,accounts});
   const mapApi=createMapConfigApi({...mapOptions,env,accounts});
+  const driverLayoutApi=createDriverLayoutApi({...driverLayoutOptions,env,accounts});
   const mqttDeviceApi=createMqttDeviceApi({...mqttAdminOptions,accounts});
   const videoMediaApi=createVideoMediaApi({...videoMediaOptions,env,accounts});
   const videoRecordingApi=createVideoRecordingApi({...videoRecordingOptions,env,accounts});
@@ -46,6 +48,7 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
       const url=new URL(req.url||'/','http://localhost');
       if(await mapApi.handle(req,res,url))return;
       if(await accounts.handle(req,res,url))return;
+      if(await driverLayoutApi.handle(req,res,url))return;
       if(await videoMediaApi.handle(req,res,url))return;
       if(await videoRecordingApi.handle(req,res,url))return;
       if(await firmwareApi.handle(req,res,url))return;
@@ -79,9 +82,10 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
   };
   const server=key&&cert?https.createServer({key,cert},handler):http.createServer(handler);
   const originalClose=server.close.bind(server);
-  server.close=(callback)=>{const missionsClosed=missionApi.close();controlApi.close();firmwareApi.close();const recordingClosed=videoRecordingApi.close();const mediaClosed=videoMediaApi.close();mqttDeviceApi.close();mapApi.close();accounts.close();updateApi.close();api.close();const historyClosed=bridge.stop();return originalClose((...args)=>{Promise.allSettled([missionsClosed,mediaClosed,recordingClosed,historyClosed]).then(()=>callback?.(...args));});};
+  server.close=(callback)=>{const missionsClosed=missionApi.close();controlApi.close();firmwareApi.close();const recordingClosed=videoRecordingApi.close();const mediaClosed=videoMediaApi.close();const layoutClosed=driverLayoutApi.close();mqttDeviceApi.close();mapApi.close();accounts.close();updateApi.close();api.close();const historyClosed=bridge.stop();return originalClose((...args)=>{Promise.allSettled([missionsClosed,mediaClosed,recordingClosed,historyClosed,layoutClosed]).then(()=>callback?.(...args));});};
   server.boatCloud=bridge;server.boatCloudApi=api;server.boatUpdateApi=updateApi;server.boatRelease=current;server.boatAccounts=accounts;
   server.boatRecordingApi=videoRecordingApi;
+  server.boatDriverLayoutApi=driverLayoutApi;
   server.boatFirmwareApi=firmwareApi;
   server.boatControlApi=controlApi;
   server.boatMissionApi=missionApi;

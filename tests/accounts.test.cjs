@@ -30,8 +30,10 @@ function stream(port,cookie){return new Promise((resolve,reject)=>{const req=htt
 async function until(predicate){const end=Date.now()+1500;while(!predicate()){if(Date.now()>end)throw Error('Stream timeout');await new Promise(resolve=>setTimeout(resolve,5));}}
 
 test('account mode is optional, validates configuration and never exposes credential fields',async t=>{
+  // 配置校验需要不存在的账户库，不能读取开发机此前保存的用户。
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'boat-accounts-config-'));t.after(()=>fs.rmdirSync(directory));
   const disabled=createAccountApi({env:{}});assert.equal(disabled.enabled,false);disabled.close();
-  for(const extra of [{BOAT_GUEST_PASSWORD:'short'},{BOAT_ADMIN_USERNAME:'bad name'},{BOAT_GUEST_USERNAME:ADMIN},{BOAT_ADMIN_USERNAME:['admin']},{BOAT_ACCOUNTS_ORIGIN:ORIGIN+'/'}])assert.throws(()=>createAccountApi({env:{BOAT_ACCOUNTS_ENABLED:'1',BOAT_ADMIN_USERNAME:ADMIN,BOAT_ADMIN_PASSWORD:ADMIN_PASSWORD,BOAT_GUEST_USERNAME:GUEST,BOAT_GUEST_PASSWORD:GUEST_PASSWORD,...extra}}));
+  for(const extra of [{BOAT_GUEST_PASSWORD:'short'},{BOAT_ADMIN_USERNAME:'bad name'},{BOAT_GUEST_USERNAME:ADMIN},{BOAT_ADMIN_USERNAME:['admin']},{BOAT_ACCOUNTS_ORIGIN:ORIGIN+'/'}])assert.throws(()=>createAccountApi({storeFile:path.join(directory,'accounts.json'),env:{BOAT_ACCOUNTS_ENABLED:'1',BOAT_ADMIN_USERNAME:ADMIN,BOAT_ADMIN_PASSWORD:ADMIN_PASSWORD,BOAT_GUEST_USERNAME:GUEST,BOAT_GUEST_PASSWORD:GUEST_PASSWORD,...extra}}));
   const f=await fixture(t),config=await f.call('/api/auth/config');assert.deepEqual(config.json,{enabled:true,requiresLogin:true,user:null});assert.doesNotMatch(config.raw,/password|test.admin|654321/i);
 });
 

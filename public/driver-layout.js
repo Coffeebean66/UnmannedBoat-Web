@@ -1,11 +1,11 @@
-/* 只保存显示偏好，不保存船只接管凭据；共享仪表离开驾驶页后恢复原样。 */
+/* 只管理显示偏好；云端统一布局与本机草稿分开，不保存船只接管凭据。 */
 (() => {
   'use strict';
   // 保留原存储键与版本，旧位置/透明度兼容；新增宽高使用 CSS 像素。
   const STORAGE='boat-driver-platform-layout-v1';
   const clamp=(value,min,max)=>Math.max(min,Math.min(max,value));
   const SIZE_MIN={navigation:[280,88],hud:[240,200],angles:[180,32],horizon:[80,80],compass:[80,80],map:[160,120],video:[160,120],console:[280,180],mission:[170,100],details:[260,180],motors:[240,180],model:[260,300],emergency:[96,44]};
-  const SIZE_MAX=16384;
+  const schema=window.BoatModules.driverLayout,SIZE_MAX=schema.SIZE_MAX;
   const PARTS=[
     ['navigation','航行读数','.driver-navigation-data'],
     ['hud','图传 HUD','#driverHud'],
@@ -27,7 +27,7 @@
       this.onEditingChange=onEditingChange;this.onReset=onReset;this.editing=false;this.selected='navigation';
       this.handlers=[];this.parts=[];this.frame=0;this.drag=null;this.destroyed=false;
       this.ui=Object.fromEntries(['driverLayoutToggle','driverLayoutEditor','driverLayoutCompact','driverLayoutControls','driverLayoutDone','driverLayoutModule','driverPartOpacity','driverPartOpacityValue','driverPartWidth','driverPartHeight','driverPartSizeReset','driverPartSizeValue','driverLayoutHint','driverLayoutFloat','driverLayoutResetPart','driverLayoutResetAll','driverLayoutSaved'].map(id=>[id,document.getElementById(id)]));
-      this.profiles=this.load();
+      this.profiles=this.load();this.cloudLocked=false;this.personalProfiles=null;
       for(const [id,label,selector,min=0,floating=false]of PARTS){
         const node=document.querySelector(selector);if(!node)continue;
         const part={id,label,node,min,floating};
@@ -67,12 +67,13 @@
       });
       this.listen(this.ui.driverLayoutModule,'change',()=>this.select(this.ui.driverLayoutModule.value));
       this.listen(this.ui.driverPartOpacity,'input',()=>{
+        if(this.cloudLocked)return;
         const part=this.part();this.entry(part.id).opacity=clamp(Number(this.ui.driverPartOpacity.value),part.min,100);
         this.save();this.refresh();this.notify();
       });
       for(const id of ['driverPartWidth','driverPartHeight'])this.listen(this.ui[id],'change',()=>{
         const part=this.part(),box=part.node.getBoundingClientRect();
-        if(this.editing&&this.canResize(part)){
+        if(this.editing&&!this.cloudLocked&&this.canResize(part)){
           const width=this.ui.driverPartWidth.valueAsNumber,height=this.ui.driverPartHeight.valueAsNumber;
           if(Number.isFinite(width)&&Number.isFinite(height)){
             this.resizePart(part,width,height,box);this.save();this.refresh();this.notify();
@@ -81,18 +82,20 @@
         this.renderEditor(true);
       });
       this.listen(this.ui.driverPartSizeReset,'click',()=>{
-        if(!this.editing)return;
+        if(!this.editing||this.cloudLocked)return;
         const part=this.part(),box=part.node.getBoundingClientRect(),entry=this.entry(part.id);
         delete entry.width;delete entry.height;this.refresh();
         if(this.canMove(part)&&box.width&&box.height)this.position(part,box.left,box.top);
         this.save();this.refresh();this.notify();
       });
       this.listen(this.ui.driverLayoutFloat,'click',()=>{
+        if(this.cloudLocked)return;
         const part=this.part(),entry=this.entry(part.id);entry.floating=!entry.floating;
         delete entry.x;delete entry.y;this.save();this.refresh();this.notify();
       });
-      this.listen(this.ui.driverLayoutResetPart,'click',()=>{this.endDrag();delete this.profile()[this.selected];this.save();this.refresh();this.notify();});
+      this.listen(this.ui.driverLayoutResetPart,'click',()=>{if(this.cloudLocked)return;this.endDrag();delete this.profile()[this.selected];this.save();this.refresh();this.notify();});
       this.listen(this.ui.driverLayoutResetAll,'click',()=>{
+        if(this.cloudLocked)return;
         this.endDrag();this.profiles={};this.save();this.onReset();this.refresh();this.notify();
       });
       this.listen(window,'boat-view-change',()=>{if(!this.visible())this.setEditing(false);this.refresh();});
@@ -109,31 +112,25 @@
     entry(id){return this.profile()[id]||(this.profile()[id]={});}
     part(){return this.parts.find(part=>part.id===this.selected)||this.parts[0];}
     load(){
-      const profiles={};
       try{
-        const text=window.localStorage.getItem(STORAGE);if(!text||text.length>30000)return profiles;
-        const value=JSON.parse(text);if(value.version!==1)return profiles;
-        for(const key of ['desktop:dock','desktop:video','desktop:map','mobile:dock','mobile:video','mobile:map']){
-          const sourceProfile=value.profiles?.[key];
-          if(!sourceProfile||typeof sourceProfile!=='object')continue;
-          const profile=profiles[key]={};
-          for(const [id,,,min=0,floating=false]of PARTS){
-            const source=sourceProfile[id];if(!source||typeof source!=='object')continue;
-            const entry=profile[id]={};
-            if(typeof source.opacity==='number'&&Number.isFinite(source.opacity))entry.opacity=clamp(source.opacity,min,100);
-            if(typeof source.x==='number'&&Number.isFinite(source.x)&&typeof source.y==='number'&&Number.isFinite(source.y)){
-              entry.x=clamp(source.x,0,1);entry.y=clamp(source.y,0,1);
-            }
-            if(floating&&source.floating===true)entry.floating=true;
-            if(typeof source.width==='number'&&Number.isFinite(source.width)&&source.width>0&&typeof source.height==='number'&&Number.isFinite(source.height)&&source.height>0){
-              entry.width=clamp(source.width,1,SIZE_MAX);entry.height=clamp(source.height,1,SIZE_MAX);
-            }
-          }
-        }
+        const text=window.localStorage.getItem(STORAGE);if(!text||text.length>30000)return {};
+        const value=JSON.parse(text);if(value.version===1)return schema.normalizeProfiles(value.profiles);
       }catch(_){/* 存储不可用或旧数据损坏时使用默认布局。 */}
-      return profiles;
+      return {};
+    }
+    snapshot(preferences){return schema.normalizeCloudLayout({version:1,profiles:this.profiles,preferences});}
+    useCloudProfiles(profiles){
+      this.endDrag();
+      if(profiles){
+        if(!this.cloudLocked)this.personalProfiles=this.profiles;
+        this.profiles=schema.normalizeProfiles(profiles);this.cloudLocked=true;
+      }else if(this.cloudLocked){this.profiles=this.personalProfiles||{};this.personalProfiles=null;this.cloudLocked=false;}
+      this.root.dataset.cloudLayout=String(this.cloudLocked);
+      this.root.dataset.layoutEditing=String(this.editing&&!this.cloudLocked);
+      this.refresh();this.notify();
     }
     save(){
+      if(this.cloudLocked)return;
       try{window.localStorage.setItem(STORAGE,JSON.stringify({version:1,profiles:this.profiles}));this.ui.driverLayoutSaved.textContent='已保存到当前浏览器 · 桌面 / 手机、两种主画面分别保存';}
       catch(_){this.ui.driverLayoutSaved.textContent='浏览器无法保存布局，本次调整仅在当前页面有效';}
     }
@@ -142,7 +139,7 @@
     setEditing(enabled){
       if(enabled&&!this.visible())return;
       if(enabled===this.editing)return;
-      this.endDrag();this.editing=enabled;this.root.dataset.layoutEditing=String(enabled);
+      this.endDrag();this.editing=enabled;this.root.dataset.layoutEditing=String(enabled&&!this.cloudLocked);
       this.ui.driverLayoutEditor.hidden=!enabled;this.ui.driverLayoutToggle.setAttribute('aria-expanded',String(enabled));
       this.ui.driverLayoutToggle.textContent=enabled?'完成布局':'布局编辑';
       // 明确退出驾驶后再移动控件，编辑的方向键不会变成推进命令。
@@ -183,7 +180,7 @@
     refresh(){
       if(this.destroyed)return;
       if(this.drag&&this.drag.key!==this.key())this.endDrag();
-      const active=this.visible();this.syncPortals(active);
+      const active=this.visible(),editing=this.editing&&!this.cloudLocked;this.syncPortals(active);
       // 先清空偏移，再按父子顺序测量；详情被移动后，其内部模块不会累积父层位移。
       for(const part of this.parts){part.node.style.removeProperty('translate');this.clearSize(part);}
       if(!active){
@@ -200,16 +197,16 @@
         part.node.dataset.driverSized='true';
         part.node.style.setProperty('--driver-part-width',size.width+'px');part.node.style.setProperty('--driver-part-height',size.height+'px');
       }
-      for(const overlay of this.root.querySelectorAll('[data-driver-overlay]'))overlay.inert=!this.editing&&this.root.dataset.overlayHidden==='true';
+      for(const overlay of this.root.querySelectorAll('[data-driver-overlay]'))overlay.inert=!editing&&this.root.dataset.overlayHidden==='true';
       const depth=node=>{let result=0;for(let p=node.parentElement;p;p=p.parentElement)result++;return result;};
       for(const part of [...this.parts].sort((a,b)=>depth(a.node)-depth(b.node))){
         const box=part.node.getBoundingClientRect();
         const entry=this.profile()[part.id]||{},opacity=clamp(entry.opacity??100,part.min,100);
         part.node.style.setProperty('--driver-part-opacity',String(opacity/100));
         part.node.dataset.driverPartHidden=String(opacity===0);
-        part.node.inert=!this.editing&&(opacity===0||(this.root.dataset.overlayHidden==='true'&&!!part.node.closest('[data-driver-overlay]')));
-        part.grip.disabled=!this.canMove(part);
-        part.resizeHandle.disabled=!this.canResize(part);
+        part.node.inert=!editing&&(opacity===0||(this.root.dataset.overlayHidden==='true'&&!!part.node.closest('[data-driver-overlay]')));
+        part.grip.disabled=this.cloudLocked||!this.canMove(part);
+        part.resizeHandle.disabled=this.cloudLocked||!this.canResize(part);
         if(this.canMove(part)&&Number.isFinite(entry.x)&&Number.isFinite(entry.y)&&box.width&&box.height){
           const x=canvas.left+entry.x*Math.max(0,canvas.width-box.width),y=canvas.top+entry.y*Math.max(0,canvas.height-box.height);
           part.node.style.translate=(x-box.left).toFixed(2)+'px '+(y-box.top).toFixed(2)+'px';
@@ -225,25 +222,26 @@
       const entry=this.profile()[part.id]||{},opacity=clamp(entry.opacity??100,part.min,100);
       this.ui.driverLayoutModule.value=part.id;this.ui.driverPartOpacity.min=String(part.min);
       this.ui.driverPartOpacity.value=String(opacity);this.ui.driverPartOpacityValue.textContent=opacity+'%';
-      this.ui.driverPartOpacity.disabled=part.id==='emergency';
+      this.ui.driverPartOpacity.disabled=this.cloudLocked||part.id==='emergency';
       const box=part.node.getBoundingClientRect(),canResize=this.canResize(part),limit=this.sizeLimits(part);
       for(const [id,dimension,min,max]of [['driverPartWidth','width',limit.minWidth,limit.maxWidth],['driverPartHeight','height',limit.minHeight,limit.maxHeight]]){
-        const input=this.ui[id];input.disabled=!canResize;input.min=String(Math.ceil(min));input.max=String(Math.floor(max));
+        const input=this.ui[id];input.disabled=this.cloudLocked||!canResize;input.min=String(Math.ceil(min));input.max=String(Math.floor(max));
         if(forceSize||this.document.activeElement!==input)input.value=box[dimension]?String(Math.round(box[dimension])):'';
       }
       this.ui.driverPartSizeValue.textContent=box.width&&box.height?Math.round(box.width)+' × '+Math.round(box.height)+' px':'尚未显示';
-      this.ui.driverPartSizeReset.disabled=!Number.isFinite(entry.width)||!this.canMove(part);
+      this.ui.driverPartSizeReset.disabled=this.cloudLocked||!Number.isFinite(entry.width)||!this.canMove(part);
+      for(const id of ['driverLayoutFloat','driverLayoutResetPart','driverLayoutResetAll'])this.ui[id].disabled=this.cloudLocked;
       this.ui.driverLayoutFloat.hidden=!part.floating;
       this.ui.driverLayoutFloat.textContent=entry.floating?'收回航行详情':'移出详情，独立显示';
       const main=(part.id==='map'||part.id==='video')&&!this.canMove(part);
-      this.ui.driverLayoutHint.textContent=part.id==='emergency'?'急停固定 100% 不透明，最小 96 × 44 px，可移动和调整大小。':main?'主画面始终铺满屏幕；切换为小窗后可移动和调整大小。':
+      this.ui.driverLayoutHint.textContent=this.cloudLocked?'正在使用云端统一布局；管理员停用后可调整本机布局。':part.id==='emergency'?'急停固定 100% 不透明，最小 96 × 44 px，可移动和调整大小。':main?'主画面始终铺满屏幕；切换为小窗后可移动和调整大小。':
         part.floating&&!entry.floating?'当前位于航行详情，可移出后单独摆放。':
         !canResize?'此模块尚未显示，请先打开“显示 → 仪表”或“航行详情”。':
         part.min?'此项最低 '+part.min+'%，保留必要操作的可见度。':'0% 完全隐藏；编辑时仍显示轮廓，便于找回。';
       for(const item of this.parts)item.node.dataset.layoutSelected=String(item===part);
     }
     startDrag(part,event,kind='move'){
-      if(!this.editing||this.drag||!this.canMove(part)||event.button!==0||(kind==='resize'&&!this.canResize(part)))return;
+      if(!this.editing||this.cloudLocked||this.drag||!this.canMove(part)||event.button!==0||(kind==='resize'&&!this.canResize(part)))return;
       event.preventDefault();event.stopPropagation();this.select(part.id);
       const target=kind==='resize'?part.resizeHandle:part.grip;
       this.drag={part,kind,target,key:this.key(),pointerId:event.pointerId,startX:event.clientX,startY:event.clientY,box:part.node.getBoundingClientRect()};
@@ -258,6 +256,7 @@
       this.schedule();
     }
     resizePart(part,width,height,anchor){
+      if(this.cloudLocked)return;
       const size=this.boundedSize(part,width,height),canvas=this.stage.getBoundingClientRect(),entry=this.entry(part.id);
       entry.width=size.width;entry.height=size.height;
       const availableX=Math.max(0,canvas.width-size.width),availableY=Math.max(0,canvas.height-size.height);
@@ -265,6 +264,7 @@
       entry.y=availableY?clamp((anchor.top-canvas.top)/availableY,0,1):0;
     }
     position(part,left,top){
+      if(this.cloudLocked)return;
       const canvas=this.stage.getBoundingClientRect(),box=part.node.getBoundingClientRect(),entry=this.entry(part.id);
       const width=Math.max(0,canvas.width-box.width),height=Math.max(0,canvas.height-box.height);
       entry.x=width?clamp((left-canvas.left)/width,0,1):0;entry.y=height?clamp((top-canvas.top)/height,0,1):0;
@@ -276,7 +276,7 @@
       this.save();this.refresh();this.notify();
     }
     nudge(part,event,kind='move'){
-      if(!this.editing||!this.canMove(part)||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.code)||(kind==='resize'&&!this.canResize(part)))return;
+      if(!this.editing||this.cloudLocked||!this.canMove(part)||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.code)||(kind==='resize'&&!this.canResize(part)))return;
       event.preventDefault();event.stopPropagation();this.select(part.id);
       const box=part.node.getBoundingClientRect(),step=event.shiftKey?20:5;
       const dx=event.code==='ArrowLeft'?-step:event.code==='ArrowRight'?step:0,dy=event.code==='ArrowUp'?-step:event.code==='ArrowDown'?step:0;

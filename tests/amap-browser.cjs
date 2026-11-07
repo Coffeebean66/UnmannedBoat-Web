@@ -161,14 +161,14 @@ async function browserSession(server,mode,run){
     // 单船地图测试显式打开概览；自动选船不再替用户从船队页切换页面。
     await send('Page.navigate',{url:'http://127.0.0.1:'+server.address().port+'/#overview'});
     await until('!!window.boatMonitor && !!window.boatMonitor.viewer.renderer');
-    await run({send,evaluate,until,shot,viewportShot,errors,sdkRequests,configRequests,settingsRequests,tileRequests,failures});
+    await run({server,send,evaluate,until,shot,viewportShot,errors,sdkRequests,configRequests,settingsRequests,tileRequests,failures});
     assert.deepEqual(errors,[],'Page has no unhandled JavaScript errors in '+mode);
   }finally{socket?.close();browser.kill();}
 }
 
 async function withServer(env,mode,run,options={}){
   const base=fs.mkdtempSync(path.join(output,'map-settings-browser-'));
-  const server=createFixtureServer({...options,env:{BOAT_ACCOUNTS_ENABLED:'0',...env},mapOptions:{file:path.join(base,'map-settings.json'),...options.mapOptions}});
+  const server=createFixtureServer({...options,env:{BOAT_ACCOUNTS_ENABLED:'0',...env},mapOptions:{file:path.join(base,'map-settings.json'),...options.mapOptions},driverLayoutOptions:{file:path.join(base,'driver-layout.json'),...options.driverLayoutOptions}});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   try{await browserSession(server,mode,run);}finally{await new Promise(resolve=>server.close(resolve));}
 }
@@ -492,5 +492,5 @@ async function main(){
   if(!process.argv.includes('--map-only'))await settingsBrowser();
   console.log('Screenshots: '+output+' (AMap images use an explicitly labelled simulated SDK).');
 }
-module.exports={withServer,startTelemetry,login};
+module.exports={withServer,startTelemetry,login,browserSession};
 if(require.main===module)(process.argv.includes('--settings-only')?settingsBrowser():process.argv.includes('--switch-only')?providerSwitchBrowser():main()).catch(error=>{console.error(error);process.exitCode=1;});

@@ -9,7 +9,7 @@ async function main(){
   const mediaPath=path.join(run,'driver-sample.mp4');
   const generated=spawnSync(process.env.FFMPEG_PATH||'D:/ClaudeTools/ffmpeg/ffmpeg-8.1-essentials_build/bin/ffmpeg.exe',['-hide_banner','-loglevel','error','-nostdin','-y','-f','lavfi','-i','testsrc2=size=320x180:rate=12','-t','40','-an','-c:v','libx264','-preset','ultrafast','-profile:v','baseline','-pix_fmt','yuv420p','-movflags','+faststart',mediaPath],{windowsHide:true,encoding:'utf8',timeout:60000});
   if(generated.error||generated.status!==0)throw Error('Local sample video generation failed: '+(generated.error?.message||generated.stderr));
-  const server=createDriverFixture({mediaPath,env:{BOAT_ACCOUNTS_FILE:path.join(run,'accounts.json'),BOAT_MAP_CONFIG_FILE:path.join(run,'map.json'),BOAT_TELEMETRY_HISTORY_FILE:path.join(run,'history.json'),BOAT_OTA_KEY:''}});
+  const server=createDriverFixture({mediaPath,env:{BOAT_ACCOUNTS_FILE:path.join(run,'accounts.json'),BOAT_MAP_CONFIG_FILE:path.join(run,'map.json'),BOAT_DRIVER_LAYOUT_FILE:path.join(run,'driver-layout.json'),BOAT_TELEMETRY_HISTORY_FILE:path.join(run,'history.json'),BOAT_OTA_KEY:''}});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const profile=fs.mkdtempSync(path.join(output,'chrome-driver-')),errors=[];
   const browser=spawn(process.env.CHROME_PATH||(process.platform==='win32'?'C:/Program Files/Google/Chrome/Application/chrome.exe':'google-chrome'),['--headless','--no-first-run','--no-default-browser-check','--disable-background-networking','--use-angle=swiftshader','--enable-unsafe-swiftshader','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{windowsHide:true,stdio:'ignore'});

@@ -17,6 +17,14 @@
 .driver-layout-editor .small-button { min-height:28px; padding:5px 8px; border-color:var(--driver-edge); background:rgb(255 255 255 / 6%); color:var(--driver-ink); font-size:10px; }
 .driver-layout-reset { display:flex; gap:8px; margin-top:12px; }
 .driver-layout-saved { display:block; margin-top:12px; color:var(--driver-muted); font-size:9px; line-height:1.6; }
+.driver-cloud-layout { margin-top:14px; padding-top:12px; border-top:1px solid var(--driver-edge); }
+.driver-cloud-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.driver-cloud-heading h4 { margin:0; color:var(--driver-ink); font-size:11px; }
+.driver-cloud-actions { display:flex; flex-wrap:wrap; gap:7px; }
+.driver-cloud-layout p { font-size:10px; overflow-wrap:anywhere; }
+.driver-cloud-layout [data-tone="success"] { color:var(--accent); }
+.driver-cloud-layout [data-tone="error"] { color:var(--danger); }
+.driver-cloud-layout p.driver-cloud-note { margin-bottom:0; font-size:9px; }
 .driver-layout-grip,.driver-layout-resize { display:none; }
 .driver-layout-size-slot { display:contents; }
 .driving-workspace [data-driver-layout-module] { opacity:var(--driver-part-opacity,1); }
@@ -82,7 +90,8 @@
 .driving-workspace .driver-model-preview.driver-layout-floating { top:220px; }
 @media(max-width:760px) {
   .driver-layout-launch { min-height:29px; padding:5px 7px; font-size:8px; }
-  .driver-layout-editor { top:84px; max-height:calc(100% - 100px); }
+  /* 云端操作增加面板内容后仍为底部急停留位，按钮可在面板内滚动到达。 */
+  .driver-layout-editor { top:84px; max-height:calc(100% - 176px); }
   .driving-workspace .driver-layout-floating { width:270px; }
   .driving-workspace[data-layout-editing="true"] .driver-layout-resize:not(:disabled) { width:36px; height:36px; min-height:36px; }
 }

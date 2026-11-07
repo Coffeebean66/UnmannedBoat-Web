@@ -100,7 +100,7 @@
           this.setDetailsOpen(false);
           this.nodes.driverDisplayOptions.open=this.nodes.driverControlOptions.open=false;
           this.nodes.driverMapOptions.open=false;
-        }else this.setMediaFocus(this.nodes['view-driving'].dataset.focus||'video');
+        }else this.setMediaFocus(this.cloudLayout?.preferredPrimary()||this.nodes['view-driving'].dataset.focus||'video');
         this.render();if(event.detail?.view==='driving'){this.lastPoll=0;this.poll();}
       });
       this.listen(window,'boat-selection-change',event=>{
@@ -116,6 +116,7 @@
       if(this.visible())this.setMediaFocus('video');
       this.timer=window.setInterval(()=>this.pulse(),100);
       this.headingMode();this.render();
+      this.cloudLayout=new window.BoatDriverCloudLayout({driver:this,document,auth,fetch});
     }
     listen(target,event,handler){target.addEventListener(event,handler);this.handlers.push([target,event,handler]);}
     text(id,value){const text=String(value??'--');if(this.nodes[id].textContent!==text)this.nodes[id].textContent=text;}
@@ -377,7 +378,8 @@
       this.layout?.refresh();
       window.dispatchEvent(new CustomEvent('boat-driver-layout-change'));
     }
-    setOverlayOpacity(value) {
+    setOverlayOpacity(value,{persist=true,cloud=false}={}) {
+      if(this.layout?.cloudLocked&&!cloud)return;
       const opacity=Math.max(0,Math.min(100,Number(value)||0));
       this.nodes.driverOverlayOpacity.value=String(opacity);
       this.nodes['view-driving'].style.setProperty('--driver-overlay-opacity',(opacity/100).toFixed(2));
@@ -385,7 +387,7 @@
       this.updateOverlayInteraction();
       this.layout?.refresh();
       this.text('driverOverlayOpacityValue',opacity+'%');
-      try{window.localStorage?.setItem('boat-driver-console-hud-opacity',String(opacity));}catch(_){}
+      if(persist)try{window.localStorage?.setItem('boat-driver-console-hud-opacity',String(opacity));}catch(_){}
     }
     setDetailsOpen(open,restoreFocus=false) {
       this.nodes.driverDetailsPanel.hidden=!open;
@@ -395,12 +397,13 @@
       this.layout?.refresh();
       window.dispatchEvent(new CustomEvent('boat-driver-layout-change'));
     }
-    setInstrumentsVisible(visible) {
+    setInstrumentsVisible(visible,{persist=true,cloud=false}={}) {
+      if(this.layout?.cloudLocked&&!cloud)return;
       this.nodes['view-driving'].dataset.instrumentsHidden=String(!visible);
       this.document.querySelector('.driver-instrument-grid').hidden=!visible;
       this.nodes.driverInstrumentToggle.setAttribute('aria-pressed',String(visible));
       this.text('driverInstrumentToggle',visible?'仪表：显示':'仪表：隐藏');
-      try{window.localStorage?.setItem('boat-driver-console-instruments',String(visible));}catch(_){}
+      if(persist)try{window.localStorage?.setItem('boat-driver-console-instruments',String(visible));}catch(_){}
       this.layout?.refresh();
       window.dispatchEvent(new CustomEvent('boat-driver-layout-change'));
     }
@@ -471,7 +474,7 @@
       this.renderKeys();
       this.navigation?.render();
     }
-    destroy(){if(this.destroyed)return;this.stop('驾驶界面已关闭，已请求停船');this.setMediaFocus('');this.navigation?.destroy();this.layout?.destroy();this.destroyed=true;window.clearInterval(this.timer);for(const [target,event,handler]of this.handlers)target.removeEventListener(event,handler);this.handlers=[];}
+    destroy(){if(this.destroyed)return;this.stop('驾驶界面已关闭，已请求停船');this.setMediaFocus('');this.cloudLayout?.destroy();this.navigation?.destroy();this.layout?.destroy();this.destroyed=true;window.clearInterval(this.timer);for(const [target,event,handler]of this.handlers)target.removeEventListener(event,handler);this.handlers=[];}
   }
   window.BoatDriverControl=BoatDriverControl;
 })();

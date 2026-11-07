@@ -21,7 +21,7 @@ async function fixture(t,{env:extra={},mapOptions={},accountOptions={},beforeBoo
     BOAT_GUEST_PASSWORD:GUEST.password,BOAT_ACCOUNTS_ORIGIN:ORIGIN,...extra};
   let server,time=100000;
   if(beforeBoot)beforeBoot({directory,file,env});
-  async function boot(){server=createServer({env,mapOptions:{...mapOptions,file},accountOptions:{now:()=>time,...accountOptions}});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));}
+  async function boot(){server=createServer({env,mapOptions:{...mapOptions,file},accountOptions:{storeFile:path.join(directory,'accounts.json'),now:()=>time,...accountOptions},driverLayoutOptions:{file:path.join(directory,'driver-layout.json')}});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));}
   await boot();
   t.after(async()=>{if(server.listening)await new Promise(resolve=>server.close(resolve));assert.equal(path.dirname(directory),fs.realpathSync(os.tmpdir()));assert.match(path.basename(directory),/^boat-map-settings-/);fs.rmSync(directory,{recursive:true,force:true});});
   return {directory,file,env,get server(){return server;},get port(){return server.address().port;},setTime:value=>{time=value;},

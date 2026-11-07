@@ -58,6 +58,7 @@
   <script defer src="video-recording.js"></script>
   <script defer src="firmware-panel.js"></script>
   <script defer src="driver-layout.js"></script>
+  <script defer src="driver-cloud-layout.js"></script>
   <script defer src="driver-hud.js"></script>
   <script defer src="driver-navigation.js"></script>
   <script defer src="driver-control.js"></script>
@@ -114,7 +115,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">无人船监测 <span>v1.60.0</span></div>
+      <div class="sidebar-version">无人船监测 <span>v1.61.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -468,6 +469,12 @@
           <button id="driverLayoutFloat" type="button" class="small-button" hidden>移出详情，独立显示</button>
           <div class="driver-layout-reset"><button id="driverLayoutResetPart" type="button" class="small-button">恢复此项</button><button id="driverLayoutResetAll" type="button" class="small-button">恢复全部布局</button></div>
           <span id="driverLayoutSaved" class="driver-layout-saved" role="status">自动保存在当前浏览器 · 桌面 / 手机、两种主画面分别保存</span>
+          <section id="driverCloudLayout" class="driver-cloud-layout" aria-labelledby="driverCloudLayoutTitle">
+            <div class="driver-cloud-heading"><h4 id="driverCloudLayoutTitle">云端统一布局</h4><button id="driverCloudLayoutRead" type="button" class="small-button">刷新云端</button></div>
+            <p id="driverCloudLayoutStatus" role="status" aria-live="polite">正在读取云端布局…</p>
+            <div id="driverCloudLayoutActions" class="driver-cloud-actions" hidden><button id="driverCloudLayoutUpload" type="button" class="small-button" disabled>上传当前布局</button><button id="driverCloudLayoutEnable" type="button" class="small-button" disabled>一键启用</button><button id="driverCloudLayoutDisable" type="button" class="small-button" disabled>停用统一布局</button></div>
+            <p class="driver-cloud-note">上传包含桌面 / 手机、图传 / 地图的布局和仪表显隐。管理员启用后，所有用户统一使用；停用后恢复各自本机布局。调整已启用的布局前，请先停用。</p>
+          </section>
           </div>
         </aside>
         </div>
