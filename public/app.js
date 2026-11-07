@@ -281,6 +281,7 @@
     // 驾驶遥测与图传 HUD 共用有效期判断，断流后一起清空，避免显示旧定位或姿态。
     driver.setTelemetry({...b,actualHeading:Number.isFinite(driverHeading)?driverHeading.toFixed(2):'--',
       latitude:v.latitude,longitude:v.longitude,fixStatus:v.fixStatus,fixValid:v.fixFresh,imuStatus:imu.status,imuValid:imu.fresh,imu,motors:driverMotors,
+      dataHealth:{motor1:typeof driverMotors[0]?.Rpm==='number',motor2:typeof driverMotors[1]?.Rpm==='number',rtkSpeed:v.fresh,rtkFix:v.fixFresh,rtkHeading:v.headingFresh,imuEuler:imu.eulerFresh,imuGyro:imu.gyroFresh},
       networkDelayMs:link.connected&&state.deviceId==='cloud:'+cloud.selectedId&&Number.isFinite(state.forwardDelayMs)&&Number.isFinite(state.uplinkDelayMs)?state.forwardDelayMs+state.uplinkDelayMs:null});
     for(const key of ['roll','pitch','yaw','gyroX','gyroY','gyroZ'])set(key,imu[key]);
     for(const [id,key] of Object.entries({imuStatus:'status',imuSequence:'sequence',imuAge:'ageText',imuAlignment:'alignmentText',imuHeadingUpdate:'headingUpdateText'}))set(id,imu[key]);
@@ -459,7 +460,7 @@
     if(!await selecting||request!==videoOpenSequence||generation!==cloud.generation||cloud.selectedId!==id||!cloud.wanted||accountGeneration!==window.BoatAuth?.generation)return;
     window.BoatWorkspace?.navigate('video');
   }
-  const openPlatformSettings=()=>{window.BoatAuth?.assertPlatformManage();$('platformSettingsDialog').showModal();users.open();onlineUsers.open();mqttDevices.open();videoDevices.open();videoRecording.open();mapSettings.open();};
+  const openPlatformSettings=()=>{window.BoatAuth?.assertPlatformManage();$('platformSettingsDialog').showModal();users.open();onlineUsers.open();mqttDevices.open();videoDevices.open();videoRecording.open();mapSettings.open();driver.gamepad.haptics?.open();};
   on('settingsToggle',openSettings);
   on('firmwareToggle',()=>{if(driver.active||driver.pending)throw Error('请先停船并退出电脑操控');firmware.open(cloud.selectedId);});
   on('settingsEntry',openSettings);

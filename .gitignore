@@ -3,6 +3,8 @@
 /.local-state/
 missions.json
 driver-layout.json
+gamepad-haptics.json
+.gamepad-haptics.*.tmp
 mission-tracks.json
 mission-tracks.json.tmp-*
 .missions-*.tmp

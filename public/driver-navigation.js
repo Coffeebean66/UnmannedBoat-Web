@@ -32,7 +32,7 @@
         this.notice('急停已请求，等待服务器和船端停止确认。');this.missions.poll(true);this.render();
       });
       this.listen(window,'boat-mission-change',()=>this.render());
-      this.listen(window,'boat-view-change',event=>{if(event.detail?.view!=='driving'){this.setHomeEditing(false);this.closeQueueSettings(false);}});
+      this.listen(window,'boat-view-change',event=>{if(event.detail?.view!=='driving'){this.setHomeEditing(false);this.closeQueueSettings(false);}this.render();});
       this.listen(window,'boat-selection-change',event=>{if(event.detail?.selectedId!==this.deviceId){this.setHomeEditing(false);this.closeQueueSettings(false);}this.render();});
       this.listen(window,'boat-theme-change',()=>this.render());
       this.render();
@@ -95,6 +95,16 @@
       const key=JSON.stringify([this.deviceId,home,this.editingHome,this.map.provider,this.map.ready]);if(key===this.markerKey)return;this.markerKey=key;
       this.marker?.remove();this.marker=null;
       if(home&&this.map.ready)this.marker=this.map.createMarker(home,{className:'driver-home-pin',html:'<span>'+(this.editingHome?'选':'返')+'</span>',iconSize:[30,30],iconAnchor:[15,15],interactive:false,title:this.editingHome?'待保存返航点':'当前船已保存返航点'});
+    }
+    drawTaskPreview(){
+      const m=this.missions,run=m?.run(),same=m?.admin&&this.deviceId&&m.deviceId===this.deviceId;
+      const running=(run?.active||run?.status==='paused')&&['start','goto'].includes(run.action);
+      // 使用已保存的选择，执行中优先采用冻结的航线；不把未保存草稿当作即将执行的路径。
+      const enabled=same&&this.driver.visible()&&this.mode==='auto'&&(!(run?.active||run?.status==='paused')||running);
+      const route=running&&!run.queue&&run.routeId===this.routeId?run.route:m?.routes.find(r=>r.id===this.routeId);
+      window.boatMonitor?.mapMission?.setDriverPreview(enabled?{deviceId:this.deviceId,
+        route:this.taskKind==='route'?route:null,queue:this.taskKind==='queue'?m.queues.find(q=>q.id===this.queueId):null,
+        stale:!!m.statusError||!!m.storageError}:null);
     }
     render(){
       const m=this.missions,d=this.driver;if(!m)return;
@@ -161,9 +171,9 @@
       if(active||paused)d.text('driverSystemMode',(run.action==='hold'?'定点保持':run.action==='home'?'一键返航':'自动航行')+' · '+(paused?'已暂停':run.status==='running'?'运行中':'准备中'));
       if(active||paused){d.text('driverTakeoverStatus',paused?'任务已暂停':run.status==='running'?'服务器已接管':run.status==='stopping'?'等待停船确认':'等待自主接管');d.nodes.driverTakeoverStatus.dataset.state=run.status==='running'?'active':paused?'idle':'pending';}
       d.hud.setNavigation(same?m.navigationState():null);
-      this.bindMap();this.drawHome();
+      this.bindMap();this.drawHome();this.drawTaskPreview();
     }
-    destroy(){this.closeQueueSettings(false);for(const [node,event,handler]of this.handlers)node.removeEventListener(event,handler);this.queueAnchor.remove();this.map?.off('click',this.mapClick);this.map?.off('ready',this.mapRestore);this.map?.off('providerchange',this.mapRestore);this.marker?.remove();}
+    destroy(){this.closeQueueSettings(false);window.boatMonitor?.mapMission?.setDriverPreview(null);for(const [node,event,handler]of this.handlers)node.removeEventListener(event,handler);this.queueAnchor.remove();this.map?.off('click',this.mapClick);this.map?.off('ready',this.mapRestore);this.map?.off('providerchange',this.mapRestore);this.marker?.remove();}
   }
   window.BoatDriverNavigation=BoatDriverNavigation;
 })();

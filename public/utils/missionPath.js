@@ -64,4 +64,9 @@ function routeLines(route,style={}){
   }
   return lines;
 }
-module.exports={defaultControl,compileSegment,compile,at,guide,routeLines};
+// 按执行顺序用黄金角分配颜色，任务组编辑器与驾驶地图使用同一组色值。
+function routeColor(index){
+  const h=(index*137.508+214)%360,s=.72,l=.59,a=s*Math.min(l,1-l);
+  return '#'+[0,8,4].map(n=>{const k=(n+h/30)%12;return Math.round(255*(l-a*Math.max(-1,Math.min(k-3,9-k,1)))).toString(16).padStart(2,'0');}).join('');
+}
+module.exports={defaultControl,compileSegment,compile,at,guide,routeLines,routeColor};

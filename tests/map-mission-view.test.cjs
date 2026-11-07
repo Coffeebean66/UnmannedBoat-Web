@@ -21,7 +21,7 @@ function fixture(initial, saved, brokenStorage = false, savedPoints) {
   }]));
   const localStorage = { getItem(key) { if (brokenStorage) throw Error('blocked'); return storage.get(key); },
     setItem(key, value) { if (brokenStorage) throw Error('blocked'); storage.set(key, value); } };
-  const window = { BoatModules:{missionPath:require('../public/utils/missionPath')},BoatMissions: { navigationState: () => initial },
+  const window = { BoatWorkspace:{current:'navigation'},BoatModules:{missionPath:require('../public/utils/missionPath')},BoatMissions: { navigationState: () => initial },
     addEventListener(key, fn) { listeners.set(key, fn); }, removeEventListener(key) { listeners.delete(key); } };
   const map = { ready: true, provider: 'osm', draws: 0,
     on(key, fn) { mapListeners.set(key, fn); }, off(key) { mapListeners.delete(key); },
@@ -33,8 +33,64 @@ function fixture(initial, saved, brokenStorage = false, savedPoints) {
   const view = new window.MapMissionView(map);
   return { view, map, nodes, layers, storage, markers, listeners, mapListeners,
     emit(detail) { listeners.get('boat-mission-change')({ detail }); }, click() { nodes.mapMissionToggle.events.get('click')(); },
+    preview(value) { window.BoatWorkspace.current='driving'; view.setDriverPreview(value); },
+    navigate(value) { window.BoatWorkspace.current=value; listeners.get('boat-view-change')({detail:{view:value}}); },
     clickPoints(id='mapMissionPointsToggle') { nodes[id].events.get('click')(); } };
 }
+
+test('驾驶选择已保存任务即可预览且无航点，不需启动，不改监测显隐偏好或原航线',()=>{
+  const route=active().route,state=active({run:null,route:null}),f=fixture(state,'hidden'),before=plain(route);
+  f.preview({deviceId:'boat-01',route});
+  assert.deepEqual(f.layers.get('mission')[0].points,points);assert.equal(f.layers.get('mission').length,2);
+  assert.equal(f.view.markers.length,0);assert.equal(f.markers.length,0);assert.match(f.nodes.mapMissionStatus.textContent,/湖区巡检.*预览.*航点已隐藏/);
+  assert.equal(f.view.visible,false);assert.equal(f.view.pointsVisible,true);assert.equal(f.storage.get('boat_web_mission_route_v1'),'hidden');
+  assert.equal(f.nodes.driverMissionPointsToggle.hidden,true);assert.equal(f.nodes.mapMissionToggle.hidden,true);
+  assert.deepEqual(route,before);
+  f.navigate('navigation');assert.equal(f.layers.size,0);assert.equal(f.nodes.mapMissionToggle.hidden,false);
+  f.navigate('driving');assert.deepEqual(f.layers.get('mission')[0].points,points);
+  f.view.setDriverPreview(null);assert.equal(f.layers.size,0);f.view.destroy();assert.equal(f.listeners.size,0);
+});
+
+test('驾驶切换选择更新曲线与分段样式，空选择清除，轮询不反复重建，换底图可恢复',()=>{
+  const P=require('../public/utils/missionPath'),f=fixture(active({run:null,route:null})),route=plain(active().route);
+  route.segments=[{type:'curve',control:P.defaultControl(points[0],points[1]),record:false},{type:'line'}];
+  f.preview({deviceId:'boat-01',route});
+  const lines=f.layers.get('mission'),draws=f.map.draws;
+  assert.deepEqual(lines[0].points,P.compile(route).segments[0].points);assert.deepEqual(lines.map(l=>l.dashed),[true,false,true]);
+  for(let i=0;i<5;i++)f.preview({deviceId:'boat-01',route:plain(route)});
+  assert.equal(f.map.draws,draws);
+  f.map.provider='amap';f.mapListeners.get('providerchange')();assert.deepEqual(f.layers.get('mission'),lines);assert.equal(f.markers.length,0);
+  const other={id:'other',name:'另一条航线',points:[points[1],points[2]]};
+  f.preview({deviceId:'boat-01',route:other});assert.deepEqual(f.layers.get('mission')[0].points,other.points);
+  f.preview({deviceId:'boat-01',route:null});assert.equal(f.layers.size,0);assert.match(f.nodes.mapMissionStatus.textContent,/请选择/);
+});
+
+test('驾驶任务组显示独立副本的不同颜色、各自返回与组间转场，不生成航点',()=>{
+  const P=require('../public/utils/missionPath'),a=plain(active().route),b={id:'b',name:'副本B',points:[points[1],points[2]]};
+  const queue={id:'q',name:'连续巡航',routes:[a,b],loopEnabled:true},before=plain(queue),f=fixture(active({run:null,route:null}));
+  f.preview({deviceId:'boat-01',queue});const lines=f.layers.get('mission');
+  assert.equal(lines.length,5);assert.equal(lines[0].color,P.routeColor(0));assert.equal(lines[3].color,P.routeColor(1));assert.notEqual(lines[0].color,lines[3].color);
+  assert.deepEqual(lines[1].points,[points.at(-1),points[0]],'本航线循环返回');
+  assert.deepEqual(lines[2].points,[points[0],b.points[0]],'本航线返回后再前往下一条');
+  assert.deepEqual(lines[4].points,[b.points.at(-1),a.points[0]],'整组循环返回');
+  assert.equal(f.view.markers.length,0);assert.deepEqual(queue,before);assert.match(f.nodes.mapMissionStatus.textContent,/连续巡航/);
+});
+
+test('驾驶预览不保留越权、过期或其他船的数据，离页恢复实际执行路线及原航点偏好',()=>{
+  const state=active(),f=fixture(state),other={id:'other',name:'另选任务',points:[points[1],points[2]]};
+  f.preview({deviceId:'boat-01',route:other});assert.equal(f.view.markers.length,0);assert.deepEqual(f.layers.get('mission')[0].points,other.points);
+  f.navigate('navigation');assert.equal(f.view.markers.length,3);assert.deepEqual(f.layers.get('mission')[0].points,points);
+  f.navigate('driving');assert.equal(f.view.markers.length,0);
+  for(const change of [{allowed:false},{stale:true},{deviceId:'boat-02'}]){
+    f.emit({...state,...change});assert.equal(f.layers.size,0);assert.equal(f.view.markers.length,0);f.emit(state);
+    assert.deepEqual(f.layers.get('mission')[0].points,other.points);
+  }
+  const invalid=plain(other);invalid.points[0].latitude=NaN;
+  f.preview({deviceId:'boat-01',route:invalid});assert.equal(f.layers.size,0);assert.equal(f.nodes.mapMissionInfo.dataset.visible,'false');
+  const badCurve={...other,segments:[{type:'curve'}]};
+  f.preview({deviceId:'boat-01',route:badCurve});assert.equal(f.layers.size,0);assert.match(f.nodes.mapMissionStatus.textContent,/曲线无效/);
+  f.preview({deviceId:'boat-01',route:badCurve});assert.match(f.nodes.mapMissionStatus.textContent,/曲线无效/);assert.equal(f.nodes.mapMissionInfo.dataset.visible,'false');
+});
 
 test('按航段记录开关绘制实线和虚线，隐藏航点后仍保留分段样式',()=>{
   const state=active();state.route.segments=[{type:'line',record:false},{type:'line'}];

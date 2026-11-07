@@ -45,6 +45,7 @@
         this.scan();this.driver.render();
       });
       this.scan();this.render();
+      if(host.BoatGamepadHaptics)this.haptics=new host.BoatGamepadHaptics({driver,gamepad:this,document,host});
     }
     listen(node,event,handler){node.addEventListener(event,handler);this.handlers.push([node,event,handler]);}
     enabled(){return this.source==='gamepad';}
@@ -61,6 +62,7 @@
       // 只在尚未选择过设备时自动选第一个标准手柄；断开后不能换另一只继续驾驶。
       if(!this.selectedKey)this.selectedKey=this.devices.find(device=>device.value)?.value.key||'';
       this.sample=this.devices.find(device=>device.value?.key===this.selectedKey)?.value||null;
+      this.haptics?.tick();
       return this.sample;
     }
     selectSource(value){
@@ -130,8 +132,9 @@
       const badge=!this.sample?'手柄未就绪':d.active?(this.engaged?'手柄 · RB 驾驶中':'手柄 · 等待 RB'):'手柄 · 未接管';
       if(n.driverInputBadge.textContent!==badge)n.driverInputBadge.textContent=badge;
       n.driverInputBadge.title=status;d.nodes['view-driving'].dataset.inputSource=this.source;
+      this.haptics?.render();
     }
-    destroy(){this.destroyed=true;this.reset();for(const [node,event,handler]of this.handlers)node.removeEventListener(event,handler);this.handlers=[];}
+    destroy(){this.destroyed=true;this.haptics?.destroy();this.reset();for(const [node,event,handler]of this.handlers)node.removeEventListener(event,handler);this.handlers=[];}
   }
   scope.BoatDriverGamepad=BoatDriverGamepad;
   if(typeof module==='object'&&module.exports)module.exports={BoatDriverGamepad,readPad,axis};

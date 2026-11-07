@@ -1,5 +1,6 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict'),http=require('node:http'),{EventEmitter}=require('node:events');
+const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const P=require('../server/control-protocol'),{ControlService}=require('../server/control-service'),{CloudBridge}=require('../server/cloud'),{createServer}=require('../server');
 const UART=require('../public/utils/uart4Protocol'),parameters=require('../server/parameter-protocol');
 const TOKEN='0123456789abcdef',NEXT='fedcba9876543210',CLIENT='1122334455667788',OTHER='8899aabbccddeeff';
@@ -28,8 +29,11 @@ function call(port,route,{method='GET',cookie,origin='https://boat.test',body,ra
   return new Promise((resolve,reject)=>{const req=http.request({host:'127.0.0.1',port,path:route,method,agent:false,headers:{...(data!==undefined?{'content-type':'application/json','content-length':Buffer.byteLength(data)}:{}),...(cookie?{cookie}:{}),...(origin?{origin}:{}),...headers}},res=>{const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>{const text=Buffer.concat(chunks).toString();let json;try{json=JSON.parse(text);}catch(_){}resolve({status:res.statusCode,json,text,headers:res.headers});});});req.on('error',reject);req.end(data);});
 }
 async function apiFixture(t,options={}){
-  const f=fixture(t),server=createServer({env:ENV,cloud:f.bridge,accountOptions:{now:f.now,...options.accountOptions},controlOptions:{service:f.manager}});
-  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));const port=server.address().port;
+  // 每个用例使用独立账户状态，避免本机已保存账户覆盖测试环境中的初始密码。
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'boat-control-api-'));
+  const f=fixture(t),server=createServer({env:{...ENV,BOAT_ACCOUNTS_FILE:path.join(directory,'accounts.json')},cloud:f.bridge,accountOptions:{now:f.now,...options.accountOptions},controlOptions:{service:f.manager},
+    gamepadHapticsOptions:{file:path.join(directory,'haptics.json')},driverLayoutOptions:{file:path.join(directory,'layout.json')},mapOptions:{file:path.join(directory,'map.json')}});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(async()=>{await new Promise(resolve=>server.close(resolve));assert.equal(path.dirname(directory),fs.realpathSync(os.tmpdir()));assert.match(path.basename(directory),/^boat-control-api-/);fs.rmSync(directory,{recursive:true,force:true});});const port=server.address().port;
   return {...f,server,port,call:(route,options)=>call(port,route,options),async login(role='admin'){
     const response=await call(port,'/api/auth/login',{method:'POST',body:{username:role==='admin'?'control-admin':'control-guest',password:role==='admin'?'control test password':'654321'}});assert.equal(response.status,200,response.text);return response.headers['set-cookie'][0].split(';')[0];
   },post(cookie,values={},options={}){return call(port,'/api/cloud/control',{method:'POST',cookie,body:{deviceId:'boat-01',clientId:CLIENT,action:'acquire',...INPUT,...values},...options});}};
@@ -44,6 +48,14 @@ test('BDC1 uses a stable forty-byte signed little-endian protocol vector and str
   for(const value of [{...INPUT,throttle:1001},{...INPUT,mode:'1'},{...INPUT,targetHeading:36000},{...INPUT,turn:NaN}])assert.throws(()=>P.controls(value),{status:400});
 });
 
+test('normal PWM accepts empty sensor-validity telemetry without a test flag and retains acknowledged control',async t=>{
+  const f=fixture(t),input={mode:0,throttle:0,turn:0,targetHeading:0,testMode:false};
+  const acquiring=f.manager.acquire('boat-01','session-a',CLIENT,input);
+  assert.equal(f.client.sent.at(-1).payload[29],0);assert.equal(f.client.sent.at(-1).payload[36],0);
+  f.ack(undefined,{testMode:false});const lease=await acquiring;assert.equal(lease.active,true);assert.equal(lease.testMode,false);
+  assert.equal(f.manager.command('boat-01','session-a',CLIENT,lease.leaseId,1,'input',{...input,throttle:200}).accepted,true);
+  assert.equal(f.client.sent.at(-1).payload.readInt16LE(30),200);assert.equal(f.client.sent.at(-1).payload[36],0);
+});
 test('test mode adds an explicit flag, requires PWM, and advertises capability without breaking old statuses',()=>{
   const packet=P.command({token:TOKEN,uptimeMs:1000,leaseId:CLIENT,sequence:7,action:'input',mode:0,throttle:200,turn:-100,targetHeading:0,testMode:true});
   assert.equal(packet.length,40);assert.equal(packet[36],1);assert.deepEqual([...packet.subarray(37)],[0,0,0]);

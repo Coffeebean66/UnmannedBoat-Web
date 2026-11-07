@@ -201,6 +201,11 @@ button.driver-test-mode[aria-pressed="true"] { border-color:var(--warn); backgro
 .driver-gamepad-status { color:var(--accent); font-size:10px; line-height:1.6; overflow-wrap:anywhere; }
 .driver-gamepad-status[data-error="true"] { color:var(--warn); }
 .driver-input-badge { max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--accent); font-size:9px; }
+.gamepad-haptics-switch { display:flex; align-items:center; gap:9px; margin:16px 0; font-size:13px; }
+.gamepad-haptics-switch input { width:18px; height:18px; margin:0; accent-color:var(--accent); }
+.driver-data-alerts { position:fixed; z-index:960; top:max(16px,env(safe-area-inset-top)); right:max(16px,env(safe-area-inset-right)); width:360px; max-width:calc(100vw - 32px); padding:14px 16px; border:1px solid var(--warn); border-radius:12px; background:var(--panel); color:var(--text); box-shadow:0 8px 28px #0003; pointer-events:none; }
+.driver-data-alerts>strong { color:var(--warn); font-size:13px; }
+.driver-data-alerts>p { margin:7px 0 0; font-size:12px; line-height:1.7; overflow-wrap:anywhere; }
 .driving-workspace[data-input-source="gamepad"] .driver-keyboard { display:none; }
 .driver-test-notice { margin:3px 12px; color:var(--warn); font-size:9px; line-height:1.5; }
 .driver-test-notice>span { display:inline; margin-left:5px; }

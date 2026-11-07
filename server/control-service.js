@@ -128,7 +128,7 @@ class ControlService {
     for(const job of [...this.jobs.values()]){
       if(job.status==='stopping'){if(now-job.stopAt>=this.stopTimeoutMs)this.drop(job);continue;}
       if(!this.bridge.brokerConnected||!this.live(job.id)||!this.cap(job.id))this.stopJob(job,'stop',fault(503,'驾驶数据已断开，已取消操控'));
-      else if(job.status==='acquiring'&&now-job.startedAt>=this.ackTimeoutMs)this.stopJob(job,'stop',fault(504,job.input.testMode?'单片机未确认测试接管，请检查测试场景固件和驾驶指令通道':'单片机未确认接管，请确认双电调反馈有效且停稳满1秒；联调可使用测试场景'));
+      else if(job.status==='acquiring'&&now-job.startedAt>=this.ackTimeoutMs)this.stopJob(job,'stop',fault(504,job.input.testMode?'单片机未确认测试接管，请检查测试场景固件和驾驶指令通道':job.input.mode===0?'单片机未确认 PWM 接管，请更新支持无传感器反馈接管的固件，并检查驾驶指令通道':'单片机未确认闭环接管，请确认双电调反馈有效且停稳满1秒'));
       else if(job.status==='active'&&now-job.lastInputAt>=this.inputTimeoutMs)this.stopJob(job,'release',fault(504,'驾驶指令超时，已取消操控'));
     }
   }

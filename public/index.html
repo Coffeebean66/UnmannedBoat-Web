@@ -61,7 +61,9 @@
   <script defer src="driver-cloud-layout.js"></script>
   <script defer src="driver-hud.js"></script>
   <script defer src="driver-navigation.js"></script>
+  <script defer src="gamepad-haptics.js"></script>
   <script defer src="driver-gamepad.js"></script>
+  <script defer src="driver-data-alerts.js"></script>
   <script defer src="driver-control.js"></script>
   <script defer src="mission-panel.js"></script>
   <script defer src="mission-track-panel.js"></script>
@@ -116,7 +118,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">无人船监测 <span>v1.62.0</span></div>
+      <div class="sidebar-version">无人船监测 <span>v1.65.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -374,6 +376,7 @@
       </div>
       </section>
       <section id="view-driving" class="workspace-view driving-workspace" data-workspace-view="driving" data-primary="video" aria-labelledby="viewTitle" hidden>
+        <aside id="driverDataAlerts" class="driver-data-alerts" role="status" aria-live="polite" aria-atomic="true" hidden><strong>数据缺失提醒</strong><p id="driverDataAlertsText"></p></aside>
         <header class="driver-workspace-bar">
           <div class="driver-brand"><i data-icon="boat"></i><strong>驾驶控制</strong><small>实时操控与自主导航</small></div>
           <div class="driver-device-picker"><label for="driverDeviceSelect" class="sr-only">选择驾驶无人船</label><select id="driverDeviceSelect"><option value="">未选择无人船</option></select><button type="button" class="driver-icon-button" data-driver-proxy="cloudRefresh" aria-label="刷新设备" title="刷新设备"><i data-icon="refresh"></i></button></div>
@@ -398,9 +401,12 @@
               <label class="driver-source-field">选择手柄<select id="driverGamepadDevice"><option value="">连接手柄后按一次按钮</option></select></label>
               <div class="driver-gamepad-settings"><label>摇杆死区 <input id="driverGamepadDeadzone" type="number" min="5" max="30" step="1" value="15" inputmode="numeric" aria-label="摇杆死区百分比"><output id="driverGamepadDeadzoneValue">15%</output></label><button id="driverGamepadRefresh" class="small-button" type="button">刷新设备</button></div>
               <p id="driverGamepadStatus" class="driver-gamepad-status" role="status" aria-live="polite">连接后按一次手柄按钮，再刷新设备。</p>
+              <p id="driverGamepadHapticsStatus" class="driver-gamepad-status" role="status" aria-live="polite">正在读取震动配置。</p>
+              <button id="driverGamepadHapticsTest" type="button" class="small-button" disabled>测试震动</button>
+              <p class="driver-help">电机起动短震，0.5秒内姿态突变较强震动。开关与角度阈值由管理员在“平台设置 → 手柄震动”统一调整。</p>
               <p class="driver-help">左摇杆前后推进，右摇杆左右转向。网页启用操控后，摇杆回中并松开 RB，再按住 RB 驾驶；松开 RB 停船退出，B / 菜单键急停。X 在未接管时切换控制模式，Y 交换图传 / 地图。手柄需先通过 USB 或系统蓝牙连接电脑。</p>
             </section>
-            <button id="driverTestMode" type="button" class="driver-test-mode" aria-pressed="false" title="真实 PWM 开环，跳过电调反馈和停稳检查；先停止操控才能切换" hidden disabled>测试场景：关</button><p class="driver-option-hint">测试场景使用真实 PWM 输出。</p><p class="driver-help">键盘 W/S 前进后退，A/D 左右转向，方向键同样有效；松键归零，空格急停。航向模式下转向输入调整目标航向，推进归零时仍可能自动转向。手动驾驶失焦、离页或断连即停船；服务器自主导航在关闭网页后继续，暂停、急停或反馈失效时停止。</p>
+            <button id="driverTestMode" type="button" class="driver-test-mode" aria-pressed="false" title="真实 PWM 开环，跳过电调反馈和停稳检查；先停止操控才能切换" hidden disabled>测试场景：关</button><p class="driver-option-hint">PWM 模式缺少传感器数据也可操控，无需开启测试场景；缺失项在右上角提示 2 秒。</p><p class="driver-help">键盘 W/S 前进后退，A/D 左右转向，方向键同样有效；松键归零，空格急停。航向模式下转向输入调整目标航向，推进归零时仍可能自动转向。手动驾驶失焦、离页或断连即停船；服务器自主导航在关闭网页后继续，暂停、急停或反馈失效时停止。</p>
           </div></details></div>
           <div class="driver-navigation-modes" role="group" aria-label="航行方式"><button type="button" data-navigation-mode="manual" aria-pressed="true">手动驾驶</button><button type="button" data-navigation-mode="auto" aria-pressed="false">自动航行</button><button type="button" data-navigation-mode="hold" aria-pressed="false">定点保持</button></div>
           <span id="driverState" class="driver-state" data-state="idle">监测待机</span>
@@ -639,6 +645,16 @@
         <h3 id="recordingSettingsTitle">服务器录像保存</h3><p class="recording-settings-intro">为所有无人船设置录像保存目录，系统会按船只 ID 分目录保存。修改前请停止全部船只的录像。旧文件保留原目录，列表显示当前目录录像，不自动搬迁；切回原目录可查看旧录像。</p>
         <form id="recordingSettingsForm" autocomplete="off"><label for="recordingDirectory">服务器保存目录<input id="recordingDirectory" type="text" maxlength="500" spellcheck="false" autocapitalize="none" placeholder="/var/lib/unmanned-boat-video/recordings" disabled></label><p id="recordingSettingsRoot" class="recording-settings-root">保存目录位于服务器，需先启用 SRT / UDP 录像组件。</p><div class="recording-settings-actions"><button id="recordingSettingsRead" type="button" class="subtle">重新读取</button><button id="recordingSettingsSave" type="submit" class="primary" disabled>保存录像目录</button></div></form>
         <p id="recordingSettingsStatus" class="recording-settings-status" role="status" aria-live="polite">尚未读取录像保存设置。</p>
+      </section>
+      <section id="gamepadHapticsSettings" class="map-settings" aria-labelledby="gamepadHapticsTitle" hidden>
+        <div class="map-settings-heading"><div class="map-settings-title"><span class="card-icon teal" data-icon="settings"></span><div><h3 id="gamepadHapticsTitle">手柄震动</h3><p>管理员配置 · 对所有驾驶员生效</p></div></div></div>
+        <p class="map-settings-description">电机从静止到转动时短震；0.5秒内横滚、俯仰或偏航变化达到阈值时较强震动。仅驾驶界面前台、已选择手柄且遥测有效时提示，首次连接不触发。配置保存在服务器，更新或重启后保留。</p>
+        <form id="gamepadHapticsForm" autocomplete="off">
+          <label class="gamepad-haptics-switch"><input id="gamepadHapticsEnabled" type="checkbox" checked disabled>启用手柄震动</label>
+          <div class="map-settings-fields"><label for="gamepadHapticsThreshold">姿态变化阈值（° / 0.5秒）<input id="gamepadHapticsThreshold" type="number" min="1" max="90" step="1" value="10" required disabled><small>1—90°，默认10°。角度按最短方向计算，经过±180°不会误报。</small></label></div>
+          <div class="map-settings-actions"><button id="gamepadHapticsRead" type="button" class="subtle" disabled>重新读取</button><button id="gamepadHapticsSave" type="submit" class="primary" disabled>保存震动设置</button></div>
+        </form>
+        <p id="gamepadHapticsStatus" class="map-settings-status" role="status" aria-live="polite">尚未读取平台震动配置。</p>
       </section>
       <section id="mapSettings" class="map-settings" aria-labelledby="mapSettingsTitle" hidden>
         <div class="map-settings-heading"><div class="map-settings-title"><span class="card-icon blue" data-icon="map"></span><div><h3 id="mapSettingsTitle">平台地图设置</h3><p>高德 / 天地图 · 仅保存在服务器</p></div></div><a class="map-settings-guide" href="https://github.com/Coffeebean66/UnmannedBoat-Web/blob/main/MAP_SETUP.md" target="_blank" rel="noopener noreferrer">申请与配置教程 ↗</a></div>

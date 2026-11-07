@@ -1,4 +1,4 @@
-/* 当前任务路线仅作为地图覆盖物：复用任务轮询，不发送任何控制指令。 */
+/* 当前任务及驾驶选择预览只作为地图覆盖物，复用任务轮询，不发送控制指令。 */
 class MapMissionView {
   constructor(map) {
     this.map = map;
@@ -25,7 +25,9 @@ class MapMissionView {
     for (const button of this.pointButtons) button.addEventListener('click', this.togglePoints);
     this.update = event => { this.state = event.detail; this.render(); };
     this.restore = () => { this.drawKey = null; this.render(); };
+    this.viewChange = () => this.render();
     window.addEventListener('boat-mission-change', this.update);
+    window.addEventListener('boat-view-change', this.viewChange);
     this.map.on('ready', this.restore);
     this.map.on('providerchange', this.restore);
     this.state = window.BoatMissions?.navigationState();
@@ -38,13 +40,55 @@ class MapMissionView {
     this.map.setOverlayLines('mission', []);
   }
 
+  setDriverPreview(preview) {
+    this.driverPreview = preview;
+    this.render();
+  }
+
+  validRoute(route, minimum = 2) {
+    return Array.isArray(route?.points) && route.points.length >= minimum && route.points.length <= 256 && route.points.every(p =>
+      p && Number.isFinite(p.latitude) && Number.isFinite(p.longitude) && Math.abs(p.latitude) <= 85 && Math.abs(p.longitude) <= 180);
+  }
+
+  renderPreview(preview, state) {
+    // 驾驶选择预览始终只画线，不覆盖监测页保存的路线 / 航点显隐偏好。
+    const queue = preview.queue, routes = queue ? queue.routes || [] : preview.route ? [preview.route] : [];
+    const valid = routes.length > 0 && routes.length <= 32 && routes.every(route => this.validRoute(route));
+    const stale = state.stale || preview.stale, show = valid && !stale;
+    const key = JSON.stringify(['driver-preview', state.deviceId, show, routes, queue?.loopEnabled, this.map.provider, this.map.ready]);
+    const invalidCurve = this.previewErrorKey === key;
+    this.button.hidden = true; this.info.hidden = false;
+    for (const button of this.pointButtons) button.hidden = true;
+    this.info.dataset.visible = String(show && !invalidCurve);
+    this.status.textContent = stale ? '任务同步中断，恢复后更新所选轨迹' : !routes.length ? '请选择已保存的航线或任务组以预览轨迹' :
+      !valid ? '所选任务轨迹无效，请重新读取任务' : invalidCurve ? '所选任务曲线无效，请重新读取任务' :
+      (queue?.name || preview.route.name || '所选任务') + ' · 轨迹预览 · 航点已隐藏';
+    if (key === this.drawKey) return;
+    this.drawKey = key; this.clear();
+    if (!show) return;
+    const lines = [], paths = window.BoatModules.missionPath;
+    try {
+      routes.forEach((route, index) => {
+        const color = queue ? paths.routeColor(index) : '#467dff';
+        lines.push(...paths.routeLines(route, { color, width: 3, behind: true, className: 'map-mission-line', routeIndex: index }));
+        if (route.loopEnabled) lines.push({ points: [route.points.at(-1), route.points[0]], color: queue ? color : '#d5952b',
+          width: 2, dashed: true, behind: true, className: 'map-mission-line map-mission-return' });
+        const next = routes[index + 1] || (queue?.loopEnabled ? routes[0] : null);
+        if (next) lines.push({ points: [route.loopEnabled ? route.points[0] : route.points.at(-1), next.points[0]],
+          color: '#929cab', width: 2, dashed: true, behind: true, className: 'map-mission-line map-mission-transfer' });
+      });
+    } catch (_) { this.previewErrorKey = key; this.info.dataset.visible = 'false'; this.status.textContent = '所选任务曲线无效，请重新读取任务'; return; }
+    this.map.setOverlayLines('mission', lines);
+  }
+
   render() {
     const state = this.state || {}, allowed = state.allowed === true && !!state.deviceId;
+    const preview = window.BoatWorkspace?.current === 'driving' && allowed && this.driverPreview?.deviceId === state.deviceId ? this.driverPreview : null;
+    if (preview) { this.renderPreview(preview, state); return; }
     const run = (state.run?.active || state.run?.status === 'paused') && state.run.deviceId === state.deviceId ? state.run : null;
     const route = run && state.route?.id === run.routeId ? state.route : null;
     const points = route?.points || [];
-    const valid = points.length >= (['hold','home'].includes(run?.action)?1:2) && points.length <= 256 && points.every(p =>
-      Number.isFinite(p.latitude) && Number.isFinite(p.longitude) && Math.abs(p.latitude) <= 85 && Math.abs(p.longitude) <= 180);
+    const valid = this.validRoute(route, ['hold','home'].includes(run?.action) ? 1 : 2);
     const show = allowed && this.visible && !!run && valid && !state.stale;
     this.button.hidden = this.info.hidden = !allowed;
     this.button.textContent = this.visible ? '任务路线：显示' : '任务路线：隐藏';
@@ -91,6 +135,7 @@ class MapMissionView {
 
   destroy() {
     window.removeEventListener('boat-mission-change', this.update);
+    window.removeEventListener('boat-view-change', this.viewChange);
     this.button.removeEventListener('click', this.toggle);
     for (const button of this.pointButtons) button.removeEventListener('click', this.togglePoints);
     this.map.off('ready', this.restore);

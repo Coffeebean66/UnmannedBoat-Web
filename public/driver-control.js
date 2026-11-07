@@ -114,6 +114,7 @@
       },onReset:()=>{this.setOverlayOpacity(100);this.setInstrumentsVisible(false);}});
       this.navigation=new window.BoatDriverNavigation(this);
       this.gamepad=new window.BoatDriverGamepad({driver:this,document});
+      this.dataAlerts=new window.BoatDriverDataAlerts({driver:this,document});
       if(this.visible())this.setMediaFocus('video');
       this.timer=window.setInterval(()=>this.pulse(),100);
       this.headingMode();this.render();
@@ -147,6 +148,8 @@
       this.render();
     }
     setTelemetry(value={}) {
+      this.gamepad?.haptics?.updateTelemetry(value,performance.now());
+      this.dataAlerts?.update(value,performance.now());
       this.hud.setTelemetry(value);
       this.text('driverActualSpeed',value.actual);this.text('driverTargetSpeed',value.target);
       this.text('driverActualHeading',value.actualHeading);this.text('driverActualMode',value.modeText);
@@ -308,6 +311,7 @@
     }
     stop(message='已停船并退出电脑操控',emergency=false) {
       const wasActive=this.active||this.pending,id=this.context.deviceId,leaseId=this.leaseId;
+      this.gamepad?.haptics?.stop();
       this.gamepad?.reset();
       if(!wasActive&&!leaseId){this.setTestMode(false,false);return;}
       ++this.generation;this.request?.abort();this.request=null;this.active=false;this.pending=false;this.leaseId='';
@@ -479,15 +483,16 @@
         else if(this.stopReason)message=this.stopReason;
         // 未收到实时能力也可能是 MQTT 权限或状态过期，不能据此断言固件不支持。
         else if(this.remote?.supported===false)message=this.remote.message||'尚未收到船端驾驶状态，请检查固件及 MQTT 驾驶主题权限。';
-        else if(this.remote&&!this.remote.ready)message=this.remote.message||'当前无法接管，请确认船已停稳且无其他驾驶员占用。';
+        else if(this.remote&&!this.remote.ready)message=this.remote.message||'当前无法接管，请确认驾驶通道就绪且无其他驾驶员占用。';
         else if(this.testMode)message=this.remote?.testSupported?'测试场景：跳过电调反馈和停稳检查，使用真实 PWM 开环；点击启用操控开始测试。':'当前船端未声明测试场景能力，请先更新单片机固件。';
+        else if(Number(this.nodes.driverMode.value)===0)message='PWM开环无需电调、RTK、IMU或遥控器数据；点击启用操控，缺失数据会弹窗提示。';
       }
       this.text('driverNotice',message);this.nodes.driverNotice.dataset.tone=this.tone;
       this.renderKeys();
       this.navigation?.render();
       this.gamepad?.render();
     }
-    destroy(){if(this.destroyed)return;this.stop('驾驶界面已关闭，已请求停船');this.setMediaFocus('');this.gamepad?.destroy();this.cloudLayout?.destroy();this.navigation?.destroy();this.layout?.destroy();this.destroyed=true;window.clearInterval(this.timer);for(const [target,event,handler]of this.handlers)target.removeEventListener(event,handler);this.handlers=[];}
+    destroy(){if(this.destroyed)return;this.stop('驾驶界面已关闭，已请求停船');this.setMediaFocus('');this.dataAlerts?.destroy();this.gamepad?.destroy();this.cloudLayout?.destroy();this.navigation?.destroy();this.layout?.destroy();this.destroyed=true;window.clearInterval(this.timer);for(const [target,event,handler]of this.handlers)target.removeEventListener(event,handler);this.handlers=[];}
   }
   window.BoatDriverControl=BoatDriverControl;
 })();
