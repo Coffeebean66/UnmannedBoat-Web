@@ -186,6 +186,22 @@ html[data-workspace-view="driving"] .brand-caption,html[data-workspace-view="dri
 button.driver-test-mode { min-height:30px; padding:5px 10px; border:1px solid var(--line-strong); background:var(--soft); color:var(--muted); font-size:10px; }
 button.driver-test-mode[aria-pressed="true"] { border-color:var(--warn); background:color-mix(in srgb,var(--warn) 10%,var(--panel)); color:var(--warn); }
 .driver-option-hint,.driver-help { margin:9px 0 0; color:var(--muted); font-size:10px; line-height:1.7; }
+.driver-control-options-panel { max-height:min(620px,calc(100dvh - 248px)); overflow:auto; scrollbar-width:thin; }
+/* 设置面板展开时高于任务摘要与媒体工具，仍低于独立急停和布局编辑。 */
+.driving-workspace .driver-console:has(#driverControlOptions[open]) { z-index:820; }
+.driver-source-field { display:flex; flex-direction:column; gap:6px; margin:10px 0; color:var(--muted); font-size:10px; }
+.driver-source-field select { width:100%; min-width:0; min-height:30px; padding:4px 6px; border:1px solid var(--line); border-radius:6px; background:var(--soft); color:var(--text); font-size:11px; }
+.driver-gamepad-panel { min-width:0; margin:10px 0 14px; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--soft); }
+.driver-gamepad-panel>.driver-source-field { margin-top:0; }
+.driver-gamepad-settings { display:flex; align-items:center; flex-wrap:wrap; gap:6px; justify-content:space-between; }
+.driver-gamepad-settings label { display:flex; align-items:center; gap:5px; color:var(--muted); font-size:10px; }
+.driver-gamepad-settings input { width:45px; min-height:28px; padding:4px; border:1px solid var(--line); border-radius:5px; background:var(--panel); color:var(--text); font-size:11px; }
+.driver-gamepad-settings output { font-size:9px; }
+.driver-gamepad-settings button { min-height:28px; padding:4px 7px; font-size:10px; }
+.driver-gamepad-status { color:var(--accent); font-size:10px; line-height:1.6; overflow-wrap:anywhere; }
+.driver-gamepad-status[data-error="true"] { color:var(--warn); }
+.driver-input-badge { max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--accent); font-size:9px; }
+.driving-workspace[data-input-source="gamepad"] .driver-keyboard { display:none; }
 .driver-test-notice { margin:3px 12px; color:var(--warn); font-size:9px; line-height:1.5; }
 .driver-test-notice>span { display:inline; margin-left:5px; }
 #driverMissionStop { position:absolute; bottom:62px; right:12px; min-height:25px; padding:4px 7px; font-size:9px; }

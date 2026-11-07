@@ -61,6 +61,7 @@
   <script defer src="driver-cloud-layout.js"></script>
   <script defer src="driver-hud.js"></script>
   <script defer src="driver-navigation.js"></script>
+  <script defer src="driver-gamepad.js"></script>
   <script defer src="driver-control.js"></script>
   <script defer src="mission-panel.js"></script>
   <script defer src="mission-track-panel.js"></script>
@@ -115,7 +116,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">无人船监测 <span>v1.61.0</span></div>
+      <div class="sidebar-version">无人船监测 <span>v1.62.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -390,13 +391,23 @@
           </div>
         </article>
         <article class="driver-console" aria-label="驾驶操控控制台">
-          <div class="driver-console-heading driver-panel-heading"><h2><i data-icon="sliders"></i>驾驶控制</h2><details id="driverControlOptions" class="driver-control-options"><summary title="测试场景与键盘说明"><i data-icon="settings"></i><span class="sr-only">操作设置</span></summary><div class="driver-control-options-panel"><strong>驾驶选项</strong><button id="driverTestMode" type="button" class="driver-test-mode" aria-pressed="false" title="真实 PWM 开环，跳过电调反馈和停稳检查；先停止操控才能切换" hidden disabled>测试场景：关</button><p class="driver-option-hint">测试场景使用真实 PWM 输出。</p><p class="driver-help">W/S 前进后退，A/D 左右转向，方向键同样有效；松键归零，空格急停。航向模式下 A/D 调整目标航向，松键后仍可能自动转向。手动驾驶失焦、离页或断连即停船；服务器自主导航在关闭网页后继续，暂停、急停或反馈失效时停止。</p></div></details></div>
+          <div class="driver-console-heading driver-panel-heading"><h2><i data-icon="sliders"></i>驾驶控制</h2><details id="driverControlOptions" class="driver-control-options"><summary title="输入设备、测试场景与操作说明"><i data-icon="settings"></i><span class="sr-only">操作设置</span></summary><div class="driver-control-options-panel">
+            <strong>驾驶选项</strong>
+            <label class="driver-source-field">控制输入<select id="driverInputSource"><option value="keyboard">键盘</option><option value="gamepad">游戏手柄 · Xbox 标准</option></select></label>
+            <section id="driverGamepadPanel" class="driver-gamepad-panel" aria-label="游戏手柄设置" hidden>
+              <label class="driver-source-field">选择手柄<select id="driverGamepadDevice"><option value="">连接手柄后按一次按钮</option></select></label>
+              <div class="driver-gamepad-settings"><label>摇杆死区 <input id="driverGamepadDeadzone" type="number" min="5" max="30" step="1" value="15" inputmode="numeric" aria-label="摇杆死区百分比"><output id="driverGamepadDeadzoneValue">15%</output></label><button id="driverGamepadRefresh" class="small-button" type="button">刷新设备</button></div>
+              <p id="driverGamepadStatus" class="driver-gamepad-status" role="status" aria-live="polite">连接后按一次手柄按钮，再刷新设备。</p>
+              <p class="driver-help">左摇杆前后推进，右摇杆左右转向。网页启用操控后，摇杆回中并松开 RB，再按住 RB 驾驶；松开 RB 停船退出，B / 菜单键急停。X 在未接管时切换控制模式，Y 交换图传 / 地图。手柄需先通过 USB 或系统蓝牙连接电脑。</p>
+            </section>
+            <button id="driverTestMode" type="button" class="driver-test-mode" aria-pressed="false" title="真实 PWM 开环，跳过电调反馈和停稳检查；先停止操控才能切换" hidden disabled>测试场景：关</button><p class="driver-option-hint">测试场景使用真实 PWM 输出。</p><p class="driver-help">键盘 W/S 前进后退，A/D 左右转向，方向键同样有效；松键归零，空格急停。航向模式下转向输入调整目标航向，推进归零时仍可能自动转向。手动驾驶失焦、离页或断连即停船；服务器自主导航在关闭网页后继续，暂停、急停或反馈失效时停止。</p>
+          </div></details></div>
           <div class="driver-navigation-modes" role="group" aria-label="航行方式"><button type="button" data-navigation-mode="manual" aria-pressed="true">手动驾驶</button><button type="button" data-navigation-mode="auto" aria-pressed="false">自动航行</button><button type="button" data-navigation-mode="hold" aria-pressed="false">定点保持</button></div>
           <span id="driverState" class="driver-state" data-state="idle">监测待机</span>
           <p id="driverNotice" class="driver-notice" role="status" aria-live="polite">选择在线无人船，由管理员或驾驶员启用操控后使用键盘驾驶。</p>
           <button id="driverMissionStop" type="button" class="mission-danger" hidden>停止自主导航 · 空格</button>
           <p id="driverTestNotice" class="driver-test-notice" role="status" hidden>测试场景 · 真实 PWM 输出 · 电调反馈 / RTK / IMU 可离线。<span id="driverTestAck">尚未接管</span></p>
-          <div class="driver-inputs"><label class="driver-mode-select"><span class="sr-only">控制模式</span><select id="driverMode" aria-label="控制模式"><option value="0">PWM 油门</option><option value="1" selected>船速闭环</option><option value="2">航向闭环</option></select></label><label class="driver-limit">运动幅度 <input id="driverLimit" type="range" min="5" max="100" step="5" value="20" aria-label="键盘运动幅度百分比"><output id="driverLimitValue" for="driverLimit">20%</output></label><label class="driver-heading">目标航向<input id="driverHeading" type="number" min="0" max="359.99" step="1" value="0" inputmode="decimal"><span>°</span></label><button id="driverHoldHeading" type="button" class="small-button" title="以当前真北船头航向设定目标">取航向</button><div class="driver-keyboard" aria-label="W/S 前进后退，A/D 左右转向，按住运动，松开归零"><kbd data-driver-key="KeyW">W</kbd><kbd data-driver-key="KeyA">A</kbd><kbd data-driver-key="KeyS">S</kbd><kbd data-driver-key="KeyD">D</kbd></div></div>
+          <div class="driver-inputs"><label class="driver-mode-select"><span class="sr-only">控制模式</span><select id="driverMode" aria-label="控制模式"><option value="0">PWM 油门</option><option value="1" selected>船速闭环</option><option value="2">航向闭环</option></select></label><label class="driver-limit">运动幅度 <input id="driverLimit" type="range" min="5" max="100" step="5" value="20" aria-label="键盘或手柄最大运动幅度百分比"><output id="driverLimitValue" for="driverLimit">20%</output></label><label class="driver-heading">目标航向<input id="driverHeading" type="number" min="0" max="359.99" step="1" value="0" inputmode="decimal"><span>°</span></label><button id="driverHoldHeading" type="button" class="small-button" title="以当前真北船头航向设定目标">取航向</button><div class="driver-keyboard" aria-label="W/S 前进后退，A/D 左右转向，按住运动，松开归零"><kbd data-driver-key="KeyW">W</kbd><kbd data-driver-key="KeyA">A</kbd><kbd data-driver-key="KeyS">S</kbd><kbd data-driver-key="KeyD">D</kbd></div><span id="driverInputBadge" class="driver-input-badge" hidden>手柄 · 未接管</span></div>
           <div class="driver-command-footer"><div class="driver-mode-buttons" role="group" aria-label="驾驶模式"><button type="button" data-driver-mode="0" aria-pressed="false"><i data-icon="gauge"></i><span>PWM</span></button><button type="button" data-driver-mode="1" aria-pressed="true"><i data-icon="activity"></i><span>定速</span></button><button type="button" data-driver-mode="2" aria-pressed="false"><i data-icon="compass"></i><span>定向</span></button></div><div class="driver-actions"><button id="driverEnable" type="button" class="primary" disabled>启用操控</button><button id="driverRelease" type="button" class="ghost" disabled>停船退出</button></div></div>
           <div id="driverAutonomy" class="driver-autonomy" hidden>
             <div id="driverTaskSelection" class="driver-task-selection">

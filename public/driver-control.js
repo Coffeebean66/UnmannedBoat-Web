@@ -31,7 +31,7 @@
         const mode=Number(this.nodes.driverMode.value);
         if(mode===2&&!Number.isFinite(this.actualHeading)){this.nodes.driverMode.value=String(this.lastMode);this.toast('等待有效的真北船头航向后才能进入航向模式');return;}
         if(mode===2)this.nodes.driverHeading.value=this.actualHeading.toFixed(2);
-        this.lastMode=mode;this.keys.clear();this.renderKeys();this.headingMode();this.sendInput();this.render();
+        this.lastMode=mode;this.keys.clear();this.gamepad?.reset();this.renderKeys();this.headingMode();this.sendInput();this.render();
       });
       this.listen(this.nodes.driverLimit,'input',()=>{this.text('driverLimitValue',this.nodes.driverLimit.value+'%');this.sendInput();});
       // 控制台入口复用平台的选船、登录与设置流程，不建立第二条设备连接。
@@ -113,6 +113,7 @@
         this.render();
       },onReset:()=>{this.setOverlayOpacity(100);this.setInstrumentsVisible(false);}});
       this.navigation=new window.BoatDriverNavigation(this);
+      this.gamepad=new window.BoatDriverGamepad({driver:this,document});
       if(this.visible())this.setMediaFocus('video');
       this.timer=window.setInterval(()=>this.pulse(),100);
       this.headingMode();this.render();
@@ -212,10 +213,13 @@
     }
     inputs() {
       const amount=Math.round(Math.max(5,Math.min(100,Number(this.nodes.driverLimit.value)||20))*10);
-      const forward=Number(this.held('forward'))-Number(this.held('backward'));
-      const turn=Number(this.held('right'))-Number(this.held('left'));
+      const {forward,turn}=this.motion();
       const mode=this.testMode?0:Number(this.nodes.driverMode.value);
-      return {mode,throttle:forward*amount,turn:mode===2?0:turn*amount,targetHeading:this.headingValue(),testMode:this.testMode};
+      return {mode,throttle:Math.round(forward*amount),turn:mode===2?0:Math.round(turn*amount),targetHeading:this.headingValue(),testMode:this.testMode};
+    }
+    motion(){
+      if(this.gamepad?.enabled())return this.gamepad.input();
+      return {forward:Number(this.held('forward'))-Number(this.held('backward')),turn:Number(this.held('right'))-Number(this.held('left'))};
     }
     payload(action,id=this.context.deviceId,leaseId=this.leaseId) {
       return {deviceId:id,clientId:this.clientId,action,leaseId,sequence:++this.sequence,...this.inputs()};
@@ -223,11 +227,12 @@
     async acquire() {
       if(!this.permitted()||this.active||this.pending||!this.remote?.ready)return;
       if(this.testMode&&!this.remote?.testSupported){this.toast('当前船端不支持测试场景，请先更新固件');return;}
+      if(this.gamepad&&!this.gamepad.prepareAcquire())return;
       if(Number(this.nodes.driverMode.value)===2){
         if(!Number.isFinite(this.actualHeading)){this.toast('等待有效的真北船头航向后才能启用航向模式');return;}
         this.nodes.driverHeading.value=this.actualHeading.toFixed(2);
       }
-      this.keys.clear();this.renderKeys();this.pending=true;this.stopReason='';this.message='正在等待单片机确认接管；确认前键盘不会驱动电机';this.tone='';this.render();
+      this.keys.clear();this.renderKeys();this.pending=true;this.stopReason='';this.message='正在等待单片机确认接管；确认前控制输入保持为零';this.tone='';this.render();
       const generation=++this.generation,id=this.context.deviceId,controller=new AbortController();this.request=controller;
       try {
         const result=await this.api({deviceId:id,clientId:this.clientId,action:'acquire',...this.inputs(),throttle:0,turn:0},{timeout:3000,controller});
@@ -237,9 +242,13 @@
           return;
         }
         if(!acknowledged)throw Error(result.message||'未收到单片机接管确认，操控未启用');
+        if(this.gamepad&&!this.gamepad.confirmAcquire()){
+          this.releaseDetached(id,result.leaseId,true);throw Error('接管期间手柄已断开或急停键被按下，请重新启用操控');
+        }
         this.remote=result;this.leaseId=result.leaseId;this.sequence=0;this.active=true;
+        this.gamepad?.begin();
         this.lastInputSentAt=-Infinity;this.lastInputSignature='';this.lastInputResponseAt=performance.now();this.lastAcceptedSequence=0;
-        this.message=this.testMode?'测试场景已接管：真实 PWM 输出，按住键盘运动，松开归零。':'单片机已确认电脑接管，遥控器输入已屏蔽；按住键盘运动，松开归零。';
+        this.message=this.gamepad?.enabled()?'单片机已确认接管；摇杆回中后按住 RB 驾驶，松开 RB 停船退出。':this.testMode?'测试场景已接管：真实 PWM 输出，按住键盘运动，松开归零。':'单片机已确认电脑接管，遥控器输入已屏蔽；按住键盘运动，松开归零。';
       } catch(error) {
         if(generation===this.generation){this.message=error.name==='AbortError'?'接管确认超时，操控未启用':error.message;this.tone='error';}
       } finally {
@@ -299,6 +308,7 @@
     }
     stop(message='已停船并退出电脑操控',emergency=false) {
       const wasActive=this.active||this.pending,id=this.context.deviceId,leaseId=this.leaseId;
+      this.gamepad?.reset();
       if(!wasActive&&!leaseId){this.setTestMode(false,false);return;}
       ++this.generation;this.request?.abort();this.request=null;this.active=false;this.pending=false;this.leaseId='';
       for(const request of this.inputRequests.values())request.controller.abort();this.inputRequests.clear();
@@ -319,6 +329,7 @@
       if(event.code==='Escape'&&this.visible()){event.preventDefault();window.BoatWorkspace.exitDriving();return;}
       if(!this.active||!this.permitted())return;
       if(event.code==='Space'){event.preventDefault();this.stop('急停已触发；需要重新启用操控',true);return;}
+      if(this.gamepad?.enabled())return;
       if(event.ctrlKey||event.metaKey||event.altKey||this.editing(event.target))return;
       const key=KEYS[event.code];if(!key)return;
       event.preventDefault();if(event.repeat)return;
@@ -331,11 +342,12 @@
     pulse() {
       if(this.destroyed)return;
       const now=performance.now(),delta=Math.min(.2,Math.max(0,(now-this.lastPulse)/1000));this.lastPulse=now;
+      if(this.gamepad?.tick(now))this.render();
       if(this.active){
         if(!this.permitted())return this.stop('操控条件失效，已停船并退出操控');
         if(now-this.lastInputResponseAt>=RESPONSE_TIMEOUT_MS)return this.stop('控制链路持续无响应，已请求停船',true);
         if(Number(this.nodes.driverMode.value)===2){
-          const sign=Number(this.held('right'))-Number(this.held('left'));
+          const sign=this.motion().turn;
           if(sign){const heading=((this.headingValue()/100+sign*30*delta)%360+360)%360;this.nodes.driverHeading.value=heading.toFixed(2);}
         }
         this.sendInput();
@@ -445,7 +457,7 @@
       this.text('driverState',this.active?(this.testMode?'测试场景 · 已接管':'电脑已接管'):this.pending?'等待船端确认':this.remote?.state===2?'停船保护':'监测待机');
       this.text('driverTakeoverStatus',this.active?(this.testMode?'测试接管':'电脑已接管'):this.pending?'等待船端确认':this.remote?.state===2?'停船保护':'未接管');
       this.nodes.driverTakeoverStatus.dataset.state=state;
-      this.nodes.driverEnable.disabled=!this.permitted()||this.active||this.pending||!this.remote?.ready||(this.testMode&&!this.remote?.testSupported)||(Number(this.nodes.driverMode.value)===2&&!Number.isFinite(this.actualHeading));
+      this.nodes.driverEnable.disabled=!this.permitted()||this.active||this.pending||!this.remote?.ready||(this.gamepad&&!this.gamepad.canAcquire())||(this.testMode&&!this.remote?.testSupported)||(Number(this.nodes.driverMode.value)===2&&!Number.isFinite(this.actualHeading));
       this.nodes.driverTestMode.hidden=!this.admin();
       this.nodes.driverTestMode.disabled=this.active||this.pending||!this.permitted()||(!this.testMode&&!this.remote?.testSupported);
       this.nodes.driverTestMode.setAttribute('aria-pressed',String(this.testMode));
@@ -473,8 +485,9 @@
       this.text('driverNotice',message);this.nodes.driverNotice.dataset.tone=this.tone;
       this.renderKeys();
       this.navigation?.render();
+      this.gamepad?.render();
     }
-    destroy(){if(this.destroyed)return;this.stop('驾驶界面已关闭，已请求停船');this.setMediaFocus('');this.cloudLayout?.destroy();this.navigation?.destroy();this.layout?.destroy();this.destroyed=true;window.clearInterval(this.timer);for(const [target,event,handler]of this.handlers)target.removeEventListener(event,handler);this.handlers=[];}
+    destroy(){if(this.destroyed)return;this.stop('驾驶界面已关闭，已请求停船');this.setMediaFocus('');this.gamepad?.destroy();this.cloudLayout?.destroy();this.navigation?.destroy();this.layout?.destroy();this.destroyed=true;window.clearInterval(this.timer);for(const [target,event,handler]of this.handlers)target.removeEventListener(event,handler);this.handlers=[];}
   }
   window.BoatDriverControl=BoatDriverControl;
 })();
