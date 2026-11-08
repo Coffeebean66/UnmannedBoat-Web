@@ -1,9 +1,12 @@
 /* 震动事件只依赖有效遥测，不使用油门指令推测电机是否已经起动。 */
-const DEFAULTS = Object.freeze({ enabled: true, attitudeThresholdDegrees: 10 });
+const DEFAULTS = Object.freeze({ enabled: true, attitudeThresholdDegrees: 10, intensityPercent: 100 });
 function normalizeSettings(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.enabled !== 'boolean' ||
       !Number.isInteger(value.attitudeThresholdDegrees) || value.attitudeThresholdDegrees < 1 || value.attitudeThresholdDegrees > 90) return null;
-  return { enabled: value.enabled, attitudeThresholdDegrees: value.attitudeThresholdDegrees };
+  // 旧配置未保存强度时保留原有输出；显式传入非法值不能静默采用默认值。
+  const intensityPercent = Object.hasOwn(value, 'intensityPercent') ? value.intensityPercent : DEFAULTS.intensityPercent;
+  if (!Number.isInteger(intensityPercent) || intensityPercent < 1 || intensityPercent > 100) return null;
+  return { enabled: value.enabled, attitudeThresholdDegrees: value.attitudeThresholdDegrees, intensityPercent };
 }
 const angleDelta = (a, b) => Math.abs(((a - b + 540) % 360 + 360) % 360 - 180);
 class HapticEvents {

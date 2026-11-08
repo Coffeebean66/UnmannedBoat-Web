@@ -92,6 +92,8 @@ async function browserSession(server,mode,run){
     socket=new WebSocket(pages.find(p=>p.type==='page').webSocketDebuggerUrl);
     await new Promise((resolve,reject)=>{socket.onopen=resolve;socket.onerror=reject;});
     let serial=0;const pending=new Map(),recent=[];
+    // 页面注销或切换时会主动取消请求，Chrome 随之撤销拦截ID；这不是页面脚本异常。
+    const interceptionError=error=>{if(error.message!=='Invalid InterceptionId.')errors.push(error.message);};
     socket.onclose=event=>recent.push('socket closed '+event.code);
     socket.onerror=event=>recent.push('socket error '+(event.error?.message||event.message||'unknown'));
     socket.onmessage=event=>{
@@ -106,26 +108,26 @@ async function browserSession(server,mode,run){
           void (mode==='sdk-failed'||failures.sdk
             ?send('Fetch.failRequest',{requestId:request.requestId,errorReason:'Failed'})
             :send('Fetch.fulfillRequest',{requestId:request.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'text/javascript; charset=utf-8'}],body:Buffer.from('window.amapTestMode='+JSON.stringify(mode)+';'+fakeSdk).toString('base64')}))
-            .catch(error=>errors.push(error.message));
+            .catch(interceptionError);
         }else if(url.hostname==='server.arcgisonline.com'||/^t[0-7]\.tianditu\.gov\.cn$/.test(url.hostname)){
           tileRequests.push(url.href);
           const tile='<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"><rect width="256" height="256" fill="#224039"/><path d="M0 50 256 200M20 256 220 0" stroke="#4a6860" stroke-width="30"/><text x="12" y="24" fill="#d7e8df" font-size="12">Satellite test tile</text></svg>';
           void (failures.tiles?send('Fetch.failRequest',{requestId:request.requestId,errorReason:'Failed'}):
             send('Fetch.fulfillRequest',{requestId:request.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'image/svg+xml'}],body:Buffer.from(tile).toString('base64')}))
-            .catch(error=>errors.push(error.message));
+            .catch(interceptionError);
         }else if(url.pathname==='/api/map/settings'){
           settingsRequests.push({method:request.request.method,body:request.request.postData});
           const fail=request.request.method==='PUT'?failures.settingsWrite:failures.settingsRead;
           void (fail
             ?send('Fetch.fulfillRequest',{requestId:request.requestId,responseCode:503,responseHeaders:[{name:'Content-Type',value:'application/json'}],body:Buffer.from('{"error":"模拟地图配置保存失败"}').toString('base64')})
             :send('Fetch.continueRequest',{requestId:request.requestId}))
-            .catch(error=>errors.push(error.message));
+            .catch(interceptionError);
         }else{
           configRequests.push(url.href);
           void (mode==='config-failed'
             ?send('Fetch.fulfillRequest',{requestId:request.requestId,responseCode:503,responseHeaders:[{name:'Content-Type',value:'application/json'}],body:Buffer.from('{"error":"test-unavailable"}').toString('base64')})
             :send('Fetch.continueRequest',{requestId:request.requestId}))
-            .catch(error=>errors.push(error.message));
+            .catch(interceptionError);
         }
       }
       if(pending.has(message.id)){

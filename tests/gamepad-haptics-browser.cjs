@@ -95,4 +95,5 @@ async function main() {
   }); } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
   console.log('PASS: Chrome/MQTT haptic events, persistent admin settings, PWM acquisition and real HTTP motion with all sensor feedback missing, keyboard plus connected-controller loss vibration, 2-second nonrepeating warnings, emergency stop, driver permissions, unsupported controllers, and 320/375/1440 dark/light UI.');
 }
-main().catch(error => { console.error(error); process.exitCode = 1; });
+const run = process.argv.includes('--safety-only') ? require('./gamepad-safety-alerts-browser.cjs').main : main;
+run().catch(error => { console.error(error); process.exitCode = 1; });

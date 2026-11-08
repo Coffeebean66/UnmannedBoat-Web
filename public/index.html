@@ -118,7 +118,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">无人船监测 <span>v1.65.0</span></div>
+      <div class="sidebar-version">无人船监测 <span>v1.67.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -403,8 +403,8 @@
               <p id="driverGamepadStatus" class="driver-gamepad-status" role="status" aria-live="polite">连接后按一次手柄按钮，再刷新设备。</p>
               <p id="driverGamepadHapticsStatus" class="driver-gamepad-status" role="status" aria-live="polite">正在读取震动配置。</p>
               <button id="driverGamepadHapticsTest" type="button" class="small-button" disabled>测试震动</button>
-              <p class="driver-help">电机起动短震，0.5秒内姿态突变较强震动。开关与角度阈值由管理员在“平台设置 → 手柄震动”统一调整。</p>
-              <p class="driver-help">左摇杆前后推进，右摇杆左右转向。网页启用操控后，摇杆回中并松开 RB，再按住 RB 驾驶；松开 RB 停船退出，B / 菜单键急停。X 在未接管时切换控制模式，Y 交换图传 / 地图。手柄需先通过 USB 或系统蓝牙连接电脑。</p>
+              <p class="driver-help">电机起动短震，0.5秒内姿态突变较强震动。自动提醒开关、强度与角度阈值由管理员在“平台设置 → 手柄震动”统一调整；管理员的安全驾驶提醒可在各页面接收。</p>
+              <p class="driver-help">左摇杆前后推进，右摇杆左右转向。LB 切换启用 / 退出操控，等待确认时再按可取消，也可点击网页启用。船端确认后，摇杆回中并松开 RB，再按住 RB 驾驶；松开 RB 停船退出，B / 菜单键急停。X 在未接管时切换控制模式，Y 交换图传 / 地图。手柄需先通过 USB 或系统蓝牙连接电脑。</p>
             </section>
             <button id="driverTestMode" type="button" class="driver-test-mode" aria-pressed="false" title="真实 PWM 开环，跳过电调反馈和停稳检查；先停止操控才能切换" hidden disabled>测试场景：关</button><p class="driver-option-hint">PWM 模式缺少传感器数据也可操控，无需开启测试场景；缺失项在右上角提示 2 秒。</p><p class="driver-help">键盘 W/S 前进后退，A/D 左右转向，方向键同样有效；松键归零，空格急停。航向模式下转向输入调整目标航向，推进归零时仍可能自动转向。手动驾驶失焦、离页或断连即停船；服务器自主导航在关闭网页后继续，暂停、急停或反馈失效时停止。</p>
           </div></details></div>
@@ -650,11 +650,14 @@
         <div class="map-settings-heading"><div class="map-settings-title"><span class="card-icon teal" data-icon="settings"></span><div><h3 id="gamepadHapticsTitle">手柄震动</h3><p>管理员配置 · 对所有驾驶员生效</p></div></div></div>
         <p class="map-settings-description">电机从静止到转动时短震；0.5秒内横滚、俯仰或偏航变化达到阈值时较强震动。仅驾驶界面前台、已选择手柄且遥测有效时提示，首次连接不触发。配置保存在服务器，更新或重启后保留。</p>
         <form id="gamepadHapticsForm" autocomplete="off">
-          <label class="gamepad-haptics-switch"><input id="gamepadHapticsEnabled" type="checkbox" checked disabled>启用手柄震动</label>
-          <div class="map-settings-fields"><label for="gamepadHapticsThreshold">姿态变化阈值（° / 0.5秒）<input id="gamepadHapticsThreshold" type="number" min="1" max="90" step="1" value="10" required disabled><small>1—90°，默认10°。角度按最短方向计算，经过±180°不会误报。</small></label></div>
+          <label class="gamepad-haptics-switch"><input id="gamepadHapticsEnabled" type="checkbox" checked disabled>启用自动震动提醒</label>
+          <div class="map-settings-fields"><label for="gamepadHapticsThreshold">姿态变化阈值（° / 0.5秒）<input id="gamepadHapticsThreshold" type="number" min="1" max="90" step="1" value="10" required disabled><small>1—90°，默认10°。角度按最短方向计算，经过±180°不会误报。</small></label><label for="gamepadHapticsIntensity">震动强度（%）<input id="gamepadHapticsIntensity" type="number" min="1" max="100" step="1" value="100" required disabled><small>1%—100%，默认100%；自动提醒、测试和手动安全提醒共用。</small></label></div>
           <div class="map-settings-actions"><button id="gamepadHapticsRead" type="button" class="subtle" disabled>重新读取</button><button id="gamepadHapticsSave" type="submit" class="primary" disabled>保存震动设置</button></div>
         </form>
         <p id="gamepadHapticsStatus" class="map-settings-status" role="status" aria-live="polite">尚未读取平台震动配置。</p>
+        <div class="map-settings-actions"><button id="gamepadHapticsAlert" type="button" class="primary" disabled>提醒所有手柄 · 安全驾驶</button></div>
+        <p id="gamepadHapticsAlertStatus" class="map-settings-status" role="status" aria-live="polite">按已保存强度震动1秒，覆盖全部在线页面及其所有手柄；不受接管、页面、船况、键盘输入或自动提醒开关限制。</p>
+        <p class="map-settings-description">网页需保持打开且已登录，手柄需支持浏览器震动。后台或最小化时会尝试提醒，系统休眠或浏览器限制可能阻止震动；重连后不补发过期提醒。</p>
       </section>
       <section id="mapSettings" class="map-settings" aria-labelledby="mapSettingsTitle" hidden>
         <div class="map-settings-heading"><div class="map-settings-title"><span class="card-icon blue" data-icon="map"></span><div><h3 id="mapSettingsTitle">平台地图设置</h3><p>高德 / 天地图 · 仅保存在服务器</p></div></div><a class="map-settings-guide" href="https://github.com/Coffeebean66/UnmannedBoat-Web/blob/main/MAP_SETUP.md" target="_blank" rel="noopener noreferrer">申请与配置教程 ↗</a></div>

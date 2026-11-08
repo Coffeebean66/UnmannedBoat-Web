@@ -4,8 +4,10 @@ const { HapticEvents, normalizeSettings, angleDelta } = require('../public/utils
 const { BoatGamepadHaptics } = require('../public/gamepad-haptics');
 const telemetry = (sequence, rpm = 0, angles = [0, 0, 0]) => ({ motors: [{ Rpm: rpm, Sequence: sequence }, { Rpm: 0, Sequence: sequence }],
   imu: { eulerFresh: true, sequence, rollDegrees: angles[0], pitchDegrees: angles[1], yawDegrees: angles[2] } });
-test('震动设置严格校验开关与1—90度整数；跨北角差取最短路径', () => {
-  assert.deepEqual(normalizeSettings({ enabled: false, attitudeThresholdDegrees: 90 }), { enabled: false, attitudeThresholdDegrees: 90 });
+test('震动设置校验开关、阈值与1—100%强度；旧配置默认100%，跨北取最短路径', () => {
+  assert.deepEqual(normalizeSettings({ enabled: false, attitudeThresholdDegrees: 90 }), { enabled: false, attitudeThresholdDegrees: 90, intensityPercent: 100 });
+  assert.equal(normalizeSettings({ enabled: true, attitudeThresholdDegrees: 10, intensityPercent: 35 }).intensityPercent, 35);
+  for (const intensityPercent of [0, 101, 2.5, NaN, '50', null, undefined]) assert.equal(normalizeSettings({ enabled: true, attitudeThresholdDegrees: 10, intensityPercent }), null);
   for (const value of [null, [], {}, { enabled: 'true', attitudeThresholdDegrees: 10 }, ...[0, 91, 1.5, NaN, '10'].map(attitudeThresholdDegrees => ({ enabled: true, attitudeThresholdDegrees }))]) assert.equal(normalizeSettings(value), null);
   assert.equal(angleDelta(179, -179), 2); assert.equal(angleDelta(-179, 179), 2);
 });
@@ -55,13 +57,56 @@ function fixture() {
   Object.assign(host, { performance: { now: () => time }, setTimeout(fn) { timers.set(++timer, fn); return timer; }, clearTimeout(id) { timers.delete(id); } });
   const auth = new EventTarget(); Object.assign(auth, { ready: true, enabled: true, generation: 0, user: { username: 'admin', role: 'admin' } });
   const calls = [], reset = [], actuator = { playEffect(kind, options) { calls.push({ kind, ...options }); return Promise.resolve('complete'); }, reset() { reset.push(true); return Promise.resolve(); } };
-  const pad = { vibrationActuator: actuator }, gamepad = { source: 'gamepad', selectedKey: 'pad', sample: {}, enabled() { return this.source === 'gamepad'; }, devices: [{ value: { key: 'pad' }, pad }], scan() {} };
+  const pad = { connected: true, vibrationActuator: actuator }, pads = [pad], gamepad = { navigator: { getGamepads: () => pads }, source: 'gamepad', selectedKey: 'pad', sample: {}, enabled() { return this.source === 'gamepad'; }, devices: [{ value: { key: 'pad' }, pad }], scan() {} };
   let visible = true, response = { revision: 0, enabled: true, attitudeThresholdDegrees: 10 }, requests = [];
   const driver = { auth, document, context: { deviceId: 'boat-01', connected: true, authenticated: true }, visible: () => visible, editing: () => false, layout: {}, active: false, pending: false,
     async fetch(url, options) { requests.push({ url, ...options }); return { ok: true, json: async () => response }; } };
   const h = new BoatGamepadHaptics({ driver, gamepad, host });
-  return { h, node, driver, gamepad, host, auth, actuator, pad, calls, reset, requests, timers, set time(value) { time = value; }, set visible(value) { visible = value; }, set response(value) { response = value; }, async settle() { for (let i = 0; i < 12; i++) await Promise.resolve(); }, destroy: () => h.destroy() };
+  return { h, node, document, driver, gamepad, host, auth, actuator, pad, pads, calls, reset, requests, timers, set time(value) { time = value; }, set visible(value) { visible = value; }, set response(value) { response = value; }, async settle() { for (let i = 0; i < 12; i++) await Promise.resolve(); }, destroy: () => h.destroy() };
 }
+
+test('统一强度按比例缩放自动事件与测试；草稿未保存不影响已生效强度', async () => {
+  const f = fixture(); await f.settle();
+  f.response = { revision: 1, enabled: true, attitudeThresholdDegrees: 10, intensityPercent: 40 }; await f.h.refresh();
+  assert.equal(f.h.test(), true); assert.ok(Math.abs(f.calls.at(-1).strongMagnitude - .14) < 1e-8); assert.equal(f.calls.at(-1).weakMagnitude, .2);
+  f.node('gamepadHapticsIntensity').value = '20'; f.node('gamepadHapticsIntensity').dispatchEvent(new Event('input'));
+  f.h.notifyDataLoss(1000); assert.ok(Math.abs(f.calls.at(-1).strongMagnitude - .34) < 1e-8);
+  await f.h.save(); assert.equal(JSON.parse(f.requests.find(value => value.method === 'PUT').body).intensityPercent, 20); f.destroy();
+});
+
+const alert = (id = 'a'.repeat(32)) => { const time = Date.now(); return { id, createdAt: time, expiresAt: time + 5000, durationMs: 1000, intensityPercent: 45 }; };
+test('手动提醒覆盖所有手柄、键盘/后台/表单/无船数据/自动关闭；不改变操控或被普通清理打断', async () => {
+  const f = fixture(); await f.settle(); const pulses = [];
+  f.pads.push({ connected: true, hapticActuators: [{ pulse(strength, duration) { pulses.push({ strength, duration }); return Promise.resolve(true); } }] });
+  f.pads.push({ connected: true, vibrationActuator: { playEffect() { throw Error('unsupported'); } } }, { connected: false, vibrationActuator: f.actuator }, null);
+  f.response = { revision: 1, enabled: false, attitudeThresholdDegrees: 10, intensityPercent: 45 }; await f.h.refresh();
+  f.driver.active = true; f.driver.leaseId = 'retain-this-lease'; f.driver.context = { connected: false, authenticated: false }; f.driver.layout.editing = true;
+  f.visible = false; f.document.hidden = true; f.document.hasFocus = () => false; f.document.querySelector = () => ({ open: true }); f.gamepad.source = 'keyboard'; f.gamepad.sample = null;
+  f.h.alertServerOffset = 0; assert.equal(f.h.receiveAlert(alert()), true);
+  assert.equal(f.calls.length, 1); assert.equal(f.calls[0].duration, 1000); assert.equal(f.calls[0].strongMagnitude, .45); assert.equal(f.calls[0].weakMagnitude, .45);
+  assert.deepEqual(pulses, [{ strength: .45, duration: 1000 }]);
+  f.h.tick(); f.host.dispatchEvent(new Event('blur')); f.host.dispatchEvent(new Event('boat-view-change')); f.document.dispatchEvent(new Event('visibilitychange'));
+  assert.equal(f.h.alertActuators.size, 2); assert.equal(f.reset.length, 0, 'normal lifecycle cannot cancel a manual reminder');
+  assert.equal(f.driver.active, true); assert.equal(f.driver.leaseId, 'retain-this-lease');
+  assert.equal(f.h.play('attitude', 1000), false, 'automatic effects cannot preempt the administrator');
+  f.timers.get(f.h.alertTimer)(); assert.equal(f.h.alertActuators.size, 0); assert.equal(f.reset.length, 1); assert.deepEqual(pulses.at(-1), { strength: 0, duration: 1 }); f.destroy();
+});
+
+test('驾驶员和访客均能接收安全提醒；注销、销毁停止震动并拒绝后续事件', async () => {
+  for (const role of ['driver', 'guest']) {
+    const f = fixture(); await f.settle(); f.auth.user = { username: role, role }; f.auth.generation++; f.auth.dispatchEvent(new Event('change')); await f.settle();
+    f.h.alertServerOffset = 0; assert.equal(f.h.receiveAlert(alert()), true, role); assert.equal(await f.h.broadcast(), false, 'only administrator can send');
+    f.auth.user = null; f.auth.generation++; f.auth.dispatchEvent(new Event('change')); assert.equal(f.h.alertActuators.size, 0); assert.equal(f.h.receiveAlert(alert('b'.repeat(32))), false); f.destroy();
+  }
+});
+
+test('安全提醒拒绝过期、重复和非法载荷，重连不重放，失败的硬件不影响其他设备', async () => {
+  const f = fixture(); await f.settle(); f.h.alertServerOffset = 0;
+  const valid = alert(); assert.equal(f.h.receiveAlert(valid), true); assert.equal(f.h.receiveAlert(valid), false); assert.equal(f.calls.length, 1);
+  for (const change of [{ intensityPercent: 0 }, { intensityPercent: 101 }, { durationMs: 100000 }, { id: 'invalid' }, { createdAt: Date.now() - 10000, expiresAt: Date.now() - 5000 }]) assert.equal(f.h.receiveAlert({ ...alert('b'.repeat(32)), ...change }), false);
+  f.h.closeAlerts(); assert.equal(f.h.receiveAlert(alert('c'.repeat(32))), false, 'a new stream needs a clock handshake');
+  f.destroy(); assert.equal(f.h.alertActuators.size, 0); assert.equal(f.timers.size, 0);
+});
 test('真实遥测驱动双马达震动，初始只建基准；禁用、切船、切输入、失焦和离页取消', async () => {
   const f = fixture(); await f.settle();
   for (let at = 0; at <= 300; at += 100) f.h.updateTelemetry(telemetry(at), at);

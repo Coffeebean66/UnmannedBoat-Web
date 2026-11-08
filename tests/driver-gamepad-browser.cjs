@@ -4,6 +4,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('n
 const {browserSession,login,startTelemetry}=require('./amap-browser.cjs');
 const {createDriverFixture}=require('./driver-browser-fixture.cjs');
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const lbOnly=process.argv.includes('--lb-only');
 const gamepadScript=`window.gamepadTest={pads:[{index:0,id:'Xbox Wireless Controller · browser test',mapping:'standard',connected:true,axes:[0,0,0,0],buttons:Array.from({length:17},()=>({pressed:false,value:0})),timestamp:0}]};Object.defineProperty(navigator,'getGamepads',{configurable:true,value:()=>gamepadTest.pads});window.setPadButton=(index,value)=>{gamepadTest.pads[0].buttons[index]={pressed:value,value:Number(value)};};`;
 async function main(){
   const output=path.resolve(__dirname,'../.test-output');fs.mkdirSync(output,{recursive:true});
@@ -11,7 +12,13 @@ async function main(){
   const server=createDriverFixture({env:{BOAT_ACCOUNTS_FILE:path.join(directory,'accounts.json'),BOAT_MAP_CONFIG_FILE:path.join(directory,'map.json'),BOAT_DRIVER_LAYOUT_FILE:path.join(directory,'driver-layout.json'),BOAT_TELEMETRY_HISTORY_FILE:path.join(directory,'history.json'),BOAT_OTA_KEY:''}});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   try{await browserSession(server,'gamepad',async browser=>{
-    const {evaluate,until,send,viewportShot}=browser;
+    const {evaluate,until:waitUntil,send,viewportShot}=browser;
+    const until=async(expression,...options)=>{
+      try{await waitUntil(expression,...options);}catch(error){
+        const state=await evaluate('(()=>{const d=boatMonitor.driver,g=d.gamepad;return {focused:document.hasFocus(),hidden:document.hidden,active:d.active,pending:d.pending,reason:d.stopReason,message:d.message,mode:d.nodes.driverMode.value,source:g.source,sample:g.sample,engaged:g.engaged,needsNeutral:g.needsNeutral,input:d.inputs(),responseAge:performance.now()-d.lastInputResponseAt,sampleAge:performance.now()-g.lastTick};})()');
+        throw Error(error.message+'\nDriver state: '+JSON.stringify(state)+'\nRecent HTTP commands: '+JSON.stringify(server.driverFixture.calls.slice(-8)),{cause:error});
+      }
+    };
     const click=async id=>{
       await evaluate('document.getElementById('+JSON.stringify(id)+').scrollIntoView({block:"nearest"})');
       const point=await evaluate('(()=>{const b=document.getElementById('+JSON.stringify(id)+'),r=b.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;return {x,y,hit:document.elementFromPoint(x,y)?.closest("button")===b&&!b.disabled};})()');
@@ -39,6 +46,8 @@ async function main(){
     await button(5,false);await evaluate('document.getElementById("driverControlOptions").open=false');
     // 截图与软件 GPU 预热在接管前完成，保持正式600ms响应保护。
     await viewportShot('gamepad-ready-desktop');
+    await send('Page.bringToFront');
+    if(!lbOnly){
     server.driverFixture.ackDelay=350;await enable();server.driverFixture.ackDelay=100;
     await engage();await axes(-1,1);await until('boatMonitor.driver.inputs().throttle===200&&boatMonitor.driver.inputs().turn===200');
     await wait(130);assert.ok(server.driverFixture.calls.some(call=>call.action==='input'&&call.throttle===200&&call.turn===200),'Actual HTTP commands carry bounded analog motion');
@@ -65,11 +74,40 @@ async function main(){
     await evaluate('document.getElementById("driverInputSource").value="keyboard";document.getElementById("driverInputSource").dispatchEvent(new Event("change"));void 0');
     await until('!boatMonitor.driver.active');assert.equal(await evaluate('boatMonitor.driver.gamepad.source'),'keyboard');
     await button(5,false);await axes(0,0);
-    await evaluate('document.getElementById("driverInputSource").value="gamepad";document.getElementById("driverInputSource").dispatchEvent(new Event("change"));document.getElementById("driverTestMode").click();void 0');
+    await evaluate('document.getElementById("driverInputSource").value="gamepad";document.getElementById("driverInputSource").dispatchEvent(new Event("change"));boatMonitor.driver.lastPoll=0;void boatMonitor.driver.poll()');
+    await until('!document.getElementById("driverTestMode").disabled');
+    await evaluate('document.getElementById("driverTestMode").click();void 0');
     await until('boatMonitor.driver.testMode');await enable();await engage();await axes(-1,0);
     await until('boatMonitor.driver.inputs().throttle===200');await wait(120);
     assert.ok(server.driverFixture.calls.some(call=>call.action==='input'&&call.testMode===true&&call.mode===0&&call.throttle===200),'Controller preserves the existing real-PWM test scene');
     await button(1,true);await until('!boatMonitor.driver.active');await button(1,false);await button(5,false);await axes(0,0);
+    }
+    // LB 沿用真实 HTTP 接管 / 释放；长按一次，等待确认时可再次按下取消。
+    await evaluate('document.activeElement?.blur();document.getElementById("driverMode").value="0";document.getElementById("driverMode").dispatchEvent(new Event("change"));boatMonitor.driver.lastPoll=0;void boatMonitor.driver.poll()');
+    await until('!document.getElementById("driverEnable").disabled');
+    await until('document.hasFocus()&&boatMonitor.driver.gamepad.toggleReady&&performance.now()-boatMonitor.driver.gamepad.lastTick<250');
+    server.driverFixture.ackDelay=450;const acquisitions=server.driverFixture.calls.filter(call=>call.action==='acquire').length;
+    await button(4,true);await until('boatMonitor.driver.pending');
+    assert.equal(await evaluate('boatMonitor.driver.active'),false,'LB waits for the vessel acknowledgement');
+    await until('boatMonitor.driver.active');await wait(250);
+    assert.equal(await evaluate('boatMonitor.driver.active'),true,'Holding LB does not toggle twice');
+    assert.equal(server.driverFixture.calls.filter(call=>call.action==='acquire').length,acquisitions+1);
+    assert.equal(await evaluate('boatMonitor.driver.gamepad.engaged'),false,'RB remains required after LB acquire');
+    await button(4,false);await until('!boatMonitor.driver.gamepad.sample.lb');
+    await engage();await axes(-1,0);await until('boatMonitor.driver.inputs().throttle===200');
+    await until('boatMonitor.driver.remote?.sequence>=2');
+    assert.ok(server.driverFixture.calls.some(call=>call.action==='input'&&call.throttle===200),'LB-acquired lease carries real HTTP motion after RB enable');
+    await button(4,true);await until('!boatMonitor.driver.active');
+    assert.match(await evaluate('boatMonitor.driver.stopReason'),/LB/);
+    await until('!boatMonitor.driver.remote?.active');
+    assert.ok(server.driverFixture.calls.some(call=>call.action==='release'&&call.throttle===0&&call.turn===0),'LB releases with zero motion');
+    await button(4,false);await button(5,false);await axes(0,0);await until('!boatMonitor.driver.gamepad.sample.lb');
+    await evaluate('boatMonitor.driver.lastPoll=0;void boatMonitor.driver.poll()');await until('!document.getElementById("driverEnable").disabled');
+    server.driverFixture.ackDelay=1000;await button(4,true);await until('boatMonitor.driver.pending');
+    await button(4,false);await until('!boatMonitor.driver.gamepad.sample.lb');await button(4,true);await until('!boatMonitor.driver.pending');
+    assert.match(await evaluate('boatMonitor.driver.stopReason'),/LB.*取消/);
+    await button(4,false);await wait(1050);assert.equal(await evaluate('boatMonitor.driver.active'),false,'A cancelled acquire cannot reactivate later');
+    if(lbOnly)return;
     await evaluate('document.getElementById("driverInputSource").value="gamepad";document.getElementById("driverInputSource").dispatchEvent(new Event("change"));document.getElementById("driverGamepadDeadzone").value="20";document.getElementById("driverGamepadDeadzone").dispatchEvent(new Event("change"));void 0');
     for(const [width,height]of [[1440,900],[375,812],[320,667]]){
       await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<760});
@@ -88,6 +126,6 @@ async function main(){
     await evaluate('void BoatAuth.logout()');await until('!BoatAuth.user');await login(browser,'observer','browser-guest-test-only');
     assert.equal(await evaluate('document.getElementById("driverInputSource").disabled'),true,'Guests cannot select a driving input');
   });}finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
-  console.log('PASS: actual Chrome/HTTP driver path with simulated Xbox; neutral acquire, proportional axes/deadzone/limits, keyboard exclusion, RB release, B stop, Y edge, disconnect/reconnect, heading control, source switch, real-PWM test scene, 320/375/1440 dark/light options, reload and guest restrictions.');
+  console.log(lbOnly?'PASS: actual Chrome/HTTP LB acquire, vessel ACK, long hold, RB motion, zero-input release and pending cancellation with simulated Xbox.':'PASS: actual Chrome/HTTP driver path with simulated Xbox; LB acquire/release/hold/pending cancellation, neutral acquire, proportional axes/deadzone/limits, keyboard exclusion, RB release, B stop, Y edge, disconnect/reconnect, heading control, source switch, real-PWM test scene, 320/375/1440 dark/light options, reload and guest restrictions.');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

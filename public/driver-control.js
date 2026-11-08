@@ -227,10 +227,10 @@
     payload(action,id=this.context.deviceId,leaseId=this.leaseId) {
       return {deviceId:id,clientId:this.clientId,action,leaseId,sequence:++this.sequence,...this.inputs()};
     }
-    async acquire() {
+    async acquire({gamepadLB=false}={}) {
       if(!this.permitted()||this.active||this.pending||!this.remote?.ready)return;
       if(this.testMode&&!this.remote?.testSupported){this.toast('当前船端不支持测试场景，请先更新固件');return;}
-      if(this.gamepad&&!this.gamepad.prepareAcquire())return;
+      if(this.gamepad&&!this.gamepad.prepareAcquire({allowLB:gamepadLB}))return;
       if(Number(this.nodes.driverMode.value)===2){
         if(!Number.isFinite(this.actualHeading)){this.toast('等待有效的真北船头航向后才能启用航向模式');return;}
         this.nodes.driverHeading.value=this.actualHeading.toFixed(2);

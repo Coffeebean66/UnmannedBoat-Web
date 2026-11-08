@@ -11,7 +11,7 @@ function setup(){
     replaceChildren(...children){this.children=children;}
   }
   const nodes=new Map(),node=id=>{if(!nodes.has(id))nodes.set(id,new Node());return nodes.get(id);};
-  const document={activeElement:null,modal:false,getElementById:node,createElement:()=>new Node(),querySelector(){return this.modal?{open:true}:null;},querySelectorAll:()=>[]};
+  const document=Object.assign(new EventTarget(),{activeElement:null,modal:false,focused:true,hasFocus(){return this.focused;},getElementById:node,createElement:()=>new Node(),querySelector(){return this.modal?{open:true}:null;},querySelectorAll:()=>[]});
   const stored=new Map(),window=new EventTarget();Object.assign(window,{Event,isSecureContext:true,setTimeout,clearTimeout,localStorage:{getItem:key=>stored.get(key)??null,setItem:(key,value)=>stored.set(key,value)},BoatWorkspace:{current:'driving'}});
   let now=0,visible=true,role='admin',pads=[makePad()],failure;
   const navigator={getGamepads(){if(failure)throw failure;return pads;}};
@@ -50,6 +50,63 @@ test('默认键盘，选手柄不会自动接管；回中并松开所有按钮�
   h.button(5,false);h.button(0);await h.acquire();assert.equal(h.calls.length,0,'A cannot arm or bypass neutral');
   h.button(0,false);await h.acquire();assert.equal(h.calls[0].action,'acquire');assert.equal(h.calls[0].throttle,0);assert.equal(h.driver.active,true);
   assert.deepEqual(h.driver.gamepad.input(),{forward:0,turn:0});h.close();
+});
+
+test('LB 按下切换接管，长按不重复；船端确认后仍须 RB 使能，驾驶中 LB 零输入退出',async()=>{
+  const h=setup();h.driver.gamepad.selectSource('gamepad');h.tick();h.button(4);h.tick();
+  assert.equal(h.driver.pending,true);assert.equal(h.driver.active,false);
+  await settle();assert.equal(h.driver.active,true);assert.equal(h.calls.filter(call=>call.action==='acquire').length,1);
+  h.tick();h.tick();await settle();assert.equal(h.driver.active,true);assert.equal(h.calls.filter(call=>call.action==='acquire').length,1);
+  h.pad.axes[1]=-1;h.tick();await settle();assert.equal(h.calls.filter(call=>call.action==='input').at(-1).throttle,0,'LB alone cannot produce motion');
+  h.button(4,false);h.pad.axes[1]=0;h.tick();h.button(5);h.tick();h.pad.axes[1]=-1;h.tick();await settle();
+  assert.equal(h.calls.filter(call=>call.action==='input').at(-1).throttle,200);
+  h.button(4);h.tick();await settle();assert.equal(h.driver.active,false);assert.match(h.stops.at(-1).message,/LB/);
+  assert.ok(h.calls.some(call=>call.action==='release'&&call.throttle===0&&call.turn===0));
+  h.tick();await settle();assert.equal(h.calls.filter(call=>call.action==='acquire').length,1);h.close();
+});
+
+test('LB 可取消正在等待的接管；迟到船端 ACK 不重新启用',async()=>{
+  const h=setup();h.driver.gamepad.selectSource('gamepad');let acknowledge;h.deferAcquire=()=>new Promise(resolve=>{acknowledge=resolve;});
+  h.tick();h.button(4);h.tick();await settle();assert.equal(h.driver.pending,true);
+  h.button(4,false);h.tick();h.button(4);h.tick();await settle();
+  assert.equal(h.driver.pending,false);assert.equal(h.driver.active,false);assert.match(h.stops.at(-1).message,/取消/);
+  acknowledge({active:true,owned:true,state:1,status:'active',leaseId:'0011223344556677',testMode:false});await settle();
+  assert.equal(h.driver.active,false);assert.ok(h.calls.some(call=>call.action==='release'));assert.equal(h.calls.some(call=>call.action==='input'),false);h.close();
+});
+
+test('LB 不能绕过回中、其他按键、连接就绪、角色、手动模式及编辑条件',async()=>{
+  for(const condition of ['axis','RB','A','X','Y','stop','not-ready','guest','task','home','form','modal','layout','unfocused','keyboard']){
+    const h=setup();h.driver.gamepad.selectSource('gamepad');h.tick();
+    if(condition==='axis')h.pad.axes[1]=-.5;
+    for(const [name,index]of [['RB',5],['A',0],['X',2],['Y',3],['stop',1]])if(condition===name)h.button(index);
+    if(condition==='not-ready')h.driver.remote.ready=false;
+    if(condition==='guest')h.role='guest';
+    if(['task','home'].includes(condition))h.driver.navigation.mode=condition;
+    if(condition==='form')h.document.activeElement={closest:()=>true};
+    if(condition==='modal')h.document.modal=true;
+    if(condition==='layout')h.driver.layout.editing=true;
+    if(condition==='unfocused')h.document.focused=false;
+    if(condition==='keyboard')h.driver.gamepad.selectSource('keyboard');
+    h.button(4);h.tick();await settle();assert.equal(h.calls.some(call=>call.action==='acquire'),false,condition);
+    assert.equal(h.driver.active,false,condition);h.close();
+  }
+});
+
+test('连接、失焦、离页、采样中断或解除编辑后按住的 LB 不自动接管，松开重按才生效',async()=>{
+  for(const transition of ['initial','reconnect','blur','hidden','gap','modal','role','mode']){
+    const h=setup();h.driver.gamepad.selectSource('gamepad');h.tick();
+    if(transition==='initial'){h.driver.gamepad.selectSource('keyboard');h.button(4);h.driver.gamepad.selectSource('gamepad');}
+    if(transition==='reconnect'){const pad=h.pad;h.pads=[];h.tick();h.pads=[pad];h.button(4);}
+    if(transition==='blur'){h.document.focused=false;h.window.dispatchEvent(new Event('blur'));h.document.focused=true;h.button(4);}
+    if(transition==='hidden'){h.visible=false;h.tick();h.visible=true;h.button(4);}
+    if(transition==='gap')h.button(4);
+    if(transition==='modal'){h.document.modal=true;h.tick();h.document.modal=false;h.button(4);}
+    if(transition==='role'){h.role='guest';h.tick();h.role='driver';h.button(4);}
+    if(transition==='mode'){h.driver.navigation.mode='task';h.tick();h.driver.navigation.mode='manual';h.button(4);}
+    h.tick(transition==='gap'?500:100);await settle();h.tick();await settle();
+    assert.equal(h.calls.some(call=>call.action==='acquire'),false,transition);
+    h.button(4,false);h.tick();h.button(4);h.tick();await settle();assert.equal(h.driver.active,true,transition);h.close();
+  }
 });
 
 test('RB 居中使能后比例推进/转向并遵守运动幅度；键盘不能叠加，松 RB 释放操控',async()=>{
