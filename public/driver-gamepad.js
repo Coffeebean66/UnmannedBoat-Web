@@ -2,6 +2,7 @@
 (function(scope){
   'use strict';
   const clamp=(value,min,max)=>Math.max(min,Math.min(max,value));
+  const MAP_PAN_PIXELS_PER_SECOND=300;
   const pressed=button=>button?.pressed===true||(Number.isFinite(button?.value)&&button.value>.5);
   // 死区外重新缩放到满量程，满杆仍对应网页设定的运动幅度。
   function axis(value,deadzone){
@@ -15,7 +16,8 @@
     if(!axes.every(value=>Number.isFinite(value)&&Math.abs(value)<=1))return null;
     if(!Array.from(pad.buttons).slice(0,10).every(button=>button&&typeof button.pressed==='boolean'&&Number.isFinite(button.value)&&button.value>=0&&button.value<=1))return null;
     return {key:JSON.stringify([pad.index,pad.id]),index:pad.index,id:pad.id,forward:axis(-axes[1],deadzone),turn:axis(axes[2],deadzone),
-      neutral:axes.every(value=>Math.abs(value)<=deadzone),lb:pressed(pad.buttons[4]),rb:pressed(pad.buttons[5]),stop:pressed(pad.buttons[1])||pressed(pad.buttons[9]),mode:pressed(pad.buttons[2]),swap:pressed(pad.buttons[3]),
+      neutral:axes.every(value=>Math.abs(value)<=deadzone),lb:pressed(pad.buttons[4]),rb:pressed(pad.buttons[5]),stop:pressed(pad.buttons[1])||pressed(pad.buttons[9]),mode:pressed(pad.buttons[2]),swap:pressed(pad.buttons[3]),follow:pressed(pad.buttons[0]),
+      mapX:Number(pressed(pad.buttons[15]))-Number(pressed(pad.buttons[14])),mapY:Number(pressed(pad.buttons[13]))-Number(pressed(pad.buttons[12])),
       buttonsReleased:!Array.from(pad.buttons).some(pressed),buttonsReleasedExceptLB:!Array.from(pad.buttons).some((button,index)=>index!==4&&pressed(button))};
   }
   class BoatDriverGamepad{
@@ -106,9 +108,16 @@
             else if(d.permitted())void d.acquire({gamepadLB:true});
           }
           if(!sample.lb&&sample.swap&&!previous?.swap)d.setMediaFocus(d.nodes['view-driving'].dataset.primary==='map'?'video':'map');
+          // A 只恢复跟随，长按不重复触发；与十字键同时按住时优先跟随船位。
+          if(!sample.lb&&sample.follow&&!previous?.follow)d.restoreMainMapFollow();
           if(!sample.lb&&sample.mode&&!previous?.mode&&!d.active&&!d.pending&&d.permitted()&&sample.neutral&&!sample.rb&&!d.nodes.driverMode.disabled){
             let mode=(Number(d.nodes.driverMode.value)+1)%3;if(mode===2&&!Number.isFinite(d.actualHeading))mode=0;
             d.nodes.driverMode.value=String(mode);d.nodes.driverMode.dispatchEvent(new this.scope.Event('change'));
+          }
+          // 十字键沿屏幕方向浏览主地图；与摇杆 / 接管无关，卡顿后不补走积压距离。
+          if(!sample.follow&&last!==null&&now>last&&now-last<500&&(sample.mapX||sample.mapY)){
+            const distance=MAP_PAN_PIXELS_PER_SECOND*Math.min(now-last,150)/1000/Math.hypot(sample.mapX,sample.mapY);
+            d.panMainMap(sample.mapX*distance,sample.mapY*distance);
           }
           if(!d.active){this.reset();}
           else if(!d.permitted()){this.reset();}

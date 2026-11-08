@@ -9,6 +9,7 @@ function setup(){
     constructor(){super();this.dataset={};this.value='';this.textContent='';this.hidden=false;this.disabled=false;}
     click(){if(!this.disabled)this.dispatchEvent(new Event('click'));}
     replaceChildren(...children){this.children=children;}
+    setAttribute(name,value){this[name]=value;}
   }
   const nodes=new Map(),node=id=>{if(!nodes.has(id))nodes.set(id,new Node());return nodes.get(id);};
   const document=Object.assign(new EventTarget(),{activeElement:null,modal:false,focused:true,hasFocus(){return this.focused;},getElementById:node,createElement:()=>new Node(),querySelector(){return this.modal?{open:true}:null;},querySelectorAll:()=>[]});
@@ -16,8 +17,10 @@ function setup(){
   let now=0,visible=true,role='admin',pads=[makePad()],failure;
   const navigator={getGamepads(){if(failure)throw failure;return pads;}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../public/driver-control.js'),'utf8'),{window,AbortController,performance:{now:()=>now}});
-  const driver=Object.create(window.BoatDriverControl.prototype),calls=[],toasts=[],stops=[];
-  Object.assign(driver,{document,nodes:{'view-driving':node('view-driving'),driverMode:node('driverMode'),driverLimit:node('driverLimit'),driverHeading:node('driverHeading'),driverEmergency:node('driverEmergency')},
+  const driver=Object.create(window.BoatDriverControl.prototype),calls=[],toasts=[],stops=[],pans=[],followChanges=[];
+  node('mapFollow').addEventListener('change',()=>followChanges.push(node('mapFollow').checked));
+  const map={ready:true,switching:false,panScreenBy(offset){if(!this.ready||this.switching)return false;pans.push(Array.from(offset));return true;}};window.boatMonitor={map};
+  Object.assign(driver,{document,nodes:{'view-driving':node('view-driving'),driverMode:node('driverMode'),driverLimit:node('driverLimit'),driverHeading:node('driverHeading'),driverEmergency:node('driverEmergency'),driverMapFollow:node('driverMapFollow')},
     context:{deviceId:'boat-01'},keys:new Set(),generation:0,sequence:0,clientId:'1122334455667788',leaseId:'',active:false,pending:false,testMode:false,remote:{ready:true,testSupported:true},
     inputRequests:new Map(),lastInputSentAt:-Infinity,lastInputSignature:'',lastInputResponseAt:0,lastAcceptedSequence:0,lastPulse:0,lastPoll:0,layout:{editing:false},navigation:{mode:'manual'},destroyed:false,
     visible:()=>visible,admin:()=>['admin','driver'].includes(role),permitted:()=>visible&&['admin','driver'].includes(role)&&!driver.layout.editing&&driver.navigation.mode==='manual',
@@ -27,7 +30,7 @@ function setup(){
   driver.nodes.driverMode.value='0';driver.nodes.driverLimit.value='20';driver.nodes.driverHeading.value='359';driver.nodes['view-driving'].dataset.primary='video';
   driver.nodes.driverEmergency.addEventListener('click',()=>driver.stop('手柄急停',true));
   driver.nodes.driverMode.addEventListener('change',()=>driver.gamepad.reset());
-  const h={driver,document,window,node,calls,stops,toasts,stored,get pad(){return pads[0];},set pads(value){pads=value;},set failure(value){failure=value;},set role(value){role=value;},set visible(value){visible=value;},
+  const h={driver,document,window,node,calls,stops,toasts,stored,map,pans,followChanges,get pad(){return pads[0];},set pads(value){pads=value;},set failure(value){failure=value;},set role(value){role=value;},set visible(value){visible=value;},
     button(index,value=true){pads[0].buttons[index]={pressed:value,value:Number(value)};},tick(delta=100){now+=delta;driver.pulse();},
     async acquire(){await driver.acquire();await settle();},close(){driver.stop('test end');driver.gamepad.destroy();}};
   driver.gamepad=new BoatDriverGamepad({driver,scope:window,navigator,document});
@@ -41,6 +44,105 @@ test('Xbox 标准轴映射、死区缩放及无效设备拒绝；静止时间戳
   pad.axes=[.1,-.1,.15,0];assert.equal(readPad(pad).forward,0);assert.equal(readPad(pad).turn,0);assert.equal(readPad(pad).neutral,true);
   for(const change of [{mapping:''},{connected:false},{axes:[0,NaN,0,0]},{axes:[0,2,0,0]},{buttons:[]},{buttons:Array(17)}])assert.equal(readPad({...makePad(),...change}),null);
   assert.equal(readPad(makePad()).buttonsReleased,true);
+});
+
+test('十字键读取标准12—15按钮，相反方向抵消，较少按钮的手柄仍可驾驶',()=>{
+  const pad=makePad();pad.buttons[12]={pressed:true,value:1};pad.buttons[15]={pressed:false,value:1};
+  assert.equal(readPad(pad).mapX,1);assert.equal(readPad(pad).mapY,-1);
+  pad.buttons[13]={pressed:true,value:1};pad.buttons[14]={pressed:true,value:1};
+  assert.equal(readPad(pad).mapX,0);assert.equal(readPad(pad).mapY,0);
+  pad.buttons.length=10;assert.equal(readPad(pad).mapX,0);assert.equal(readPad(pad).mapY,0);
+});
+
+test('主地图十字键长按持续平移、松开即停，未接管也可浏览并关闭跟随',()=>{
+  const h=setup();h.driver.gamepad.selectSource('gamepad');h.driver.nodes['view-driving'].dataset.primary='map';h.node('mapFollow').checked=true;h.tick();
+  h.button(15);h.tick();h.tick();assert.equal(h.pans.length,2);assert.deepEqual(h.pans[0],[30,0]);
+  assert.equal(h.node('mapFollow').checked,false);assert.equal(h.node('driverMapFollow')['aria-pressed'],'false');
+  h.button(15,false);h.tick();assert.equal(h.pans.length,2);assert.equal(h.calls.length,0,'浏览地图不发送接管或运动');
+  h.button(12);h.tick();assert.deepEqual(h.pans.at(-1),[0,-30]);
+  h.button(12,false);h.button(13);h.tick();assert.deepEqual(h.pans.at(-1),[0,30]);
+  h.button(13,false);h.button(14);h.tick();assert.deepEqual(h.pans.at(-1),[-30,0]);h.close();
+});
+
+test('十字键斜向速度归一化、相反方向抵消，采样中断不积压平移距离',()=>{
+  const h=setup();h.driver.gamepad.selectSource('gamepad');h.driver.nodes['view-driving'].dataset.primary='map';h.tick();h.button(12);h.button(15);h.tick();
+  assert.ok(Math.abs(Math.hypot(...h.pans.at(-1))-30)<1e-9);assert.ok(h.pans[0][0]>0&&h.pans[0][1]<0);
+  h.button(13);h.button(14);h.tick();assert.equal(h.pans.length,1);
+  h.button(12,false);h.button(13,false);h.button(14,false);h.tick(450);assert.deepEqual(h.pans.at(-1),[45,0]);
+  const count=h.pans.length;h.tick(1000);assert.equal(h.pans.length,count);h.tick();assert.deepEqual(h.pans.at(-1),[30,0]);h.close();
+});
+
+test('仅前台主地图与所选手柄可平移，切图传、编辑、失焦、断开及急停即停止',()=>{
+  for(const condition of ['video','keyboard','hidden','guest','form','modal','layout','unfocused','disconnected','not-ready','switching','stop']){
+    const h=setup();h.driver.gamepad.selectSource('gamepad');h.driver.nodes['view-driving'].dataset.primary='map';h.node('mapFollow').checked=true;h.tick();
+    if(condition==='video')h.driver.nodes['view-driving'].dataset.primary='video';
+    if(condition==='keyboard')h.driver.gamepad.selectSource('keyboard');
+    if(condition==='hidden')h.visible=false;
+    if(condition==='guest')h.role='guest';
+    if(condition==='form')h.document.activeElement={closest:()=>true};
+    if(condition==='modal')h.document.modal=true;
+    if(condition==='layout')h.driver.layout.editing=true;
+    if(condition==='unfocused')h.document.focused=false;
+    if(condition==='not-ready')h.map.ready=false;
+    if(condition==='switching')h.map.switching=true;
+    if(condition==='stop')h.button(1);
+    h.button(15);if(condition==='disconnected')h.pads=[];h.tick();
+    assert.equal(h.pans.length,0,condition);assert.equal(h.node('mapFollow').checked,true,condition+' 不关闭跟随');h.close();
+  }
+});
+
+test('自动任务 / 守位可浏览主地图；RB摇杆驾驶与十字键互不叠加',async()=>{
+  for(const mode of ['task','home']){
+    const h=setup();h.driver.gamepad.selectSource('gamepad');h.driver.navigation.mode=mode;h.driver.nodes['view-driving'].dataset.primary='map';h.tick();h.button(15);h.tick();
+    assert.deepEqual(h.pans[0],[30,0]);assert.equal(h.calls.length,0);h.close();
+  }
+  const h=setup();await engage(h);h.driver.nodes['view-driving'].dataset.primary='map';h.pad.axes[1]=-1;h.pad.axes[2]=.5;h.button(15);h.tick();await settle();
+  assert.deepEqual(h.pans[0],[30,0]);assert.equal(h.calls.filter(call=>call.action==='input').at(-1).throttle,200);assert.equal(h.calls.filter(call=>call.action==='input').at(-1).turn,82);
+  h.button(15,false);h.tick();await settle();assert.equal(h.driver.active,true);assert.equal(h.pans.length,1);h.close();
+});
+
+test('主地图按A恢复跟随并通知居中，长按只触发一次、再按保持开启且不接管',()=>{
+  const h=setup();h.driver.gamepad.selectSource('gamepad');h.driver.nodes['view-driving'].dataset.primary='map';h.tick();
+  h.button(15);h.tick();assert.equal(h.node('mapFollow').checked,false);h.button(15,false);h.button(0);h.tick();
+  assert.equal(h.driver.gamepad.sample.follow,true);assert.equal(h.node('mapFollow').checked,true);assert.equal(h.node('driverMapFollow')['aria-pressed'],'true');assert.deepEqual(h.followChanges,[true]);
+  h.tick();h.tick();assert.deepEqual(h.followChanges,[true],'长按不重复居中');
+  h.button(0,false);h.tick();h.button(0);h.tick();assert.equal(h.node('mapFollow').checked,true,'A不切换为关闭');assert.deepEqual(h.followChanges,[true,true]);assert.equal(h.calls.length,0);h.close();
+});
+
+test('A与十字键同时按住优先跟随，松开A后可重新浏览地图',()=>{
+  const h=setup();h.driver.gamepad.selectSource('gamepad');h.driver.nodes['view-driving'].dataset.primary='map';h.tick();h.button(15);h.button(0);h.tick();h.tick();
+  assert.equal(h.node('mapFollow').checked,true);assert.equal(h.pans.length,0);assert.deepEqual(h.followChanges,[true]);
+  h.button(0,false);h.tick();assert.deepEqual(h.pans[0],[30,0]);assert.equal(h.node('mapFollow').checked,false);h.close();
+});
+
+test('A恢复跟随遵守主地图、手柄来源、前台/焦点、编辑、地图就绪及急停条件',()=>{
+  for(const condition of ['video','keyboard','hidden','guest','form','modal','layout','unfocused','disconnected','not-ready','switching','stop','LB']){
+    const h=setup();h.driver.gamepad.selectSource('gamepad');h.driver.nodes['view-driving'].dataset.primary='map';h.node('mapFollow').checked=false;h.tick();
+    if(condition==='video')h.driver.nodes['view-driving'].dataset.primary='video';
+    if(condition==='keyboard')h.driver.gamepad.selectSource('keyboard');
+    if(condition==='hidden')h.visible=false;
+    if(condition==='guest')h.role='guest';
+    if(condition==='form')h.document.activeElement={closest:()=>true};
+    if(condition==='modal')h.document.modal=true;
+    if(condition==='layout')h.driver.layout.editing=true;
+    if(condition==='unfocused')h.document.focused=false;
+    if(condition==='not-ready')h.map.ready=false;
+    if(condition==='switching')h.map.switching=true;
+    if(condition==='stop')h.button(1);
+    if(condition==='LB')h.button(4);
+    h.button(0);if(condition==='disconnected')h.pads=[];h.tick();
+    assert.equal(h.node('mapFollow').checked,false,condition);assert.equal(h.followChanges.length,0,condition);assert.equal(h.calls.some(call=>call.action==='acquire'),false,condition);h.close();
+  }
+});
+
+test('任务/守位可按A恢复跟随，RB驾驶中A不改变操控和运动输入',async()=>{
+  for(const mode of ['task','home']){
+    const h=setup();h.driver.gamepad.selectSource('gamepad');h.driver.nodes['view-driving'].dataset.primary='map';h.driver.navigation.mode=mode;h.tick();h.button(0);h.tick();
+    assert.equal(h.node('mapFollow').checked,true);assert.equal(h.calls.length,0);h.close();
+  }
+  const h=setup();await engage(h);h.driver.nodes['view-driving'].dataset.primary='map';h.pad.axes[1]=-1;h.pad.axes[2]=.5;h.button(0);h.tick();await settle();
+  assert.equal(h.node('mapFollow').checked,true);assert.equal(h.driver.active,true);assert.equal(h.driver.gamepad.engaged,true);
+  const input=h.calls.filter(call=>call.action==='input').at(-1);assert.equal(input.throttle,200);assert.equal(input.turn,82);h.close();
 });
 
 test('默认键盘，选手柄不会自动接管；回中并松开所有按钮后才可发接管请求',async()=>{

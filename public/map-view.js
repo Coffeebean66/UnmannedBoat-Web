@@ -809,6 +809,19 @@
       return this;
     }
 
+    // 偏移表示视野中心沿屏幕方向移动的像素，地图旋转后方向不变。
+    panScreenBy(offset) {
+      if(!this.ready||this.switching||!Array.isArray(offset)||offset.length!==2||!offset.every(Number.isFinite)||!offset.some(value=>value!==0))return false;
+      const size=this.getSize();
+      if(size.x<=0||size.y<=0)return false;
+      if(this.provider==='amap'){
+        // 使用屏幕反投影避免不同 SDK 的 panBy 正负方向和动画语义不同；原生坐标无需再次纠偏。
+        const center=this.map.containerToLngLat(new scope.AMap.Pixel(size.x/2+offset[0],size.y/2+offset[1]));
+        this.map.setCenter(center,true);
+      }else this.map.panBy(offset,{animate:false});
+      return true;
+    }
+
     getSize() {
       const size = this.map?.getSize();
       return { x: size?.x ?? size?.width ?? size?.getWidth?.() ?? this.container?.clientWidth ?? 0,

@@ -1,6 +1,6 @@
 {
   "name": "unmanned-boat-monitor-web",
-  "version": "1.67.0",
+  "version": "1.68.0",
   "private": true,
   "engines": {
     "node": ">=18"
@@ -29,6 +29,7 @@
     "test:compass:browser": "node tests/compass-browser.cjs",
     "test:driving:browser": "node tests/driver-browser.cjs",
     "test:gamepad:browser": "node tests/driver-gamepad-browser.cjs",
+    "test:gamepad-map:browser": "node tests/driver-gamepad-browser.cjs --dpad-only",
     "test:haptics:browser": "node tests/gamepad-haptics-browser.cjs",
     "test:safety-alerts:browser": "node tests/gamepad-haptics-browser.cjs --safety-only",
     "test:layout:browser": "node tests/driver-layout-browser.cjs",

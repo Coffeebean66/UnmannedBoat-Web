@@ -50,6 +50,7 @@ const fakeSdk='('+function(){
     panBy(x,y){this.map.panBy(Array.isArray(x)?x:[x,y],{animate:false});return this;}
     getSize(){const p=this.map.getSize();return {width:p.x,height:p.y,getWidth:()=>p.x,getHeight:()=>p.y};}
     lngLatToContainer(point){const p=this.map.latLngToContainerPoint(coord(point));return new Pixel(p.x,p.y);}
+    containerToLngLat(pixel){const p=this.map.containerPointToLatLng([pixel.x,pixel.y]);return {lng:p.lng,lat:p.lat,getLng:()=>p.lng,getLat:()=>p.lat};}
     setMapStyle(style){this.style=style;return this;}
     resize(){this.map.invalidateSize({pan:false,animate:false});return this;}
     destroy(){this.destroyed=true;clearTimeout(this.completeTimer);this.map.shiftKeyRotate?.disable();this.map.remove();}

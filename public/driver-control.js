@@ -372,6 +372,23 @@
     focusMedia(name) {
       this.setMediaFocus(name);
     }
+    panMainMap(x,y) {
+      const map=window.boatMonitor?.map;
+      if(this.nodes['view-driving'].dataset.primary!=='map'||!map?.panScreenBy([x,y]))return false;
+      // 程序平移不会触发鼠标 dragstart，主动取消跟随，防止下一帧遥测拉回船位。
+      const follow=this.document.getElementById('mapFollow');
+      follow.checked=false;this.nodes.driverMapFollow.setAttribute('aria-pressed','false');
+      return true;
+    }
+    restoreMainMapFollow() {
+      const map=window.boatMonitor?.map;
+      if(this.nodes['view-driving'].dataset.primary!=='map'||!map?.ready||map.switching)return false;
+      // 显式开启而非切换，复用定位居中逻辑；不改变操控租约和摇杆输入。
+      const follow=this.document.getElementById('mapFollow');
+      follow.checked=true;follow.dispatchEvent(new window.Event('change'));
+      this.nodes.driverMapFollow.setAttribute('aria-pressed','true');
+      return true;
+    }
     setMediaFocus(name) {
       const panel=this.nodes['view-driving'];
       if(name)panel.dataset.focus=name;else delete panel.dataset.focus;

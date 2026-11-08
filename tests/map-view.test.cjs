@@ -8,6 +8,27 @@ const plain = value => JSON.parse(JSON.stringify(value));
 const configured = { provider: 'amap', version: '2.0', enabled: true, configured: true,
   key: 'key with+characters', securityJsCode: 'test-security-code' };
 
+test('主地图屏幕平移适配四种底图，高德反投影不重复纠偏，无动画且保持缩放与方向',async()=>{
+  for(const provider of ['amap','osm','arcgis','tianditu']){
+    const f=fixture({...configured,tianditu:{configured:true,key:'a'.repeat(32)}},{'boat.map.provider':provider});
+    if(provider==='amap')await readyAmap(f);else await f.view.initialize();
+    const view=f.view,native=f.maps.at(-1);view.setRotation(73);const zoom=view.getZoom(),conversions=f.conversions.length;
+    assert.equal(view.panScreenBy([30,-20]),true);
+    if(provider==='amap'){
+      assert.deepEqual(native.screenPixel,{x:230,y:130});assert.deepEqual(native.center,[121.0023,30.9987]);assert.equal(native.immediately,true);
+    }else assert.deepEqual(plain(native.pan),[[30,-20],{animate:false}]);
+    assert.equal(view.getZoom(),zoom);assert.equal(view.getRotation(),73);assert.equal(f.conversions.length,conversions);view.destroy();
+  }
+});
+
+test('屏幕平移忽略未就绪、换底图、空容器和非法偏移',async()=>{
+  const f=fixture({configured:false}),view=f.view;assert.equal(view.panScreenBy([30,0]),false);await view.initialize();
+  for(const offset of [undefined,null,[],[0,0],[10],[10,20,30],[NaN,0],[0,Infinity],['30',0]])assert.equal(view.panScreenBy(offset),false);
+  view._setSwitching(true);assert.equal(view.panScreenBy([30,0]),false);view._setSwitching(false);
+  const native=f.maps.at(-1);native.getSize=()=>({width:0,height:0});assert.equal(view.panScreenBy([30,0]),false);assert.equal(native.pan,undefined);
+  view.destroy();assert.equal(view.panScreenBy([30,0]),false);
+});
+
 test('四种底图可旋转并朝北复位，角度规范化而原始坐标、中心和缩放保持',async()=>{
   for(const provider of ['amap','osm','arcgis','tianditu']){
     const f=fixture({...configured,tianditu:{configured:true,key:'a'.repeat(32)}},{'boat.map.provider':provider});
@@ -164,7 +185,7 @@ function fixture(config = configured, preferences = {}, behavior = {}) {
       listenerCount(name) { return events.get(name)?.size || 0; },
       setView(position, zoom, options) { this.center = position; this.zoom = zoom; this.viewOptions = options; return this; },
       setZoomAndCenter(zoom, center, immediately) { this.zoom = zoom; this.center = center; this.immediately = immediately; },
-      setCenter(center) { this.center = center; },
+      setCenter(center, immediately) { this.center = Array.isArray(center)?center:[center.lng,center.lat];this.immediately=immediately; },
       getCenter() {
         const [first, second] = this.center || [];
         return provider === 'amap' ? { lng: first, lat: second } : { lat: first, lng: second };
@@ -177,6 +198,7 @@ function fixture(config = configured, preferences = {}, behavior = {}) {
       setBearing(rotation) { this.rotation=rotation;this.emit('rotate'); },
       getSize() { return { width: 400, height: 300 }; },
       panBy(...args) { this.pan = args; },
+      containerToLngLat(pixel) { this.screenPixel={x:pixel.x,y:pixel.y};return {lng:121+pixel.x/100000,lat:31-pixel.y/100000}; },
       lngLatToContainer([lng, lat]) { return { x: lng * 10, y: lat * 10 }; },
       latLngToContainerPoint([lat, lng]) { return { x: lng * 10, y: lat * 10 }; },
       setMapStyle(style) { this.style = style; },
