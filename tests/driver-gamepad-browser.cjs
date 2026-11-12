@@ -8,13 +8,19 @@ const lbOnly=process.argv.includes('--lb-only');
 const dpadOnly=process.argv.includes('--dpad-only');
 const gamepadScript=`window.gamepadTest={pads:[{index:0,id:'Xbox Wireless Controller · browser test',mapping:'standard',connected:true,axes:[0,0,0,0],buttons:Array.from({length:17},()=>({pressed:false,value:0})),timestamp:0}]};Object.defineProperty(navigator,'getGamepads',{configurable:true,value:()=>gamepadTest.pads});window.setPadButton=(index,value)=>{gamepadTest.pads[0].buttons[index]={pressed:value,value:Number(value)};};`;
 async function dpadChecks(browser,server){
-  const {evaluate,until,viewportShot}=browser;
+  const {evaluate,until,viewportShot,send}=browser;
+  // 四底图缩放使用常规桌面视口；软件GPU不同时绘制三维动画，输入中断保护保持原值。
+  await send('Emulation.setDeviceMetricsOverride',{width:1024,height:768,deviceScaleFactor:1,mobile:false});
+  await evaluate('boatMonitor.viewer.configure("animation",false);void 0');
+  await wait(300);await viewportShot('gamepad-map-ready');
+  await evaluate('window.mediaResetTrace=[];{const g=boatMonitor.driver.gamepad,tick=g.tick,reset=g.resetMediaInput;g.tick=function(now){this.testGap=this.lastTick===null?null:now-this.lastTick;return tick.call(this,now);};g.resetMediaInput=function(){mediaResetTrace.push({gap:this.testGap,rt:this.sample?.rt,focused:document.hasFocus(),context:this.mediaContext,stack:new Error().stack});if(mediaResetTrace.length>5)mediaResetTrace.shift();return reset.call(this);};}void 0');
   await evaluate('window.gamepadFollowEvents=0;document.getElementById("mapFollow").addEventListener("change",()=>gamepadFollowEvents++);void 0');
   await evaluate('document.activeElement?.blur();document.getElementById("mapFollow").checked=false;boatMonitor.driver.setMediaFocus("video");window.dpadVideoCenter=boatMonitor.map.getCenter();setPadButton(15,true);void 0');
   await until('boatMonitor.driver.gamepad.sample.mapX===1');await wait(350);
   assert.deepEqual(await evaluate('boatMonitor.map.getCenter()'),await evaluate('dpadVideoCenter'),'图传主画面不平移地图小窗');
   await evaluate('setPadButton(15,false)');await until('boatMonitor.driver.gamepad.sample.mapX===0');
   for(const provider of ['osm','amap','arcgis','tianditu']){
+    console.log('Gamepad map checks:',provider);
     await evaluate('boatMonitor.map.switchProvider('+JSON.stringify(provider)+')');await until('boatMonitor.map.ready&&!boatMonitor.map.switching');
     await evaluate('boatMonitor.driver.setMediaFocus("map");boatMonitor.map.setRotation(73);boatMonitor.map.setView([31.23,121.47],18,{animate:false});void 0');await wait(200);
     for(const [button,x,y]of [[15,1,0],[12,0,-1],[14,-1,0],[13,0,1]]){
@@ -27,20 +33,44 @@ async function dpadChecks(browser,server){
       const center=await evaluate('boatMonitor.map.getCenter()');await wait(220);assert.deepEqual(await evaluate('boatMonitor.map.getCenter()'),center,provider+'松键后地图停止');
     }
     assert.equal(await evaluate('boatMonitor.map.getZoom()'),18);assert.equal(await evaluate('boatMonitor.map.getRotation()'),73);
+    const followEvents=await evaluate('gamepadFollowEvents');
+    await evaluate('boatMonitor.map.setZoom(12,{animate:false});window.gamepadZoomCenter=boatMonitor.map.getCenter();void 0');
+    await until('boatMonitor.driver.gamepad.zoomReady&&performance.now()-boatMonitor.driver.gamepad.lastTick<250');
+    await evaluate('setPadButton(7,true)');
+    await until('boatMonitor.map.getZoom()>=14');
+    await evaluate('setPadButton(7,false)');await until('!boatMonitor.driver.gamepad.sample.rt');
+    let zoom=await evaluate('boatMonitor.map.getZoom()');await wait(450);
+    assert.equal(await evaluate('boatMonitor.map.getZoom()'),zoom,provider+'RT长按放大、松开停止');
+    assert.deepEqual(await evaluate('boatMonitor.map.getCenter()'),await evaluate('gamepadZoomCenter'),provider+'缩放保持中心');
+    assert.equal(await evaluate('boatMonitor.map.getRotation()'),73,provider+'缩放保持地图旋转');
+    await evaluate('setPadButton(0,true)');await until('boatMonitor.driver.gamepad.sample.follow');
+    assert.equal(await evaluate('document.getElementById("mapFollow").checked'),false,provider+'A先按住不立即跟随');
+    await evaluate('setPadButton(7,true)');await until('boatMonitor.map.getZoom()<'+zoom);
+    await evaluate('setPadButton(7,false)');await until('!boatMonitor.driver.gamepad.sample.rt');
+    zoom=await evaluate('boatMonitor.map.getZoom()');await wait(450);
+    assert.equal(await evaluate('boatMonitor.map.getZoom()'),zoom,provider+'A+RT缩小、松RT停止');
+    await evaluate('setPadButton(0,false)');await until('!boatMonitor.driver.gamepad.sample.follow');
+    assert.equal(await evaluate('gamepadFollowEvents'),followEvents,provider+'组合键释放不恢复跟随');
+    assert.equal(await evaluate('document.getElementById("mapFollow").checked'),false);
+    await evaluate('boatMonitor.map.setZoom(18,{animate:false});void 0');
     const restores=await evaluate('gamepadFollowEvents');await evaluate('setPadButton(0,true)');
-    await until('boatMonitor.driver.gamepad.sample.follow&&document.getElementById("mapFollow").checked&&document.getElementById("driverMapFollow").getAttribute("aria-pressed")==="true"');
+    await until('boatMonitor.driver.gamepad.sample.follow');await wait(200);
+    assert.equal(await evaluate('gamepadFollowEvents'),restores,provider+'单独A等到松开才恢复跟随');
+    await evaluate('setPadButton(0,false)');
+    await until('!boatMonitor.driver.gamepad.sample.follow&&document.getElementById("mapFollow").checked&&document.getElementById("driverMapFollow").getAttribute("aria-pressed")==="true"');
     await until('(()=>{const m=boatMonitor.map,p=m.latLngToContainerPoint(boatMonitor.mapVectors.marker.position),s=m.getSize();return m.getZoom()===16&&Math.hypot(p.x-s.x/2,p.y-s.y/2)<3;})()');
-    await wait(250);assert.equal(await evaluate('gamepadFollowEvents'),restores+1,provider+'长按A仅恢复跟随一次');
-    assert.equal(await evaluate('document.getElementById("mapFollow").checked'),true,provider+'A长按不反复切换');
-    await evaluate('setPadButton(0,false);document.getElementById("mapFollow").checked=false;void 0');await until('!boatMonitor.driver.gamepad.sample.follow');
+    await wait(250);assert.equal(await evaluate('gamepadFollowEvents'),restores+1,provider+'单独A松开仅恢复跟随一次');
+    await evaluate('document.getElementById("mapFollow").checked=false;void 0');
   }
   await evaluate('document.getElementById("mapFollow").checked=true;document.getElementById("mapFollow").dispatchEvent(new Event("change"));setPadButton(15,true);void 0');
   await until('!document.getElementById("mapFollow").checked&&document.getElementById("driverMapFollow").getAttribute("aria-pressed")==="false"');
   await evaluate('setPadButton(15,false)');await until('boatMonitor.driver.gamepad.sample.mapX===0');
   const panned=await evaluate('boatMonitor.map.getCenter()');await wait(400);assert.deepEqual(await evaluate('boatMonitor.map.getCenter()'),panned,'后续遥测不拉回船位');
-  await evaluate('setPadButton(15,true);setPadButton(0,true);void 0');await until('boatMonitor.driver.gamepad.sample.follow&&document.getElementById("mapFollow").checked');
-  await wait(250);assert.equal(await evaluate('document.getElementById("mapFollow").checked'),true,'A和十字键同时按住时优先跟随');
-  await evaluate('setPadButton(0,false);setPadButton(15,false);void 0');await until('!boatMonitor.driver.gamepad.sample.follow&&boatMonitor.driver.gamepad.sample.mapX===0');
+  await evaluate('setPadButton(15,true);setPadButton(0,true);void 0');await until('boatMonitor.driver.gamepad.sample.follow');
+  const heldCenter=await evaluate('boatMonitor.map.getCenter()');await wait(250);
+  assert.deepEqual(await evaluate('boatMonitor.map.getCenter()'),heldCenter,'A和十字键同时按住暂停地图平移');
+  assert.equal(await evaluate('document.getElementById("mapFollow").checked'),false,'按住A等松开恢复跟随');
+  await evaluate('setPadButton(0,false);setPadButton(15,false);void 0');await until('!boatMonitor.driver.gamepad.sample.follow&&boatMonitor.driver.gamepad.sample.mapX===0&&document.getElementById("mapFollow").checked');
   await evaluate('setPadButton(15,true)');await until('boatMonitor.driver.gamepad.sample.mapX===1');
   await evaluate('setPadButton(3,true)');await until('document.getElementById("view-driving").dataset.primary==="video"');
   const swapped=await evaluate('boatMonitor.map.getCenter()');await wait(300);assert.deepEqual(await evaluate('boatMonitor.map.getCenter()'),swapped,'Y换回图传后长按十字键不继续平移');
@@ -52,11 +82,12 @@ async function dpadChecks(browser,server){
   await evaluate('setPadButton(15,false);setPadButton(0,true);void 0');await until('boatMonitor.driver.gamepad.sample.follow');
   assert.equal(await evaluate('document.getElementById("mapFollow").checked'),false,'编辑输入时A不恢复跟随');
   await evaluate('setPadButton(0,false);document.activeElement?.blur();void 0');await until('!boatMonitor.driver.gamepad.sample.follow');
-  await evaluate('setPadButton(0,true)');await until('document.getElementById("mapFollow").checked');
-  await evaluate('setPadButton(0,false)');await until('!boatMonitor.driver.gamepad.sample.follow');
+  await evaluate('setPadButton(0,true)');await until('boatMonitor.driver.gamepad.sample.follow');
+  await evaluate('setPadButton(0,false)');await until('!boatMonitor.driver.gamepad.sample.follow&&document.getElementById("mapFollow").checked');
   await evaluate('setPadButton(0,true)');await until('boatMonitor.driver.gamepad.sample.follow');
   assert.equal(await evaluate('document.getElementById("mapFollow").checked'),true,'重复按A仍保持跟随开启');
-  await evaluate('setPadButton(0,false);document.getElementById("driverMapFollow").click();void 0');assert.equal(await evaluate('document.getElementById("mapFollow").checked'),false,'原跟随按钮仍可关闭');
+  await evaluate('setPadButton(0,false)');await until('!boatMonitor.driver.gamepad.sample.follow');
+  await evaluate('document.getElementById("driverMapFollow").click();void 0');assert.equal(await evaluate('document.getElementById("mapFollow").checked'),false,'原跟随按钮仍可关闭');
   await evaluate('document.getElementById("driverMapFollow").click();void 0');assert.equal(await evaluate('document.getElementById("mapFollow").checked'),true,'原跟随按钮仍可恢复');
   assert.equal(server.driverFixture.calls.some(call=>['acquire','input'].includes(call.action)),false,'浏览地图不接管或发送运动');
   await viewportShot('gamepad-dpad-main-map');
@@ -70,8 +101,8 @@ async function main(){
     const {evaluate,until:waitUntil,send,viewportShot}=browser;
     const until=async(expression,...options)=>{
       try{await waitUntil(expression,...options);}catch(error){
-        const state=await evaluate('(()=>{const d=boatMonitor.driver,g=d.gamepad;return {focused:document.hasFocus(),hidden:document.hidden,active:d.active,pending:d.pending,reason:d.stopReason,message:d.message,mode:d.nodes.driverMode.value,source:g.source,sample:g.sample,engaged:g.engaged,needsNeutral:g.needsNeutral,input:d.inputs(),responseAge:performance.now()-d.lastInputResponseAt,sampleAge:performance.now()-g.lastTick};})()');
-        throw Error(error.message+'\nDriver state: '+JSON.stringify(state)+'\nRecent HTTP commands: '+JSON.stringify(server.driverFixture.calls.slice(-8)),{cause:error});
+        const state=await evaluate('(()=>{const d=boatMonitor.driver,g=d.gamepad;return {focused:document.hasFocus(),hidden:document.hidden,active:d.active,pending:d.pending,reason:d.stopReason,message:d.message,mode:d.nodes.driverMode.value,source:g.source,sample:g.sample,engaged:g.engaged,needsNeutral:g.needsNeutral,input:d.inputs(),responseAge:performance.now()-d.lastInputResponseAt,sampleAge:performance.now()-g.lastTick,media:d.nodes["view-driving"].dataset.primary,zoomReady:g.zoomReady,provider:boatMonitor.map.provider,zoom:boatMonitor.map.getZoom(),mapReady:boatMonitor.map.ready};})()');
+        throw Error(error.message+'\nDriver state: '+JSON.stringify(state)+'\nMedia resets: '+JSON.stringify(await evaluate('window.mediaResetTrace'))+'\nRecent HTTP commands: '+JSON.stringify(server.driverFixture.calls.slice(-8)),{cause:error});
       }
     };
     const click=async id=>{
@@ -102,7 +133,7 @@ async function main(){
     // 截图与软件 GPU 预热在接管前完成，保持正式600ms响应保护。
     await viewportShot('gamepad-ready-desktop');
     await send('Page.bringToFront');
-    if(dpadOnly){await dpadChecks(browser,server);return;}
+    if(dpadOnly){await dpadChecks({...browser,until},server);return;}
     if(!lbOnly){
     server.driverFixture.ackDelay=350;await enable();server.driverFixture.ackDelay=100;
     await engage();await axes(-1,1);await until('boatMonitor.driver.inputs().throttle===200&&boatMonitor.driver.inputs().turn===200');
@@ -182,6 +213,6 @@ async function main(){
     await evaluate('void BoatAuth.logout()');await until('!BoatAuth.user');await login(browser,'observer','browser-guest-test-only');
     assert.equal(await evaluate('document.getElementById("driverInputSource").disabled'),true,'Guests cannot select a driving input');
   });}finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
-  console.log(dpadOnly?'PASS: actual Chrome D-pad panning on four rotated main maps; A restores follow/recenters once, remains on with repeated presses and takes priority over D-pad; Y swap, video/form exclusion and no vessel commands.':lbOnly?'PASS: actual Chrome/HTTP LB acquire, vessel ACK, long hold, RB motion, zero-input release and pending cancellation with simulated Xbox.':'PASS: actual Chrome/HTTP driver path with simulated Xbox; LB acquire/release/hold/pending cancellation, neutral acquire, proportional axes/deadzone/limits, keyboard exclusion, RB release, B stop, Y edge, disconnect/reconnect, heading control, source switch, real-PWM test scene, 320/375/1440 dark/light options, reload and guest restrictions.');
+  console.log(dpadOnly?'PASS: actual Chrome RT continuous zoom-in / A+RT zoom-out on four rotated main maps, center/rotation preserved and release stops; A release restores follow without combo conflict; D-pad panning, Y swap, video/form exclusion and no vessel commands.':lbOnly?'PASS: actual Chrome/HTTP LB acquire, vessel ACK, long hold, RB motion, zero-input release and pending cancellation with simulated Xbox.':'PASS: actual Chrome/HTTP driver path with simulated Xbox; LB acquire/release/hold/pending cancellation, neutral acquire, proportional axes/deadzone/limits, keyboard exclusion, RB release, B stop, Y edge, disconnect/reconnect, heading control, source switch, real-PWM test scene, 320/375/1440 dark/light options, reload and guest restrictions.');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

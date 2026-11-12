@@ -111,14 +111,15 @@
       n.cameraListen.setAttribute('aria-pressed', String(!n.boatVideo.muted && !this.talk));
       n.cameraVoiceHint.textContent = !this.mediaDevices?.getUserMedia ? '麦克风需要 HTTPS（本机可用 localhost）及浏览器授权。' : this.config?.voice === false ? this.config.voiceReason : '双向对讲需摄像头支持国标语音；仅需向扬声器讲话时选择单向喊话。';
     }
-    // 十字键使用同一云台租约；面板收起时也可操作，切换目标后必须先松键。
+    // 十字键与 RT 变焦使用同一云台租约；面板收起也可操作，切换目标后须先松键。
     resetGamepadPtz() {
       this.gamepadNeedsNeutral = true; this.gamepadCommand = '';
       if (this.ptz?.source === 'gamepad') this.endPtz();
     }
-    setGamepadDirection(x, y) {
-      if (![x, y].every(value => [-1, 0, 1].includes(value))) { this.resetGamepadPtz(); return false; }
-      const command = (y < 0 ? 'up' : y > 0 ? 'down' : '') + (x < 0 ? 'left' : x > 0 ? 'right' : '');
+    setGamepadDirection(x, y, zoom = 0) {
+      if (![x, y, zoom].every(value => [-1, 0, 1].includes(value))) { this.resetGamepadPtz(); return false; }
+      // 国标接口每次发送一种操作，RT 变焦优先；方向和变焦共用续租、停止与换向队列。
+      const command = zoom ? zoom > 0 ? 'zoomin' : 'zoomout' : (y < 0 ? 'up' : y > 0 ? 'down' : '') + (x < 0 ? 'left' : x > 0 ? 'right' : '');
       if (!command) {
         this.gamepadNeedsNeutral = false; this.gamepadCommand = '';
         if (this.ptz?.source === 'gamepad') this.endPtz();

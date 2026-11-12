@@ -799,7 +799,13 @@
     }
 
     getZoom() { return this.map?.getZoom() ?? 5; }
-    setZoom(zoom) { if (this.ready && Number.isFinite(zoom)) this.map.setZoom(zoom); return this; }
+    setZoom(zoom, options = {}) {
+      if (this.ready && Number.isFinite(zoom)) {
+        if (this.provider === 'amap') this.map.setZoom(zoom, options.animate === false);
+        else this.map.setZoom(zoom, options);
+      }
+      return this;
+    }
 
     panBy(offset, options) {
       if (this.ready) {

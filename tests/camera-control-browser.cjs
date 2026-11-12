@@ -30,6 +30,33 @@ async function gamepadChecks({ evaluate, until }, calls) {
     }
     await evaluate('for(const i of ' + JSON.stringify(buttons) + ')cameraPad.buttons[i]={pressed:false,value:0};void 0'); await stopped(start);
   }
+  let zoomStart = calls.length;
+  await pad(7, true); await until('boatMonitor.cameraControl.ptz?.command==="zoomin"&&boatMonitor.cameraControl.ptz.sequence>=1');
+  const zoomLease = await evaluate('boatMonitor.cameraControl.ptz.leaseId');
+  await until('boatMonitor.cameraControl.ptz?.sequence>=2');
+  assert.equal(await evaluate('boatMonitor.cameraControl.ptz.leaseId'), zoomLease, 'RT长按沿用变焦租约');
+  assert.ok(calls.slice(zoomStart).some(call => call[0] === 'ptz' && call[3] === 'zoomin' && call[5] === 4), 'RT经服务器发送真实WVP放大指令');
+  zoomStart = calls.length; await pad(0, true);
+  await until('boatMonitor.cameraControl.ptz?.command==="zoomout"&&boatMonitor.cameraControl.ptz.sequence>=1');
+  for (let i = 0; i < 100 && !calls.slice(zoomStart).some(call => call[0] === 'ptz' && call[3] === 'zoomout'); i++) await wait(30);
+  const changed = calls.slice(zoomStart).filter(call => call[0] === 'ptz');
+  assert.deepEqual(changed.slice(0, 2).map(call => call[3]), ['stop', 'zoomout'], 'RT加A时先停止放大再缩小');
+  await pad(0, false); await until('boatMonitor.cameraControl.ptz?.command==="zoomin"&&boatMonitor.cameraControl.ptz.sequence>=1');
+  zoomStart = calls.length; await pad(7, false); await stopped(zoomStart);
+  await pad(0, true); await until('boatMonitor.driver.gamepad.sample.follow');
+  await pad(7, true); await until('boatMonitor.cameraControl.ptz?.command==="zoomout"&&boatMonitor.cameraControl.ptz.sequence>=1');
+  zoomStart = calls.length; await pad(7, false); await stopped(zoomStart);
+  await pad(0, false); await until('!boatMonitor.driver.gamepad.sample.follow');
+  await pad(7, true); await until('boatMonitor.cameraControl.ptz?.command==="zoomin"&&boatMonitor.cameraControl.ptz.sequence>=1');
+  zoomStart = calls.length; await pad(3, true); await until('document.getElementById("view-driving").dataset.primary==="map"'); await stopped(zoomStart);
+  await pad(3, false); await until('!boatMonitor.driver.gamepad.sample.swap');
+  const mapZoom = await evaluate('boatMonitor.map.getZoom()'); await wait(450);
+  assert.equal(await evaluate('boatMonitor.map.getZoom()'), mapZoom, '切地图后持续按住RT不缩放新目标');
+  await pad(3, true); await until('document.getElementById("view-driving").dataset.primary==="video"'); await wait(250);
+  assert.equal(await evaluate('boatMonitor.cameraControl.ptz'), null, '切回图传后持续按住RT不恢复变焦');
+  await pad(3, false); await pad(7, false); await until('boatMonitor.driver.gamepad.zoomReady&&!boatMonitor.cameraControl.gamepadNeedsNeutral');
+  await pad(7, true); await until('boatMonitor.cameraControl.ptz?.command==="zoomin"&&boatMonitor.cameraControl.ptz.sequence>=1');
+  zoomStart = calls.length; await pad(7, false); await stopped(zoomStart);
   assert.equal(await evaluate('cameraMapPans.length'), 0, '云台控制不调用地图平移');
   assert.equal(await evaluate('boatMonitor.driver.active'), false, '云台控制不接管船体');
   await pad(15, true); await until('boatMonitor.cameraControl.ptz?.command==="right"');
@@ -52,7 +79,7 @@ async function gamepadChecks({ evaluate, until }, calls) {
   await evaluate('BoatWorkspace.navigate("overview")'); await stopped(start);
   await pad(15, false); await evaluate('document.getElementById("driverInputSource").value="keyboard";document.getElementById("driverInputSource").dispatchEvent(new Event("change"));BoatWorkspace.navigate("video");document.getElementById("cameraControlToggle").click();document.getElementById("cameraControls").scrollIntoView({block:"center"});void 0');
   await until('!document.getElementById("cameraControls").hidden');
-  console.log('Camera gamepad passed: eight PTZ directions, speed, held renewal/release, collapsed panel, map/video swap, no vessel takeover, editing/blur/disconnect/leave cleanup. WVP is simulated.');
+  console.log('Camera gamepad passed: eight PTZ directions, RT zoom-in / A+RT zoom-out in either order, speed, held renewal/release, collapsed panel, map/video swap with held RT suppressed, no vessel takeover, editing/blur/disconnect/leave cleanup. WVP is simulated.');
 }
 async function freePort(udp = false) { const server = udp ? dgram.createSocket('udp4') : net.createServer(); await new Promise(resolve => udp ? server.bind(0, '127.0.0.1', resolve) : server.listen(0, '127.0.0.1', resolve)); const port = server.address().port; await new Promise(resolve => server.close(resolve)); return port; }
 async function main() {

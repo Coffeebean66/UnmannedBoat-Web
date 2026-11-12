@@ -8,6 +8,19 @@ const plain = value => JSON.parse(JSON.stringify(value));
 const configured = { provider: 'amap', version: '2.0', enabled: true, configured: true,
   key: 'key with+characters', securityJsCode: 'test-security-code' };
 
+test('手柄连续缩放可立即生效，四底图保持中心和方向，高德使用立即参数',async()=>{
+  for(const provider of ['amap','osm','arcgis','tianditu']){
+    const f=fixture({...configured,tianditu:{configured:true,key:'a'.repeat(32)}},{'boat.map.provider':provider});
+    if(provider==='amap')await readyAmap(f);else await f.view.initialize();
+    const view=f.view,native=f.maps.at(-1);view.setRotation(73);const center=plain(view.getCenter());
+    assert.equal(view.setZoom(14,{animate:false}),view);assert.equal(view.getZoom(),14);
+    assert.deepEqual(plain(native.zoomOptions),provider==='amap'?true:{animate:false});
+    assert.deepEqual(plain(view.getCenter()),center);assert.equal(view.getRotation(),73);
+    view.setZoom(15);assert.deepEqual(plain(native.zoomOptions),provider==='amap'?false:{});
+    view.destroy();
+  }
+});
+
 test('主地图屏幕平移适配四种底图，高德反投影不重复纠偏，无动画且保持缩放与方向',async()=>{
   for(const provider of ['amap','osm','arcgis','tianditu']){
     const f=fixture({...configured,tianditu:{configured:true,key:'a'.repeat(32)}},{'boat.map.provider':provider});
@@ -191,7 +204,7 @@ function fixture(config = configured, preferences = {}, behavior = {}) {
         return provider === 'amap' ? { lng: first, lat: second } : { lat: first, lng: second };
       },
       getZoom() { return this.zoom; },
-      setZoom(zoom) { this.zoom = zoom; },
+      setZoom(zoom,options) { this.zoom = zoom; this.zoomOptions = options; },
       getRotation() { return this.rotation; },
       setRotation(rotation) { this.rotation=rotation;this.emit('rotatechange'); },
       getBearing() { return this.rotation; },

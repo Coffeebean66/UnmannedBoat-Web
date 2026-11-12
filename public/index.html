@@ -121,7 +121,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">无人船监测 <span>v1.71.0</span></div>
+      <div class="sidebar-version">无人船监测 <span>v1.72.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -407,7 +407,7 @@
               <p id="driverGamepadHapticsStatus" class="driver-gamepad-status" role="status" aria-live="polite">正在读取震动配置。</p>
               <button id="driverGamepadHapticsTest" type="button" class="small-button" disabled>测试震动</button>
               <p class="driver-help">电机起动短震，0.5秒内姿态突变较强震动。自动提醒开关、强度与角度阈值由管理员在“平台设置 → 手柄震动”统一调整；管理员的安全驾驶提醒可在各页面接收。</p>
-              <p class="driver-help">左摇杆前后推进，右摇杆左右转向。LB 切换启用 / 退出操控，等待确认时再按可取消，也可点击网页启用。船端确认后，摇杆回中并松开 RB，再按住 RB 驾驶；松开 RB 停船退出，B / 菜单键急停。X 在未接管时切换控制模式，Y 交换图传 / 地图。图传为主画面时，十字键控制所选船的 WVP 云台，支持斜向，松开停止；速度在“云台 / 对讲”中调整，无需启用船体操控。地图为主画面时，十字键平移地图，A 恢复跟随。切换主画面后先松开十字键再操作云台。手柄需先通过 USB 或系统蓝牙连接电脑。</p>
+              <p class="driver-help">左摇杆前后推进，右摇杆左右转向。LB 切换启用 / 退出操控，等待确认时再按可取消，也可点击网页启用。船端确认后，摇杆回中并松开 RB，再按住 RB 驾驶；松开 RB 停船退出，B / 菜单键急停。X 在未接管时切换控制模式，Y 交换图传 / 地图。图传为主画面时，十字键控制所选船的 WVP 云台；地图为主画面时，十字键平移地图，单独 A 松开恢复跟随。按住 RT 持续放大主地图 / 摄像头，按住 A＋RT 持续缩小，松开 RT 停止；组合键不触发跟随。摄像头需支持 WVP 变焦，方向与变焦同时输入时优先变焦；移动速度在“云台 / 对讲”中调整。媒体操作无需启用船体操控；切换主画面后先松开十字键和 RT 再操作。手柄需先通过 USB 或系统蓝牙连接电脑。</p>
             </section>
             <button id="driverTestMode" type="button" class="driver-test-mode" aria-pressed="false" title="真实 PWM 开环，跳过电调反馈和停稳检查；先停止操控才能切换" hidden disabled>测试场景：关</button><p class="driver-option-hint">PWM 模式缺少传感器数据也可操控，无需开启测试场景；缺失项在右上角提示 2 秒。</p><p class="driver-help">键盘 W/S 前进后退，A/D 左右转向，方向键同样有效；松键归零，空格急停。航向模式下转向输入调整目标航向，推进归零时仍可能自动转向。手动驾驶失焦、离页或断连即停船；服务器自主导航在关闭网页后继续，暂停、急停或反馈失效时停止。</p>
           </div></details></div>

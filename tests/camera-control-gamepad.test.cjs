@@ -48,6 +48,17 @@ test('收起面板可用手柄控制八方向；长按复用350ms租约，松键
   await h.close();
 });
 
+test('RT放大与A+RT缩小共用变焦续租，变焦优先于方向且松开停止', async () => {
+  const h = fixture(), c = h.camera; c.setGamepadDirection(0, 0);
+  c.setGamepadDirection(1, -1, 1); await settle(); assert.equal(h.commands().at(-1), 'zoomin');
+  const lease = c.ptz.leaseId; await h.renew(); assert.equal(c.ptz.leaseId, lease); assert.equal(h.calls.at(-1).body.zoomSpeed, 4);
+  c.setGamepadDirection(1, -1, -1); await c.pendingStop; await settle(); assert.deepEqual(h.commands().slice(-2), ['stop', 'zoomout']);
+  c.setGamepadDirection(0, 0, 0); await c.pendingStop; await settle(); assert.equal(c.ptz, null); assert.equal(h.commands().at(-1), 'stop');
+  c.setGamepadDirection(0, 0, 1); await settle(); c.resetGamepadPtz(); await c.pendingStop;
+  const count = h.calls.length; c.setGamepadDirection(0, 0, 1); await settle(); assert.equal(h.calls.length, count, '切换目标后不恢复按住的RT');
+  c.setGamepadDirection(0, 0, 0); c.setGamepadDirection(0, 0, -1); await settle(); assert.equal(h.commands().at(-1), 'zoomout'); await h.close();
+});
+
 test('换向先等旧租约停止，等待中松键取消迟到的移动', async () => {
   const h = fixture(), c = h.camera; c.setGamepadDirection(0, 0); c.setGamepadDirection(-1, 0); await settle();
   let release; h.pauseStop = new Promise(resolve => { release = resolve; });

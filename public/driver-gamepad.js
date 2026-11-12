@@ -3,6 +3,7 @@
   'use strict';
   const clamp=(value,min,max)=>Math.max(min,Math.min(max,value));
   const MAP_PAN_PIXELS_PER_SECOND=300;
+  const MAP_ZOOM_REPEAT_MS=350;
   const pressed=button=>button?.pressed===true||(Number.isFinite(button?.value)&&button.value>.5);
   // 死区外重新缩放到满量程，满杆仍对应网页设定的运动幅度。
   function axis(value,deadzone){
@@ -16,7 +17,7 @@
     if(!axes.every(value=>Number.isFinite(value)&&Math.abs(value)<=1))return null;
     if(!Array.from(pad.buttons).slice(0,10).every(button=>button&&typeof button.pressed==='boolean'&&Number.isFinite(button.value)&&button.value>=0&&button.value<=1))return null;
     return {key:JSON.stringify([pad.index,pad.id]),index:pad.index,id:pad.id,forward:axis(-axes[1],deadzone),turn:axis(axes[2],deadzone),
-      neutral:axes.every(value=>Math.abs(value)<=deadzone),lb:pressed(pad.buttons[4]),rb:pressed(pad.buttons[5]),stop:pressed(pad.buttons[1])||pressed(pad.buttons[9]),mode:pressed(pad.buttons[2]),swap:pressed(pad.buttons[3]),follow:pressed(pad.buttons[0]),
+      neutral:axes.every(value=>Math.abs(value)<=deadzone),lb:pressed(pad.buttons[4]),rb:pressed(pad.buttons[5]),rt:pressed(pad.buttons[7]),stop:pressed(pad.buttons[1])||pressed(pad.buttons[9]),mode:pressed(pad.buttons[2]),swap:pressed(pad.buttons[3]),follow:pressed(pad.buttons[0]),
       mapX:Number(pressed(pad.buttons[15]))-Number(pressed(pad.buttons[14])),mapY:Number(pressed(pad.buttons[13]))-Number(pressed(pad.buttons[12])),
       buttonsReleased:!Array.from(pad.buttons).some(pressed),buttonsReleasedExceptLB:!Array.from(pad.buttons).some((button,index)=>index!==4&&pressed(button))};
   }
@@ -25,6 +26,7 @@
       this.driver=driver;this.scope=host;this.navigator=navigator;this.document=document;
       this.nodes=Object.fromEntries(['driverInputSource','driverGamepadPanel','driverGamepadDevice','driverGamepadRefresh','driverGamepadDeadzone','driverGamepadDeadzoneValue','driverGamepadStatus','driverInputBadge'].map(id=>[id,document.getElementById(id)]));
       this.source='keyboard';this.selectedKey='';this.sample=null;this.previous=null;this.devices=[];this.deadzone=.15;this.error='';this.deviceSignature='';this.lastTick=null;this.toggleReady=false;this.destroyed=false;this.handlers=[];
+      this.mediaContext='';this.zoomReady=false;this.mapZoomDirection=0;this.nextMapZoomAt=0;this.followPending=false;
       try{const saved=host.localStorage?.getItem('boat-driver-gamepad-deadzone');if(saved!==null&&saved!==undefined&&Number.isFinite(Number(saved)))this.deadzone=clamp(Number(saved),.05,.3);}catch(_){}
       this.reset();this.nodes.driverInputSource.value='keyboard';
       this.listen(this.nodes.driverInputSource,'change',()=>this.selectSource(this.nodes.driverInputSource.value));
@@ -56,7 +58,38 @@
     listen(node,event,handler){node.addEventListener(event,handler);this.handlers.push([node,event,handler]);}
     enabled(){return this.source==='gamepad';}
     reset(){this.vector={forward:0,turn:0};this.needsNeutral=true;this.engaged=false;}
-    resetToggle(){this.previous=null;this.lastTick=null;this.toggleReady=false;this.driver.cameraControl?.resetGamepadPtz();}
+    resetToggle(){this.previous=null;this.lastTick=null;this.toggleReady=false;this.resetMediaInput();}
+    resetMediaInput(){this.zoomReady=false;this.mapZoomDirection=0;this.nextMapZoomAt=0;this.followPending=false;this.driver.cameraControl?.resetGamepadPtz();}
+    updateMediaInput(sample,previous,now,last){
+      const d=this.driver,primary=d.nodes['view-driving'].dataset.primary,context=JSON.stringify([primary,d.context?.deviceId,sample.key]);
+      if(this.mediaContext!==context){this.resetMediaInput();this.mediaContext=context;}
+      if(sample.lb||last===null||now<=last||now-last>=500||previous?.key!==sample.key){this.resetMediaInput();return;}
+      // 恢复前台或切换主画面后，RT 必须先释放，避免把旧的长按发送给新目标。
+      if(!sample.rt)this.zoomReady=true;
+      const zoom=sample.rt&&this.zoomReady?(sample.follow?-1:1):0;
+      // A 单独松开才跟随；只要与 RT 重叠过，本次 A 就完全用于组合缩小。
+      if(sample.rt)this.followPending=false;
+      else if(sample.follow&&!previous.follow)this.followPending=primary==='map';
+      const follow=!sample.follow&&previous.follow&&this.followPending;
+      if(!sample.follow)this.followPending=false;
+      if(primary==='video'){
+        if(sample.rt&&!this.zoomReady)d.cameraControl?.resetGamepadPtz();
+        else d.cameraControl?.setGamepadDirection(sample.mapX,sample.mapY,zoom);
+        return;
+      }
+      d.cameraControl?.resetGamepadPtz();
+      if(primary!=='map')return;
+      if(!zoom){this.mapZoomDirection=0;this.nextMapZoomAt=0;}
+      else if(zoom!==this.mapZoomDirection||now>=this.nextMapZoomAt){
+        d.zoomMainMap(zoom);this.mapZoomDirection=zoom;this.nextMapZoomAt=now+MAP_ZOOM_REPEAT_MS;
+      }
+      if(follow)d.restoreMainMapFollow();
+      // RT 缩放优先于十字键平移；松键即停，不补发卡顿期间积压的缩放。
+      if(!follow&&!sample.follow&&!sample.rt&&(sample.mapX||sample.mapY)){
+        const distance=MAP_PAN_PIXELS_PER_SECOND*Math.min(now-last,150)/1000/Math.hypot(sample.mapX,sample.mapY);
+        d.panMainMap(sample.mapX*distance,sample.mapY*distance);
+      }
+    }
     input(){return this.vector;}
     scan(){
       let pads=[];this.error='';
@@ -90,8 +123,8 @@
       if(this.destroyed||!this.driver.visible()){this.resetToggle();return false;}
       const before=JSON.stringify([this.sample,this.engaged,this.needsNeutral,this.error]),last=this.lastTick;this.lastTick=now;
       const sample=this.scan(),previous=this.previous,toggleReady=this.toggleReady;this.previous=sample;this.toggleReady=false;
-      if(!this.enabled()){this.driver.cameraControl?.resetGamepadPtz();this.render();return false;}
-      const d=this.driver;let cameraHandled=false;
+      if(!this.enabled()){this.resetMediaInput();this.render();return false;}
+      const d=this.driver;let mediaHandled=false;
       if(!sample){this.reset();if(d.active||d.pending)d.stop('手柄连接或映射失效，已停船并退出操控',true);}
       else if(d.admin()){
         // 急停先于表单、模式及摇杆处理，不以鼠标焦点作为急停条件。
@@ -108,20 +141,11 @@
             else if(d.permitted())void d.acquire({gamepadLB:true});
           }
           if(!sample.lb&&sample.swap&&!previous?.swap)d.setMediaFocus(d.nodes['view-driving'].dataset.primary==='map'?'video':'map');
-          // A 只恢复跟随，长按不重复触发；与十字键同时按住时优先跟随船位。
-          if(!sample.lb&&sample.follow&&!previous?.follow)d.restoreMainMapFollow();
           if(!sample.lb&&sample.mode&&!previous?.mode&&!d.active&&!d.pending&&d.permitted()&&sample.neutral&&!sample.rb&&!d.nodes.driverMode.disabled){
             let mode=(Number(d.nodes.driverMode.value)+1)%3;if(mode===2&&!Number.isFinite(d.actualHeading))mode=0;
             d.nodes.driverMode.value=String(mode);d.nodes.driverMode.dispatchEvent(new this.scope.Event('change'));
           }
-          // 十字键跟随主画面：图传控制国标云台，地图沿屏幕方向平移；不要求接管船体。
-          if(!sample.lb&&last!==null&&now>last&&now-last<500&&d.nodes['view-driving'].dataset.primary==='video'){
-            d.cameraControl?.setGamepadDirection(sample.mapX,sample.mapY);cameraHandled=true;
-          }
-          if(!sample.follow&&last!==null&&now>last&&now-last<500&&(sample.mapX||sample.mapY)&&d.nodes['view-driving'].dataset.primary==='map'){
-            const distance=MAP_PAN_PIXELS_PER_SECOND*Math.min(now-last,150)/1000/Math.hypot(sample.mapX,sample.mapY);
-            d.panMainMap(sample.mapX*distance,sample.mapY*distance);
-          }
+          this.updateMediaInput(sample,previous,now,last);mediaHandled=true;
           if(!d.active){this.reset();}
           else if(!d.permitted()){this.reset();}
           else if(!sample.rb){
@@ -132,7 +156,7 @@
           }else {this.engaged=true;this.vector={forward:sample.forward,turn:sample.turn};}
         }
       }else this.reset();
-      if(!cameraHandled)d.cameraControl?.resetGamepadPtz();
+      if(!mediaHandled)this.resetMediaInput();
       this.render();return before!==JSON.stringify([this.sample,this.engaged,this.needsNeutral,this.error]);
     }
     render(){

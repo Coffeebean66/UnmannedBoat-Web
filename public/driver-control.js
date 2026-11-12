@@ -380,6 +380,15 @@
       follow.checked=false;this.nodes.driverMapFollow.setAttribute('aria-pressed','false');
       return true;
     }
+    zoomMainMap(direction) {
+      const map=window.boatMonitor?.map;
+      if(this.nodes['view-driving'].dataset.primary!=='map'||!map?.ready||map.switching||![1,-1].includes(direction))return false;
+      const current=map.getZoom();if(!Number.isFinite(current))return false;
+      // 沿用底图缩放范围，保留当前中心、旋转角度和跟随开关。
+      const next=Math.max(3,Math.min(map.maxZoom,current+direction));
+      if(next===current)return false;
+      map.setZoom(next,{animate:false});return true;
+    }
     restoreMainMapFollow() {
       const map=window.boatMonitor?.map;
       if(this.nodes['view-driving'].dataset.primary!=='map'||!map?.ready||map.switching)return false;
