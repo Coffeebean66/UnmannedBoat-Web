@@ -14,7 +14,7 @@
       this.video=this.nodes.boatVideo;this.visible=false;this.enabled=true;this.destroyed=false;
       this.deviceId='';this.descriptor=null;this.allowedOrigins=[];this.authenticated=false;this.streaming=false;
       this.player=null;this.attached=false;this.format='';this.active=false;this.playing=false;this.signature='';this.generation=0;this.status='等待选择无人船';
-      this.rtc=null;this.mediaConfig=fetch?null:{enabled:false};this.mediaConfigError='';this.mediaRequest=null;this.mediaGeneration=0;
+      this.rtc=null;this.mediaConfig=fetch?null:{enabled:false};this.mediaConfigError='';this.mediaRequest=null;this.mediaGeneration=0;this.mediaPollTimer=null;
       this.handlers=[];this.listen(this.nodes.videoPlay,'click',()=>{
         this.enabled=true;
         if(this.active){
@@ -53,9 +53,9 @@
       this.allowedOrigins=Array.isArray(allowedOrigins)?allowedOrigins:[];
       this.reconcile();
     }
-    setVisible(visible){if(this.destroyed)return;this.visible=!!visible;if(!this.visible)this.cancelMediaConfig();this.reconcile();}
+    setVisible(visible){if(this.destroyed)return;this.visible=!!visible;if(!this.visible){this.stopMediaPoll();this.cancelMediaConfig();}this.reconcile();}
     source() {
-      if(this.mediaConfig?.enabled===true&&DEVICE.test(this.deviceId))return {url:new URL(PLAYBACK_BASE+encodeURIComponent(this.deviceId)+'/whep',this.location.origin),format:'webrtc'};
+      if(this.mediaConfig?.enabled===true&&DEVICE.test(this.deviceId))return {url:new URL(PLAYBACK_BASE+encodeURIComponent(this.deviceId)+'/whep',this.location.origin),format:'webrtc',selection:this.mediaConfig.selectedSource};
       const descriptor=this.descriptor;
       if(!descriptor||typeof descriptor.url!=='string'||descriptor.url.length>2048||/[\u0000-\u001f\u007f\\]/.test(descriptor.url))return null;
       try{
@@ -69,16 +69,22 @@
       const request=this.mediaRequest;if(!request)return;
       ++this.mediaGeneration;this.mediaRequest=null;this.clearTimer?.(request.timer);request.controller?.abort();
     }
-    resetMediaConfig(){this.cancelMediaConfig();this.mediaConfig=this.fetch?null:{enabled:false};this.mediaConfigError='';}
-    loadMediaConfig(){
-      if(this.mediaRequest||this.mediaConfig||this.mediaConfigError||!this.fetch||!this.visible||!this.enabled)return;
+    stopMediaPoll(){this.clearTimer?.(this.mediaPollTimer);this.mediaPollTimer=null;}
+    resetMediaConfig(){this.stopMediaPoll();this.cancelMediaConfig();this.mediaConfig=this.fetch?null:{enabled:false};this.mediaConfigError='';}
+    refreshMediaConfig(){this.resetMediaConfig();this.reconcile();}
+    scheduleMediaPoll(){
+      if(this.mediaPollTimer||this.mediaRequest||!this.mediaConfig?.sourceSwitching||!this.visible||!this.enabled||!this.authenticated||!this.streaming||this.destroyed)return;
+      this.mediaPollTimer=this.setTimer?.(()=>{this.mediaPollTimer=null;this.loadMediaConfig(true);},5000);
+    }
+    loadMediaConfig(refresh=false){
+      if(this.mediaRequest||!refresh&&(this.mediaConfig||this.mediaConfigError)||!this.fetch||!this.visible||!this.enabled)return;
       const token=++this.mediaGeneration,deviceId=this.deviceId,controller=this.AbortController?new this.AbortController():null;
       const request={controller,timer:null};this.mediaRequest=request;
       const current=()=>!this.destroyed&&this.mediaRequest===request&&token===this.mediaGeneration&&deviceId===this.deviceId&&this.visible&&this.authenticated&&this.streaming&&this.enabled;
       const finish=(error,data)=>{
         if(!current())return;
         this.clearTimer?.(request.timer);this.mediaRequest=null;
-        if(error){controller?.abort();this.mediaConfigError=error.message||'无法读取视频服务配置，请点击重新连接';}
+        if(error){controller?.abort();if(!refresh||error.auth)this.mediaConfigError=error.message||'无法读取视频服务配置，请点击重新连接';}
         else this.mediaConfig=data;
         this.reconcile();
       };
@@ -88,12 +94,14 @@
           if(!response||!current())return null;
           // 旧服务器尚无低延迟入口时继续使用原有 HTTP 播放器；启用后的信令失败不会自动降级。
           if(response.status===404||response.status===405)return {enabled:false};
-          if(!response.ok)throw Error(response.status===401?'登录已失效，请重新登录后查看视频':'无法读取视频服务配置，请点击重新连接');
+          if(!response.ok)throw Object.assign(Error(response.status===401?'登录已失效，请重新登录后查看视频':'无法读取视频服务配置，请点击重新连接'),{auth:response.status===401||response.status===403});
           const data=await response.json();
           if(!data||typeof data.enabled!=='boolean')throw Error('视频服务配置无效，请联系管理员');
           if(data.enabled===false)return {enabled:false};
           if(data.format!=='webrtc'||data.playbackBase!==PLAYBACK_BASE)throw Error('低延迟视频服务配置无效，请联系管理员');
-          return {enabled:true,format:'webrtc',playbackBase:PLAYBACK_BASE};
+          const selection=Object.hasOwn(data.sources||{},deviceId)?data.sources[deviceId]:null;
+          const selectedSource=selection&&['direct','wvp'].includes(selection.provider)&&Number.isSafeInteger(selection.revision)?{provider:selection.provider,revision:selection.revision,applied:selection.applied===true,receiving:selection.receiving===true}:{provider:'direct',revision:0,applied:true};
+          return {enabled:true,format:'webrtc',playbackBase:PLAYBACK_BASE,sourceSwitching:data.sourceSwitching===true,selectedSource};
         }).then(data=>finish(null,data),error=>finish(error));
     }
     setStatus(message,tone='neutral') {
@@ -111,14 +119,15 @@
       this.text('videoTitle',this.descriptor?.title||'船载实时画面');
       const context=!!(this.authenticated&&this.streaming&&this.deviceId);
       if(context&&this.visible&&this.enabled)this.loadMediaConfig();
+      this.scheduleMediaPoll();
       const source=this.source();this.canPlay=!!(context&&(source||this.mediaConfigError||!this.mediaConfig));
       this.text('videoFormat',source?formats[source.format]:'--');
-      this.text('videoSource',source?(source.format==='webrtc'?'SRT / UDP → '+source.url.host:source.url.host):'--');
+      this.text('videoSource',source?(source.format==='webrtc'?(source.selection?.provider==='wvp'?'WVP / GB28181':'SRT / UDP')+' → '+source.url.host:source.url.host):'--');
       this.text('videoUpdated',source?.format==='webrtc'?'实时接收 · 无需发布视频地址':Number.isFinite(this.descriptor?.receivedAt)?new Date(this.descriptor.receivedAt).toLocaleString('zh-CN',{hour12:false})+(this.descriptor.retained?' · 保留地址':''):'--');
       let message='';
       if(!this.authenticated)message='请登录后查看无人船视频';
       else if(!this.deviceId||!this.streaming)message='请先选择一艘无人船查看视频';
-      else if(!this.enabled){this.cancelMediaConfig();this.release();this.setStatus('视频已停止，点击播放重新接收');return;}
+      else if(!this.enabled){this.stopMediaPoll();this.cancelMediaConfig();this.release();this.setStatus('视频已停止，点击播放重新接收');return;}
       else if(this.mediaConfigError)message=this.mediaConfigError;
       else if(!this.mediaConfig)message=this.visible?'正在检查低延迟视频服务…':'视频页面未显示，已暂停接收画面';
       else if(!source)message='等待这艘无人船发布视频地址';
@@ -126,7 +135,7 @@
       else if(source.url.origin!==this.location.origin&&!this.allowedOrigins.includes(source.url.origin))message='视频来源尚未授权，请联系管理员配置';
       if(message){this.canPlay=!!(context&&this.mediaConfigError);this.release();this.setStatus(message,'warning');return;}
       if(!this.visible){this.release();this.setStatus('视频页面未显示，已暂停接收画面');return;}
-      const signature=JSON.stringify([this.deviceId,source.url.href,source.format]);
+      const signature=JSON.stringify([this.deviceId,source.url.href,source.format,source.selection]);
       // 船端重复发布同一个地址只更新说明，不重新下载流或重建播放器。
       if(signature===this.signature)return;
       this.release();this.signature=signature;this.format=source.format;
@@ -190,7 +199,7 @@
       const current=()=>!this.destroyed&&this.active&&this.rtc===rtc&&generation===this.generation;
       const fail=message=>{if(current())this.fail(message);};
       this.setStatus('正在建立 WebRTC 低延迟连接…');
-      rtc.handshakeTimer=this.setTimer?.(()=>fail('WebRTC 连接超时，请检查船端推流和视频网络端口，然后重新连接'),20000);
+      rtc.handshakeTimer=this.setTimer?.(()=>fail('WebRTC 连接超时，请检查视频来源和网络端口，然后重新连接'),source.selection?.provider==='wvp'?40000:20000);
       pc.ontrack=event=>{
         if(!current()){event.track?.stop?.();return;}
         let stream=event.streams?.[0];
@@ -232,7 +241,7 @@
         if(response.status!==201||!session){
           if(session)this.deleteSession(session);
           if(response.status===401||response.status===403)return fail('视频访问未授权，请重新登录后重试');
-          if(response.status===404)return fail('这艘无人船尚未发布低延迟视频，请检查船端 SRT 推流');
+          if(response.status===404)return fail(source.selection?.provider==='wvp'?'WVP 画面尚未就绪，请检查摄像头注册和通道在线状态':'这艘无人船尚未发布低延迟视频，请检查船端 SRT / UDP 推流');
           return fail('无法建立低延迟视频会话，请检查视频服务后重新连接');
         }
         rtc.session=session;
@@ -264,7 +273,7 @@
       }
       if(this.attached){this.attached=false;this.video.pause();this.video.removeAttribute('src');this.video.load();}
     }
-    destroy(){if(this.destroyed)return;this.destroyed=true;this.cancelMediaConfig();this.release();for(const [node,event,handler]of this.handlers)node.removeEventListener(event,handler);this.handlers=[];}
+    destroy(){if(this.destroyed)return;this.destroyed=true;this.stopMediaPoll();this.cancelMediaConfig();this.release();for(const [node,event,handler]of this.handlers)node.removeEventListener(event,handler);this.handlers=[];}
   }
   window.BoatVideoView=BoatVideoView;
 })();

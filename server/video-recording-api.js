@@ -61,7 +61,7 @@ function readBody(req, timeoutMs) {
   });
 }
 
-function createVideoRecordingApi({ env = process.env, accounts, file, client = createMqttDeviceClient({ timeoutMs: 5000 }),
+function createVideoRecordingApi({ env = process.env, accounts, file, sources, client = createMqttDeviceClient({ timeoutMs: 5000 }),
   transport = createRecordingTransport(), playbackPort = 9996, now = Date.now, bodyTimeoutMs = 5000,
   reconcileMs = 15000, maxStreams = 8, streamTimeoutMs = 10 * 60 * 1000, httpRequest = http.request } = {}) {
   const allowedRoot = env.BOAT_VIDEO_RECORDING_ROOT || '/var/lib/unmanned-boat-video';
@@ -144,6 +144,7 @@ function createVideoRecordingApi({ env = process.env, accounts, file, client = c
   }
   async function applyBoat(id, input = state) {
     const item = ownBoat(input, id); if (!item) return;
+    if (item.armed) await sources?.prepare(id);
     await applyPath(id, nativeSettings(id, input.directory, item.armed));
   }
   async function save(next, owner, res) {

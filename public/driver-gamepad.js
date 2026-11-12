@@ -29,7 +29,7 @@
       this.reset();this.nodes.driverInputSource.value='keyboard';
       this.listen(this.nodes.driverInputSource,'change',()=>this.selectSource(this.nodes.driverInputSource.value));
       this.listen(this.nodes.driverGamepadDevice,'change',()=>{
-        this.driver.stop('已切换手柄，已停船并退出操控');this.selectedKey=this.nodes.driverGamepadDevice.value;this.previous=null;this.reset();this.scan();this.driver.render();
+        this.driver.stop('已切换手柄，已停船并退出操控');this.selectedKey=this.nodes.driverGamepadDevice.value;this.resetToggle();this.reset();this.scan();this.driver.render();
       });
       this.listen(this.nodes.driverGamepadRefresh,'click',()=>{this.scan();this.driver.render();});
       this.listen(this.nodes.driverGamepadDeadzone,'change',()=>{
@@ -46,7 +46,7 @@
       this.listen(host,'gamepaddisconnected',event=>{
         if(this.sample?.index===event.gamepad?.index||this.selectedKey===JSON.stringify([event.gamepad?.index,event.gamepad?.id])){
           if(this.enabled())this.driver.stop('手柄已断开，已停船并退出操控',true);
-          this.sample=null;this.previous=null;this.reset();
+          this.sample=null;this.resetToggle();this.reset();
         }
         this.scan();this.driver.render();
       });
@@ -56,7 +56,7 @@
     listen(node,event,handler){node.addEventListener(event,handler);this.handlers.push([node,event,handler]);}
     enabled(){return this.source==='gamepad';}
     reset(){this.vector={forward:0,turn:0};this.needsNeutral=true;this.engaged=false;}
-    resetToggle(){this.previous=null;this.lastTick=null;this.toggleReady=false;}
+    resetToggle(){this.previous=null;this.lastTick=null;this.toggleReady=false;this.driver.cameraControl?.resetGamepadPtz();}
     input(){return this.vector;}
     scan(){
       let pads=[];this.error='';
@@ -74,7 +74,7 @@
     }
     selectSource(value){
       const source=value==='gamepad'?'gamepad':'keyboard';if(source===this.source)return;
-      this.driver.stop('已切换控制输入，已停船并退出操控');this.driver.keys.clear();this.source=source;this.previous=null;this.lastTick=null;this.reset();this.scan();this.driver.render();
+      this.driver.stop('已切换控制输入，已停船并退出操控');this.driver.keys.clear();this.source=source;this.resetToggle();this.reset();this.scan();this.driver.render();
     }
     canAcquire({allowLB=false}={}){return !this.enabled()||!!this.sample&&this.sample.neutral&&(this.sample.buttonsReleased||allowLB&&this.sample.buttonsReleasedExceptLB);}
     prepareAcquire({allowLB=false}={}){
@@ -90,8 +90,8 @@
       if(this.destroyed||!this.driver.visible()){this.resetToggle();return false;}
       const before=JSON.stringify([this.sample,this.engaged,this.needsNeutral,this.error]),last=this.lastTick;this.lastTick=now;
       const sample=this.scan(),previous=this.previous,toggleReady=this.toggleReady;this.previous=sample;this.toggleReady=false;
-      if(!this.enabled()){this.render();return false;}
-      const d=this.driver;
+      if(!this.enabled()){this.driver.cameraControl?.resetGamepadPtz();this.render();return false;}
+      const d=this.driver;let cameraHandled=false;
       if(!sample){this.reset();if(d.active||d.pending)d.stop('手柄连接或映射失效，已停船并退出操控',true);}
       else if(d.admin()){
         // 急停先于表单、模式及摇杆处理，不以鼠标焦点作为急停条件。
@@ -114,8 +114,11 @@
             let mode=(Number(d.nodes.driverMode.value)+1)%3;if(mode===2&&!Number.isFinite(d.actualHeading))mode=0;
             d.nodes.driverMode.value=String(mode);d.nodes.driverMode.dispatchEvent(new this.scope.Event('change'));
           }
-          // 十字键沿屏幕方向浏览主地图；与摇杆 / 接管无关，卡顿后不补走积压距离。
-          if(!sample.follow&&last!==null&&now>last&&now-last<500&&(sample.mapX||sample.mapY)){
+          // 十字键跟随主画面：图传控制国标云台，地图沿屏幕方向平移；不要求接管船体。
+          if(!sample.lb&&last!==null&&now>last&&now-last<500&&d.nodes['view-driving'].dataset.primary==='video'){
+            d.cameraControl?.setGamepadDirection(sample.mapX,sample.mapY);cameraHandled=true;
+          }
+          if(!sample.follow&&last!==null&&now>last&&now-last<500&&(sample.mapX||sample.mapY)&&d.nodes['view-driving'].dataset.primary==='map'){
             const distance=MAP_PAN_PIXELS_PER_SECOND*Math.min(now-last,150)/1000/Math.hypot(sample.mapX,sample.mapY);
             d.panMainMap(sample.mapX*distance,sample.mapY*distance);
           }
@@ -129,6 +132,7 @@
           }else {this.engaged=true;this.vector={forward:sample.forward,turn:sample.turn};}
         }
       }else this.reset();
+      if(!cameraHandled)d.cameraControl?.resetGamepadPtz();
       this.render();return before!==JSON.stringify([this.sample,this.engaged,this.needsNeutral,this.error]);
     }
     render(){
@@ -155,7 +159,7 @@
       n.driverInputBadge.title=status;d.nodes['view-driving'].dataset.inputSource=this.source;
       this.haptics?.render();
     }
-    destroy(){this.destroyed=true;this.haptics?.destroy();this.reset();for(const [node,event,handler]of this.handlers)node.removeEventListener(event,handler);this.handlers=[];}
+    destroy(){this.destroyed=true;this.resetToggle();this.haptics?.destroy();this.reset();for(const [node,event,handler]of this.handlers)node.removeEventListener(event,handler);this.handlers=[];}
   }
   scope.BoatDriverGamepad=BoatDriverGamepad;
   if(typeof module==='object'&&module.exports)module.exports={BoatDriverGamepad,readPad,axis};

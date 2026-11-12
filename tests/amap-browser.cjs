@@ -76,12 +76,12 @@ const fakeSdk='('+function(){
   if(callback)window[callback]();
 }.toString()+')();';
 
-async function browserSession(server,mode,run){
+async function browserSession(server,mode,run,{chromeArgs=[]}={}){
   const profile=fs.mkdtempSync(path.join(output,'amap-chrome-')),errors=[],sdkRequests=[],configRequests=[],settingsRequests=[],tileRequests=[];
   const failures={settingsRead:false,settingsWrite:false,sdk:false,tiles:false};
   const browser=spawn(process.env.CHROME_PATH||'C:/Program Files/Google/Chrome/Application/chrome.exe',[
     '--headless','--no-first-run','--no-default-browser-check','--use-angle=swiftshader','--enable-unsafe-swiftshader',
-    '--remote-debugging-port=0','--user-data-dir='+profile
+    '--remote-debugging-port=0','--user-data-dir='+profile,...chromeArgs
   ],{windowsHide:true,stdio:['ignore','ignore','pipe']});
   let chromeLog='';browser.stderr.on('data',data=>{chromeLog=(chromeLog+data).slice(-1500);});
   browser.on('error',error=>errors.push(error.message));let socket;

@@ -2,3 +2,6 @@
 .video-device-settings .mqtt-device-description { margin-bottom:12px; }
 .video-device-settings .mqtt-device-row { background:var(--panel); }
 @media(max-width:600px){.video-device-settings{padding:14px;}}
+.video-source-settings select { width:100%;min-width:0;padding:10px 12px;color:var(--text);background:var(--panel);border:1px solid var(--line-strong);border-radius:8px;font:inherit; }
+.video-source-settings .mqtt-device-fields + .mqtt-device-fields { margin-top:12px; }
+.video-source-settings [hidden] { display:none!important; }

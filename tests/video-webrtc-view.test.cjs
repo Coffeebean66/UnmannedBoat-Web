@@ -145,3 +145,32 @@ test('销毁或停止发生在配置fetch派发前时不再发送旧请求',asyn
     assert.equal(h.calls.length,0);assert.equal(h.peers.length,0);h.view.destroy();
   }
 });
+
+test('服务器切换来源时轮询更新标签并重建会话；相同版本不反复连接',async t=>{
+  let selection={provider:'direct',revision:0,applied:true,receiving:true};
+  const h=setup({handler:call=>call.url==='/api/video/media/config'?response(200,{...config,sourceSwitching:true,sources:{'boat-a':selection}}):undefined});
+  t.after(()=>h.view.destroy());h.show();await flush();assert.equal(h.peers.length,1);
+  h.fire(5000);await flush();assert.equal(h.peers.length,1);
+  selection={provider:'wvp',revision:1,applied:true,receiving:true};h.fire(5000);await flush();
+  assert.equal(h.peers.length,2);assert.equal(h.peers[0].closed,true);assert.match(h.nodes.videoSource.textContent,/WVP/);assert.equal(h.deletes().length,1);
+  h.fire(5000);await flush();assert.equal(h.peers.length,2);
+});
+
+test('停止、隐藏、登出与销毁会取消来源轮询，刷新来源不会恢复用户已停止的视频',async t=>{
+  for(const action of ['stop','hide','logout','destroy']){
+    const h=setup({handler:call=>call.url==='/api/video/media/config'?response(200,{...config,sourceSwitching:true,sources:{}}):undefined});t.after(()=>h.view.destroy());
+    h.show();await flush();assert.equal(h.peers.length,1);
+    if(action==='stop')h.nodes.videoStop.click();else if(action==='hide')h.view.setVisible(false);else if(action==='logout')h.view.update(h.state({authenticated:false}));else h.view.destroy();
+    const count=h.calls.filter(call=>call.url==='/api/video/media/config').length;h.fire(5000);await flush();
+    assert.equal(h.calls.filter(call=>call.url==='/api/video/media/config').length,count,action);assert.equal(h.view.state().active,false);
+    if(action==='stop'){h.view.refreshMediaConfig();await flush();assert.equal(h.view.state().active,false);assert.equal(h.peers.length,1);}
+  }
+});
+
+test('来源状态从等待点播变为收到视频后可以自动恢复，短时配置请求失败保留当前画面',async t=>{
+  let receiving=false, unavailable=false;
+  const h=setup({handler:call=>call.url==='/api/video/media/config'?(unavailable?response(503,{}):response(200,{...config,sourceSwitching:true,sources:{'boat-a':{provider:'wvp',revision:1,applied:true,receiving}}})):undefined});
+  t.after(()=>h.view.destroy());h.show();await flush();h.peers[0].connect();
+  unavailable=true;h.fire(5000);await flush();assert.equal(h.peers.length,1);assert.equal(h.view.state().active,true);
+  unavailable=false;receiving=true;h.fire(5000);await flush();assert.equal(h.peers.length,2);assert.equal(h.peers[0].closed,true);
+});

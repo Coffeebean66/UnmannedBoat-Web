@@ -68,7 +68,7 @@ function upstreamLocation(value, deviceId, port = 8889) {
   return location.pathname;
 }
 
-function createVideoMediaApi({ env = process.env, accounts, client = createMqttDeviceClient({ timeoutMs: 5000 }),
+function createVideoMediaApi({ env = process.env, accounts, sources, client = createMqttDeviceClient({ timeoutMs: 5000 }),
   upstreamPort = 8889, transport = createMediaTransport({ port: upstreamPort }), now = Date.now, bodyTimeoutMs = 5000, maxSessions = 64, maxPerSession = 4 } = {}) {
   const config = readMediaConfig(env), sessions = new Map(), pending = new Set(), attempts = new Map();
   let closed = false, authWork = 0, managedRead;
@@ -118,9 +118,9 @@ function createVideoMediaApi({ env = process.env, accounts, client = createMqttD
     // 控制和回放接口只监听服务器回环地址，仍需校验内部凭据；不接受船端的视频密码。
     // MediaMTX 的 api 回调没有船只 path，须在普通流名称校验之前处理。
     const internal = LOOPBACK.has(input.ip) && input.user === READER && sameSecret(input.password, config.readerPassword);
-    if (env.BOAT_VIDEO_RECORDING_ENABLED === '1' &&
+    if ((env.BOAT_VIDEO_RECORDING_ENABLED === '1' || sources?.enabled) &&
       (input.action === 'api' && (input.path === '' || input.path === undefined) && ['', 'api'].includes(input.protocol || '') ||
-       input.action === 'playback' && typeof input.path === 'string' && NAME.test(input.path) && ['', 'playback'].includes(input.protocol || ''))) {
+       env.BOAT_VIDEO_RECORDING_ENABLED === '1' && input.action === 'playback' && typeof input.path === 'string' && NAME.test(input.path) && ['', 'playback'].includes(input.protocol || ''))) {
       if (!internal) { deny(); return; }
       res.writeHead(204, { 'Cache-Control': 'no-store' }); res.end(); return;
     }
@@ -154,6 +154,7 @@ function createVideoMediaApi({ env = process.env, accounts, client = createMqttD
       const offer = body.toString('utf8');
       if (!offer.startsWith('v=0\r\n') && !offer.startsWith('v=0\n') || !/(?:^|\r?\n)m=video /.test(offer) || offer.includes('\0')) throw error(400, '视频 SDP 请求无效');
       await ensureBoat(deviceId);
+      await sources?.prepare(deviceId);
       if (!active(owner) || operation.cancelled) throw error(401, '登录会话已失效，请重新登录');
       const response = await transport({ method: 'POST', path: '/' + deviceId + '/whep', body,
         headers: { ...headers, 'Content-Type': 'application/sdp', Accept: 'application/sdp' } });
@@ -188,7 +189,8 @@ function createVideoMediaApi({ env = process.env, accounts, client = createMqttD
       if (!owner) { reply(res, 401, { error: '请先登录监测平台' }); return true; }
       if (!browserRead && !accounts.sameOrigin(req)) { reply(res, 403, { error: '请从本站发起视频请求' }); return true; }
       if (url.pathname === PREFIX + '/config' && req.method === 'GET') {
-        reply(res, 200, config.enabled ? { enabled: true, format: 'webrtc', playbackBase: PREFIX + '/boats/', ingest: { protocol: 'srt', host: config.host, port: config.port } } : { enabled: false }); return true;
+        reply(res, 200, config.enabled ? { enabled: true, format: 'webrtc', playbackBase: PREFIX + '/boats/', ingest: { protocol: 'srt', host: config.host, port: config.port },
+          ...(sources?.enabled ? { sources: sources.summaries(), sourceSwitching: true } : {}) } : { enabled: false }); return true;
       }
       if (!config.enabled) { reply(res, 503, { error: '服务器尚未启用 SRT / WebRTC 视频服务' }); return true; }
       const match = url.pathname.match(/^\/api\/video\/media\/boats\/([A-Za-z0-9_-]{1,64})\/whep(?:\/([a-f0-9]{32}))?$/);

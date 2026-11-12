@@ -3,6 +3,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),crypto=require('node:crypto');
 const {EventEmitter}=require('node:events'),http=require('node:http');
 const P=require('../server/firmware-protocol'),{FirmwareService}=require('../server/firmware-service');
+const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {CloudBridge}=require('../server/cloud'),{createServer}=require('../server');
 const KEY='42'.repeat(32),SESSION='0123456789abcdef',BOOT='fedcba9876543210',ORIGIN='https://firmware.test';
 const ENV={BOAT_CLOUD_ENABLED:'1',BOAT_MQTT_URL:'mqtt://test.invalid',BOAT_OTA_KEY:KEY,BOAT_ACCOUNTS_ENABLED:'1',BOAT_ACCOUNTS_ORIGIN:ORIGIN,
@@ -198,8 +199,8 @@ function request(port,route,{method='GET',cookie,origin=ORIGIN,body,raw,headers=
   const req=http.request({host:'127.0.0.1',port,path:route,method,agent:false,headers:{...(data!==undefined?{'Content-Type':'application/json','Content-Length':Buffer.byteLength(data)}:{}),...(cookie?{Cookie:cookie}:{}),...(origin?{Origin:origin}:{}),...headers}},res=>{
     const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>{const raw=Buffer.concat(chunks).toString();let data;try{data=JSON.parse(raw);}catch(_){}resolve({status:res.statusCode,raw,data,headers:res.headers});});});req.once('error',reject);req.end(data);
 });}
-async function apiFixture(t,options={}){const env={...ENV,...options.env},f=cloudFixture(t,{env}),server=createServer({env,cloud:f.bridge,accountOptions:{...options.accountOptions},firmwareOptions:{uploadTimeoutMs:100,serviceOptions:{beginTimeoutMs:100,blockTimeoutMs:100},...options.firmwareOptions}});
-  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>{server.closeAllConnections();server.close(resolve);}));f.bridge.acceptMessage('boats/boat-01/firmware-capability',capability());
+async function apiFixture(t,options={}){const temporary=fs.mkdtempSync(path.join(os.tmpdir(),'boat-firmware-api-')),env={...ENV,...options.env},f=cloudFixture(t,{env}),server=createServer({env,cloud:f.bridge,accountOptions:{storeFile:path.join(temporary,'accounts.json'),...options.accountOptions},firmwareOptions:{uploadTimeoutMs:100,serviceOptions:{beginTimeoutMs:100,blockTimeoutMs:100},...options.firmwareOptions}});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(async()=>{await new Promise(resolve=>{server.closeAllConnections();server.close(resolve);});assert.equal(path.dirname(temporary),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(temporary).startsWith('boat-firmware-api-'));fs.rmSync(temporary,{recursive:true,force:true});});f.bridge.acceptMessage('boats/boat-01/firmware-capability',capability());
   const call=(route,opts)=>request(server.address().port,route,opts),login=async(role='admin')=>{const response=await call('/api/auth/login',{method:'POST',body:{username:role,password:role==='admin'?ENV.BOAT_ADMIN_PASSWORD:ENV.BOAT_GUEST_PASSWORD}});assert.equal(response.status,200,response.raw);return response.headers['set-cookie'][0].split(';')[0];};
   const upload=(cookie,extra={})=>call('/api/firmware/boats/boat-01',{method:'POST',cookie,raw:image(),headers:{'Content-Type':'application/octet-stream','X-Firmware-Name':'ota.bin'},...extra});return{...f,server,call,login,upload};
 }

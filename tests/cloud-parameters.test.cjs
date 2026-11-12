@@ -3,6 +3,7 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),{EventEmi
 const {CloudBridge}=require('../server/cloud'),{createServer}=require('../server');
 const PP=require('../server/parameter-protocol'),P=require('../public/utils/uart4Protocol'),A=require('../public/utils/controlAlgorithm');
 const O=require('../public/utils/optimalParameters');
+const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const ENV={BOAT_CLOUD_ENABLED:'1',BOAT_CLOUD_PASSWORD:'legacy-test-password-fixture',BOAT_CLOUD_ORIGIN:'https://boat.test',BOAT_MQTT_URL:'mqtt://broker.test:1883'};
 const ACCOUNT_ENV={...ENV,BOAT_ACCOUNTS_ENABLED:'1',BOAT_ADMIN_USERNAME:'test-admin',BOAT_ADMIN_PASSWORD:'test admin password',BOAT_GUEST_USERNAME:'test-guest',BOAT_GUEST_PASSWORD:'654321'};
 const TOKEN='0123456789abcdef',NEXT='fedcba9876543210';
@@ -23,7 +24,8 @@ function bridgeFixture(t,options={}){let time=10000;const client=new FakeMQTT(),
 function request(port,route,{method='GET',cookie,origin='https://boat.test',body,raw,headers={}}={}){const data=raw!==undefined?raw:body===undefined?undefined:JSON.stringify(body);return new Promise((resolve,reject)=>{const req=http.request({host:'127.0.0.1',port,path:route,method,agent:false,headers:{...(data!==undefined?{'content-type':'application/json','content-length':Buffer.byteLength(data)}:{}),...(cookie?{cookie}:{}),...(origin?{origin}:{}),...headers}},res=>{const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>{const raw=Buffer.concat(chunks).toString();let json;try{json=JSON.parse(raw);}catch(_){}resolve({status:res.statusCode,json,raw,headers:res.headers});});});req.on('error',reject);req.end(data);});}
 async function apiFixture(t,{accounts=true,accountOptions={},...bridgeOptions}={}){
   const f=bridgeFixture(t,bridgeOptions),env=accounts?ACCOUNT_ENV:ENV;
-  const server=createServer({env,cloud:f.bridge,accountOptions:{now:f.now,...accountOptions},apiOptions:{now:f.now}});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));
+  const temporary=fs.mkdtempSync(path.join(os.tmpdir(),'boat-parameter-api-'));
+  const server=createServer({env,cloud:f.bridge,accountOptions:{storeFile:path.join(temporary,'accounts.json'),now:f.now,...accountOptions},apiOptions:{now:f.now}});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(async()=>{await new Promise(resolve=>server.close(resolve));assert.equal(path.dirname(temporary),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(temporary).startsWith('boat-parameter-api-'));fs.rmSync(temporary,{recursive:true,force:true});});
   const port=server.address().port;return {...f,port,server,call:(route,options)=>request(port,route,options),async login(role='admin'){const response=await request(port,accounts?'/api/auth/login':'/api/cloud/login',{method:'POST',body:accounts?{username:role==='admin'?'test-admin':'test-guest',password:role==='admin'?'test admin password':'654321'}:{password:ENV.BOAT_CLOUD_PASSWORD}});assert.equal(response.status,200,response.raw);return response.headers['set-cookie'][0].split(';')[0];},operate:(cookie,body={deviceId:'boat-01',kind:'read'},extra={})=>request(port,'/api/cloud/parameters',{method:'POST',cookie,body,...extra})};
 }
 async function until(predicate){const end=Date.now()+1000;while(!predicate()){if(Date.now()>end)throw Error('Timed out');await new Promise(resolve=>setTimeout(resolve,2));}}

@@ -6,8 +6,8 @@
   const DEVICE=/^[A-Za-z0-9_-]{1,64}$/,LEASE=/^[0-9a-f]{16}$/;
   const INPUT_PERIOD_MS=100,RESPONSE_TIMEOUT_MS=600,MAX_INPUT_REQUESTS=4;
   class BoatDriverControl {
-    constructor({document=window.document,fetch=window.fetch.bind(window),auth=window.BoatAuth,toast=()=>{},onOpenSettings=()=>document.getElementById('settingsEntry')?.click()}={}) {
-      this.document=document;this.fetch=fetch;this.auth=auth;this.toast=toast;
+    constructor({document=window.document,fetch=window.fetch.bind(window),auth=window.BoatAuth,cameraControl=null,toast=()=>{},onOpenSettings=()=>document.getElementById('settingsEntry')?.click()}={}) {
+      this.document=document;this.fetch=fetch;this.auth=auth;this.cameraControl=cameraControl;this.toast=toast;
       this.nodes=Object.fromEntries(['view-driving','driverBoatName','driverLinkStatus','driverState','driverEnable','driverRelease','driverEmergency','driverTestMode','driverTestNotice','driverTestAck','driverNotice','driverActualSpeed','driverTargetSpeed','driverActualHeading','driverActualMode','driverInput','driverLatitude','driverLongitude','driverFixStatus','driverImuStatus','driverModelPreview','driverMode','driverLimit','driverLimitValue','driverHeading','driverHoldHeading','driverVideoExpand','driverMapExpand','driverOverlayOpacity','driverOverlayOpacityValue','driverFocusTools','driverDetailsPanel','driverDetailsToggle','driverDetailsClose','driverDisplayOptions','driverControlOptions','driverInstrumentToggle'].map(id=>[id,document.getElementById(id)]));
       this.hud=new window.BoatDriverHud({document});
       for(const id of ['driverDeviceSelect','driverOperator','driverConnectionToggle','driverAccount','driverLogout','driverSystemSettings','driverCommonOutput','driverMotorRpm','driverMotorVoltage','driverAttitudeAngles','driverMapLayer','driverMapFollow'])this.nodes[id]=document.getElementById(id);
@@ -391,6 +391,7 @@
     }
     setMediaFocus(name) {
       const panel=this.nodes['view-driving'];
+      if(panel.dataset.primary!==(name||'video'))this.cameraControl?.resetGamepadPtz();
       if(name)panel.dataset.focus=name;else delete panel.dataset.focus;
       panel.scrollTop=0;
       // 地图和图传交换主画面，另一画面始终保留为小窗。
