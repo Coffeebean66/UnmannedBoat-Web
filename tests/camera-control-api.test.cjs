@@ -15,7 +15,7 @@ async function fixture(t, options = {}) {
   const calls = [];
   const wvp = { async voiceAvailable() { return options.voice !== false; },
     async ptz(...args) { calls.push(['ptz', ...args]); if (options.ptz) await options.ptz(...args); },
-    async talkStart(...args) { calls.push(['start', ...args]); return { push: { app: args[2], stream: 'camera-stream' }, play: args[2] === 'talk' ? { app: 'talk', stream: 'camera-stream_talk' } : null }; },
+    async talkStart(...args) { calls.push(['start', ...args]); if (options.talkStart) await options.talkStart(...args); return { push: { app: args[2] === 'compatible' ? 'broadcast' : args[2], stream: 'camera-stream' }, play: args[2] === 'compatible' ? { app: 'rtp', stream: 'camera-video' } : args[2] === 'talk' ? { app: 'talk', stream: 'camera-stream_talk' } : null }; },
     async openAudio(...args) { calls.push(['open', args[1]]); if (options.openAudio) await options.openAudio(...args); return { resource: '/private/' + args[1] + '/' + ++next, sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 8\r\n' }; },
     async closeAudio(resource) { calls.push(['close', resource]); }, async talkStop(...args) { calls.push(['stop', ...args]); }, close() {} };
   const api = createCameraControlApi({ env, accounts, sources: { enabled: true, cameraBinding: id => bindings.get(id) || null }, wvp, now: () => time, sweepMs: 60000 });
@@ -83,6 +83,23 @@ test('对讲协商返回较晚时，注销仍关闭刚创建的媒体会话；�
   const created = await f.call('boat-01', '/talk', { method: 'POST', body: { mode: 'talk' } });
   const response = f.call('boat-01', '/talk/' + created.data.id + '/push', { method: 'POST', sdp: SDP('push') }); await until(() => !!release);
   f.revoke('driver'); release(); assert.equal((await response).status, 409); await until(() => f.calls.some(call => call[0] === 'close')); assert.equal(f.calls.filter(call => call[0] === 'stop').length, 1);
+});
+
+test('兼容对讲允许双向协商，结束时只关闭本次媒体会话，准备点播不消耗正常心跳租约', async t => {
+  let release;
+  const targets = [], f = await fixture(t, { talkStart: () => new Promise(resolve => { release = resolve; }), openAudio: (target, direction) => targets.push([direction, target.app]) });
+  const pending = f.call('boat-01', '/talk', { method: 'POST', body: { mode: 'compatible' } }); await until(() => !!release);
+  f.advance(10000); f.api.sweep(); release();
+  const created = await pending; assert.equal(created.status, 201); assert.equal(created.data.canListen, true);
+  const route = '/talk/' + created.data.id;
+  for (const direction of ['push', 'play']) assert.equal((await f.call('boat-01', route + '/' + direction, { method: 'POST', sdp: SDP(direction) })).status, 201);
+  assert.deepEqual(targets, [['push', 'broadcast'], ['play', 'rtp']]);
+  assert.equal((await f.call('boat-01', route, { method: 'DELETE' })).status, 200);
+  assert.equal(f.calls.filter(call => call[0] === 'close').length, 2); assert.equal(f.calls.filter(call => call[0] === 'stop').length, 1);
+  const next = await fixture(t);
+  const session = await next.call('boat-01', '/talk', { method: 'POST', body: { mode: 'compatible' } });
+  next.advance(7100); next.api.sweep();
+  assert.equal((await next.call('boat-01', '/talk/' + session.data.id + '/heartbeat', { method: 'POST' })).status, 404);
 });
 test('单向喊话只发布麦克风；未启用 WebRTC 时云台仍可用，异常 SDP 不会到达媒体服务', async t => {
   const f = await fixture(t), created = await f.call('boat-01', '/talk', { method: 'POST', body: { mode: 'broadcast' } }); const route = '/talk/' + created.data.id;

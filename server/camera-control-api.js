@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const { createWvpClient, readWvpConfig } = require('./wvp-client');
 const { canOperate } = require('./account-permissions');
+const { createCameraAudioApi } = require('./camera-audio-api');
 const PREFIX = '/api/video/camera/boats/';
 const TOKEN = /^[a-f0-9]{32}$/;
 const COMMANDS = ['left', 'right', 'up', 'down', 'upleft', 'upright', 'downleft', 'downright', 'zoomin', 'zoomout', 'stop'];
@@ -26,7 +27,7 @@ function validateAudioOffer(offer, direction) {
     !new RegExp('^a=' + (direction === 'push' ? 'sendonly' : 'recvonly') + '\\r?$', 'm').test(offer)) throw fault(400, '语音需要仅含 G.711A 音频的有效 WebRTC SDP');
   return offer;
 }
-function createCameraControlApi({ env = process.env, accounts, sources, wvp, now = Date.now, sweepMs = 250, ptzLeaseMs = 1400, talkLeaseMs = 7000 } = {}) {
+function createCameraControlApi({ env = process.env, accounts, sources, wvp, audioOptions = {}, now = Date.now, sweepMs = 250, ptzLeaseMs = 1400, talkLeaseMs = 7000 } = {}) {
   const enabled = readWvpConfig(env).enabled;
   wvp ||= createWvpClient({ env });
   const ptzJobs = new Map(), talkJobs = new Map(), talks = new Map(), ended = new Map();
@@ -96,28 +97,34 @@ function createCameraControlApi({ env = process.env, accounts, sources, wvp, now
     if (!job) return Promise.resolve();
     job.ended = true; talks.delete(job.id);
     if (job.stopping) return job.stopping;
+    job.abort?.abort();
     job.stopping = (async () => {
+      await job.worker?.stop();
       await Promise.allSettled([...job.inFlight]);
+      await job.worker?.stop();
       for (const [direction, resource] of job.resources) { await wvp.closeAudio(resource); job.resources.delete(direction); }
       // 只释放由本平台成功发布的语音，不中断 WVP 中其他用户的会话。
       if (job.published) { await wvp.talkStop(job.binding.deviceId, job.binding.channelId); job.published = false; }
       if (talkJobs.get(job.key) === job) talkJobs.delete(job.key);
+      job.onStop?.();
     })().catch(() => { job.retryAt = now() + 1000; }).finally(() => { job.stopping = null; });
     return job.stopping;
   }
   async function startTalk(id, input, owner, res) {
-    if (!input || Object.keys(input).join(',') !== 'mode' || !['talk', 'broadcast'].includes(input.mode)) throw fault(400, '请选择对讲或单向喊话');
+    if (!input || Object.keys(input).join(',') !== 'mode' || !['compatible', 'talk', 'broadcast'].includes(input.mode)) throw fault(400, '请选择兼容对讲、国标双向对讲或单向喊话');
     const selected = binding(id), key = keyFor(selected);
     if (!await available()) throw fault(503, '语音需要服务器 ZLMediaKit 启用 WebRTC / WHIP / WHEP，请联系管理员更新视频组件');
     if (!active(owner) || res.destroyed) throw fault(401, '登录会话已失效');
-    if (talkJobs.has(key)) throw fault(409, '摄像头语音正由另一个窗口使用');
+    if (talkJobs.has(key)) throw fault(409, talkJobs.get(key).kind === 'file' ? '摄像头正在播放服务器音频，请先停止播放' : '摄像头语音正由另一个窗口使用');
     if (talkJobs.size >= 32) throw fault(429, '语音连接已满');
-    const job = { id: crypto.randomBytes(16).toString('hex'), owner, binding: selected, key, mode: input.mode, expiresAt: now() + talkLeaseMs, resources: new Map(), inFlight: new Set(), negotiating: new Set(), ended: false };
+    // 首次点播和登录可能超过心跳周期；准备期间尚未发布麦克风，返回会话后再按正常短租约续期。
+    const job = { id: crypto.randomBytes(16).toString('hex'), owner, binding: selected, key, mode: input.mode, expiresAt: now() + Math.max(talkLeaseMs, 45000), resources: new Map(), inFlight: new Set(), negotiating: new Set(), ended: false };
     talkJobs.set(key, job); talks.set(job.id, job);
     const abandoned = () => { if (!res.writableEnded) stopTalk(job); }; res.once('close', abandoned);
     try {
       job.target = await wvp.talkStart(selected.deviceId, selected.channelId, input.mode);
       if (job.ended || !current(job) || res.destroyed) throw fault(401, '语音连接已取消');
+      job.expiresAt = now() + talkLeaseMs;
       return { id: job.id, mode: job.mode, leaseMs: talkLeaseMs, canListen: !!job.target.play, codec: 'PCMA / G.711A' };
     } catch (error) { await stopTalk(job); throw error; }
     finally { res.removeListener('close', abandoned); }
@@ -147,10 +154,12 @@ function createCameraControlApi({ env = process.env, accounts, sources, wvp, now
     for (const job of talkJobs.values()) if (job.ended ? now() >= (job.retryAt || 0) : !current(job) || now() >= job.expiresAt) stopTalk(job);
   }
   const timer = enabled ? setInterval(sweep, sweepMs) : null; timer?.unref?.();
+  const audio = createCameraAudioApi({ env, accounts, wvp, binding, current, active, talkJobs, stopTalk, collect, reply, now, ...audioOptions });
   const detach = accounts?.onInvalidate?.(key => { for (const job of ptzJobs.values()) if (job.owner.key === key) stopPtz(job); for (const job of talkJobs.values()) if (job.owner.key === key) stopTalk(job); });
   return { async close() {
     if (closed) return; closed = true; clearInterval(timer); detach?.();
     await Promise.allSettled([...ptzJobs.values()].map(stopPtz).concat([...talkJobs.values()].map(stopTalk)));
+    await audio.close();
     wvp.close?.(); ended.clear();
   }, sweep, async handle(req, res, url) {
     if (!url.pathname.startsWith('/api/video/camera/')) return false;
@@ -162,6 +171,7 @@ function createCameraControlApi({ env = process.env, accounts, sources, wvp, now
     const match = url.pathname.match(/^\/api\/video\/camera\/boats\/([A-Za-z0-9_-]{1,64})(?:\/(ptz|talk)(?:\/([a-f0-9]{32})(?:\/(heartbeat|push|play))?)?)?$/);
     try {
       if (closed || !enabled) throw fault(503, '服务器尚未启用 WVP 摄像头控制');
+      if (await audio.handle(req, res, url, owner)) return true;
       if (!match || url.search) throw fault(404, '摄像头接口不存在');
       const [, id, action, session, direction] = match;
       if (!action && req.method === 'GET') {
@@ -193,7 +203,7 @@ function createCameraControlApi({ env = process.env, accounts, sources, wvp, now
         }
       } else throw fault(404, '摄像头接口不存在');
     } catch (error) {
-      req.resume(); reply(res, [400, 401, 403, 404, 408, 409, 413, 415, 429, 502, 503, 504].includes(error.status) ? error.status : 503,
+      req.resume(); reply(res, [400, 401, 403, 404, 405, 408, 409, 413, 415, 429, 502, 503, 504].includes(error.status) ? error.status : 503,
         { error: error.status ? error.message : '摄像头操作失败，请检查 WVP 和视频服务' });
     }
     return true;

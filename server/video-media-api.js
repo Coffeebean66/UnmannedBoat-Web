@@ -1,4 +1,4 @@
-/* SRT 媒体鉴权和同源 WHEP 信令代理。视频包由 MediaMTX 通过 UDP 转发，Node 只处理鉴权/SDP。 */
+/* SRT 鉴权与同源 WHEP 信令：原输入用 MediaMTX，国标摄像头直接用 ZLM；Node 只处理鉴权/SDP。 */
 'use strict';
 const http = require('node:http'), crypto = require('node:crypto'), { isIP } = require('node:net');
 const { createMqttDeviceClient } = require('./mqtt-device-api');
@@ -74,6 +74,7 @@ function createVideoMediaApi({ env = process.env, accounts, sources, client = cr
   let closed = false, authWork = 0, managedRead;
   const headers = config.enabled ? { Authorization: 'Basic ' + Buffer.from(READER + ':' + config.readerPassword).toString('base64') } : {};
   const active = session => !closed && !!accounts?.enabled && accounts.isActive(session);
+  const sourceKey = id => { const selected = sources?.source?.(id); return (selected?.provider || 'direct') + ':' + (selected?.revision || 0); };
   const reply = (res, status, value) => {
     if (res.destroyed || res.writableEnded) return;
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -94,7 +95,10 @@ function createVideoMediaApi({ env = process.env, accounts, sources, client = cr
   const remove = async record => {
     if (!record || record.removing) return;
     record.removing = true; sessions.delete(record.id);
-    try { await transport({ method: 'DELETE', path: record.upstream, headers }); } catch (_) { /* MediaMTX 同时超时/关闭时无需恢复旧连接。 */ }
+    try {
+      if (record.provider === 'wvp') await sources.closePlayback(record.upstream);
+      else await transport({ method: 'DELETE', path: record.upstream, headers });
+    } catch (_) { /* 媒体服务同时超时/关闭时无需恢复旧连接。 */ }
   };
   const invalidate = key => {
     for (const operation of pending) if (operation.owner.key === key) operation.cancelled = true;
@@ -102,7 +106,7 @@ function createVideoMediaApi({ env = process.env, accounts, sources, client = cr
   };
   const detach = accounts?.onInvalidate?.(invalidate);
   const sweep = setInterval(() => {
-    for (const record of sessions.values()) if (!active(record.owner) || record.expiresAt <= now()) remove(record);
+    for (const record of sessions.values()) if (!active(record.owner) || record.expiresAt <= now() || record.sourceKey !== sourceKey(record.deviceId)) remove(record);
     for (const [key, value] of attempts) if (value.until <= now()) attempts.delete(key);
   }, 15000); sweep.unref?.();
 
@@ -154,19 +158,32 @@ function createVideoMediaApi({ env = process.env, accounts, sources, client = cr
       const offer = body.toString('utf8');
       if (!offer.startsWith('v=0\r\n') && !offer.startsWith('v=0\n') || !/(?:^|\r?\n)m=video /.test(offer) || offer.includes('\0')) throw error(400, '视频 SDP 请求无效');
       await ensureBoat(deviceId);
-      await sources?.prepare(deviceId);
       if (!active(owner) || operation.cancelled) throw error(401, '登录会话已失效，请重新登录');
-      const response = await transport({ method: 'POST', path: '/' + deviceId + '/whep', body,
-        headers: { ...headers, 'Content-Type': 'application/sdp', Accept: 'application/sdp' } });
-      if (response.status !== 201) throw error(response.status === 404 ? 404 : 503, response.status === 404 ? '该船尚未上传低延迟视频，请检查发送端' : '视频连接未建立，请检查媒体服务及编码');
-      const location = upstreamLocation(response.headers?.location, deviceId, upstreamPort);
-      record = { id: crypto.randomBytes(16).toString('hex'), deviceId, upstream: location, owner, expiresAt: owner.value.expiresAt || now() + 12 * 60 * 60 * 1000, removing: false };
-      if (!response.body?.length || !String(response.headers?.['content-type'] || '').startsWith('application/sdp') || !response.body.toString('utf8').startsWith('v=0')) { await remove(record); record = null; throw error(502, '视频服务返回了无效 SDP'); }
+      const selectedKey = sourceKey(deviceId), provider = sources?.source?.(deviceId)?.provider || 'direct';
+      let answer, location;
+      if (provider === 'wvp') {
+        // 录像继续走原 RTSP/MediaMTX；实时观看无需等待这一路完成拉流或重试。
+        Promise.resolve().then(() => sources.prepare(deviceId)).catch(() => {});
+        const session = await sources.openPlayback(deviceId, offer, { beforeSend: () => active(owner) && !operation.cancelled && sourceKey(deviceId) === selectedKey });
+        location = session.resource; answer = Buffer.from(session.sdp || '');
+      } else {
+        await sources?.prepare(deviceId);
+        if (!active(owner) || operation.cancelled) throw error(401, '登录会话已失效，请重新登录');
+        if (sourceKey(deviceId) !== selectedKey) throw error(409, '视频来源已切换，请重新连接');
+        const response = await transport({ method: 'POST', path: '/' + deviceId + '/whep', body,
+          headers: { ...headers, 'Content-Type': 'application/sdp', Accept: 'application/sdp' } });
+        if (response.status !== 201) throw error(response.status === 404 ? 404 : 503, response.status === 404 ? '该船尚未上传低延迟视频，请检查发送端' : '视频连接未建立，请检查媒体服务及编码');
+        location = upstreamLocation(response.headers?.location, deviceId, upstreamPort);
+        answer = String(response.headers?.['content-type'] || '').startsWith('application/sdp') ? response.body : null;
+      }
+      record = { id: crypto.randomBytes(16).toString('hex'), deviceId, provider, sourceKey: selectedKey, upstream: location, owner, expiresAt: owner.value.expiresAt || now() + 12 * 60 * 60 * 1000, removing: false };
+      if (!answer?.length || answer.length > 65536 || !answer.toString('utf8').startsWith('v=0')) { await remove(record); record = null; throw error(502, '视频服务返回了无效 SDP'); }
       if (!active(owner) || operation.cancelled || res.destroyed) { await remove(record); record = null; throw error(401, '登录会话已失效，请重新登录'); }
+      if (sourceKey(deviceId) !== selectedKey) { await remove(record); record = null; throw error(409, '视频来源已切换，请重新连接'); }
       sessions.set(record.id, record);
       res.writeHead(201, { 'Content-Type': 'application/sdp', 'Cache-Control': 'no-store',
-        Location: PREFIX + '/boats/' + deviceId + '/whep/' + record.id, 'Content-Length': response.body.length });
-      res.end(response.body);
+        Location: PREFIX + '/boats/' + deviceId + '/whep/' + record.id, 'Content-Length': answer.length });
+      res.end(answer);
     } finally {
       pending.delete(operation); req.removeListener('aborted', abandoned); res.removeListener('close', abandoned);
       if (record && (!active(owner) || operation.cancelled || res.destroyed)) await remove(record);
@@ -203,7 +220,7 @@ function createVideoMediaApi({ env = process.env, accounts, sources, client = cr
           await remove(record); if (!res.destroyed) { res.writeHead(204, { 'Cache-Control': 'no-store' }); res.end(); }
         } else { res.setHeader('Allow', match[2] ? 'DELETE' : 'POST'); reply(res, 405, { error: '视频接口不支持此方法；请使用完整 ICE 的 WHEP 会话' }); }
       } catch (fault) {
-        req.resume(); reply(res, [400, 401, 404, 408, 413, 415, 429, 502, 503, 504].includes(fault.status) ? fault.status : 503,
+        req.resume(); reply(res, [400, 401, 404, 408, 409, 413, 415, 429, 502, 503, 504].includes(fault.status) ? fault.status : 503,
           { error: fault.status ? fault.message : '低延迟视频连接失败，请检查媒体服务' });
       }
       return true;

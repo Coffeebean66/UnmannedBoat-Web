@@ -85,7 +85,13 @@
         if(!current())return;
         this.clearTimer?.(request.timer);this.mediaRequest=null;
         if(error){controller?.abort();if(!refresh||error.auth)this.mediaConfigError=error.message||'无法读取视频服务配置，请点击重新连接';}
-        else this.mediaConfig=data;
+        else{
+          const before=this.mediaConfig?.selectedSource,after=data?.selectedSource;
+          const recovered=before&&after&&before.provider===after.provider&&before.revision===after.revision&&
+            (!before.applied&&after.applied||!before.receiving&&after.receiving);
+          this.mediaConfig=data;
+          if(recovered&&!this.active)this.signature='';
+        }
         this.reconcile();
       };
       request.timer=this.setTimer?.(()=>finish(Error('视频服务配置读取超时，请点击重新连接')),10000);
@@ -135,7 +141,8 @@
       else if(source.url.origin!==this.location.origin&&!this.allowedOrigins.includes(source.url.origin))message='视频来源尚未授权，请联系管理员配置';
       if(message){this.canPlay=!!(context&&this.mediaConfigError);this.release();this.setStatus(message,'warning');return;}
       if(!this.visible){this.release();this.setStatus('视频页面未显示，已暂停接收画面');return;}
-      const signature=JSON.stringify([this.deviceId,source.url.href,source.format,source.selection]);
+      // 录像拉流状态不等于当前WebRTC播放状态；后台ready变化不应重建正在播放的画面。
+      const signature=JSON.stringify([this.deviceId,source.url.href,source.format,source.selection?.provider,source.selection?.revision]);
       // 船端重复发布同一个地址只更新说明，不重新下载流或重建播放器。
       if(signature===this.signature)return;
       this.release();this.signature=signature;this.format=source.format;
@@ -202,6 +209,12 @@
       rtc.handshakeTimer=this.setTimer?.(()=>fail('WebRTC 连接超时，请检查视频来源和网络端口，然后重新连接'),source.selection?.provider==='wvp'?40000:20000);
       pc.ontrack=event=>{
         if(!current()){event.track?.stop?.();return;}
+        if(source.selection?.provider==='wvp'&&event.receiver){
+          // 仅给国标摄像头较小的播放缓冲目标；浏览器仍会按网络抖动自适应。
+          // 新 API 单位为毫秒，旧实验 API 为秒；不支持或拒绝赋值时继续正常播放。
+          try{if('jitterBufferTarget'in event.receiver)event.receiver.jitterBufferTarget=50;
+            else if('playoutDelayHint'in event.receiver)event.receiver.playoutDelayHint=0.05;}catch(_){}
+        }
         let stream=event.streams?.[0];
         if(!stream){
           if(!this.MediaStream)return fail('浏览器无法接收视频轨道，请更换浏览器');

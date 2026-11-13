@@ -44,7 +44,7 @@ async function fixture(t, options = {}) {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const call = (route, options) => request(server.address().port, route, options);
   t.after(async () => { await api.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); fs.rmSync(directory, { recursive: true, force: true }); });
-  return { get api() { return api; }, call, configs, paths, calls, started, stopped, file, credentials, time: () => time, advance(ms) { time += ms; }, async restart() { await api.close(); api = createVideoSourceApi(settings); } };
+  return { get api() { return api; }, call, configs, paths, calls, started, stopped, wvp, file, credentials, time: () => time, advance(ms) { time += ms; }, async restart() { await api.close(); api = createVideoSourceApi(settings); } };
 }
 
 test('只有管理员可以读取/切换来源，WVP使用同一船路径且切回UDP恢复封装和录像配置', async t => {
@@ -62,6 +62,32 @@ test('只有管理员可以读取/切换来源，WVP使用同一船路径且切�
   assert.deepEqual({ source: f.configs.get('boat-01').source, sourceOnDemand: f.configs.get('boat-01').sourceOnDemand, rtspTransport: f.configs.get('boat-01').rtspTransport },
     { source: 'udp+rtp://0.0.0.0:8000', sourceOnDemand: false, rtspTransport: 'automatic' });
   assert.equal(f.configs.get('boat-01').rtpSDP, SDP); assert.equal(f.configs.get('boat-01').recordPath, '/var/lib/recordings/%path/%f');
+});
+
+test('ZLM播放绑定当前摄像头；切换、取消或关服期间迟到的协商会回收资源，录像配置保留', async t => {
+  for (const action of ['play', 'switch', 'cancel', 'close']) {
+    const f = await fixture(t), deleted = [];
+    const select = body => f.call('/api/video/sources/boats/boat-01', { cookie: 'session=admin', method: 'PUT', body });
+    await select({ revision: 0, provider: 'wvp', deviceId: 'camera-01', channelId: 'channel-01' });
+    let release, started, allowed = true;
+    const began = new Promise(resolve => started = resolve);
+    f.wvp.openVideo = async (device, channel, offer, options) => {
+      assert.deepEqual([device, channel, offer], ['camera-01', 'channel-01', SDP]);
+      assert.equal(options.beforeSend(), true); started(); await new Promise(resolve => release = resolve);
+      return { resource: 'private-zlm', sdp: SDP };
+    };
+    f.wvp.closeVideo = async resource => deleted.push(resource);
+    const pending = f.api.openPlayback('boat-01', SDP, { beforeSend: () => allowed });
+    await began;
+    if (action === 'switch') await select({ revision: 1, provider: 'direct' });
+    else if (action === 'cancel') allowed = false;
+    else if (action === 'close') await f.api.close();
+    release();
+    if (action === 'play') { const session = await pending; await f.api.closePlayback(session.resource); }
+    else await assert.rejects(pending, error => error.status === 409);
+    assert.deepEqual(deleted, ['private-zlm'], action);
+    assert.equal(f.configs.get('boat-01').record, true); assert.deepEqual(f.stopped, []);
+  }
 });
 
 test('离线设备的选择安全持久保存并显示待接收状态，服务重启后继续尝试', async t => {

@@ -100,6 +100,67 @@ test('WHEP creates an opaque owned session for a known boat without requiring an
   assert.equal((await f.call(result.headers.location, { cookie: guest, method: 'DELETE' })).status, 404);
 });
 
+test('WVP plays through ZLM without waiting for the independent recording path, retaining owned opaque sessions', async t => {
+  const calls = []; let finishRecording;
+  const sources = { enabled: true, source: () => ({ provider: 'wvp', revision: 2 }),
+    prepare: () => new Promise(resolve => { calls.push('recording'); finishRecording = resolve; }),
+    async openPlayback(id, offer, options) { calls.push(['play', id, offer]); assert.equal(options.beforeSend(), true); return { resource: 'private-zlm-session', sdp: OFFER }; },
+    async closePlayback(resource) { calls.push(['delete', resource]); } };
+  const f = await fixture(t, { videoMediaOptions: { sources } }), cookie = await f.login('guest');
+  const result = await f.play(cookie); assert.equal(result.status, 201, result.raw);
+  assert.equal(result.raw, OFFER); assert.doesNotMatch(JSON.stringify(result.headers), /private-zlm/);
+  assert.deepEqual(calls.slice(0, 2), [['play', 'boat-01', OFFER], 'recording']);
+  assert.equal(f.transportCalls.length, 0, '不经过 MediaMTX 的播放接口');
+  assert.equal((await f.call(result.headers.location, { cookie, method: 'DELETE' })).status, 204);
+  assert.deepEqual(calls.at(-1), ['delete', 'private-zlm-session']); finishRecording();
+});
+
+test('late ZLM sessions are released after logout, source replacement or browser cancellation', async t => {
+  for (const action of ['logout', 'source', 'cancel']) {
+    let started, release, deleted, revision = 2;
+    const began = new Promise(resolve => started = resolve), removed = new Promise(resolve => deleted = resolve), calls = [];
+    const sources = { source: () => ({ provider: 'wvp', revision }), async prepare() {},
+      async openPlayback() { started(); await new Promise(resolve => release = resolve); return { resource: 'late-private-zlm', sdp: OFFER }; },
+      async closePlayback(resource) { calls.push(resource); deleted(); } };
+    const f = await fixture(t, { videoMediaOptions: { sources } }), cookie = await f.login();
+    let pending, req;
+    if (action === 'cancel') {
+      req = http.request({ host: '127.0.0.1', port: f.server.address().port, path: BASE + '/boats/boat-01/whep', method: 'POST',
+        headers: { Cookie: cookie, Origin: ORIGIN, 'Content-Type': 'application/sdp', 'Content-Length': Buffer.byteLength(OFFER) } });
+      pending = new Promise(resolve => req.once('error', resolve)); req.end(OFFER);
+    } else pending = f.play(cookie);
+    await began;
+    if (action === 'logout') await f.call('/api/auth/session', { cookie, method: 'DELETE' });
+    else if (action === 'source') revision++;
+    else { req.destroy(); await pending; await f.call('/healthz'); }
+    release();
+    if (action !== 'cancel') assert.equal((await pending).status, action === 'logout' ? 401 : 409);
+    await removed; assert.deepEqual(calls, ['late-private-zlm'], action); assert.equal(f.transportCalls.length, 0);
+  }
+});
+
+test('ZLM sessions obey viewer limits and logout/server shutdown release the correct backend', async t => {
+  for (const action of ['logout', 'shutdown']) {
+    let deletes = 0;
+    const sources = { source: () => ({ provider: 'wvp', revision: 1 }), async prepare() {},
+      async openPlayback() { return { resource: 'private-zlm', sdp: OFFER }; }, async closePlayback() { deletes++; } };
+    const f = await fixture(t, { videoMediaOptions: { sources, maxPerSession: 1 } }), cookie = await f.login();
+    assert.equal((await f.play(cookie)).status, 201); assert.equal((await f.play(cookie)).status, 429);
+    if (action === 'logout') await f.call('/api/auth/session', { cookie, method: 'DELETE' }); else await f.close();
+    assert.equal(deletes, 1); assert.equal(f.transportCalls.length, 0);
+  }
+});
+
+test('a source switched during original MediaMTX negotiation discards its late answer and resource', async t => {
+  let revision = 1;
+  const sources = { source: () => ({ provider: 'direct', revision }), async prepare() {} };
+  const calls = [], f = await fixture(t, { videoMediaOptions: { sources }, transport: async input => {
+    calls.push(input.method); if (input.method === 'DELETE') return { status: 204 };
+    revision++; return { status: 201, headers: { location: '/boat-01/whep/old-source', 'content-type': 'application/sdp' }, body: ANSWER };
+  } }), cookie = await f.login();
+  assert.equal((await f.play(cookie)).status, 409); assert.deepEqual(calls, ['POST', 'DELETE']);
+});
+
 test('cross-origin requests, unsupported methods, malformed boats and invalid SDP never reach MediaMTX', async t => {
   const f = await fixture(t), cookie = await f.login();
   for (const origin of [null, 'https://evil.test']) assert.equal((await f.play(cookie, { origin })).status, 403);

@@ -89,7 +89,7 @@ async function main() {
   fs.writeFileSync(sourceFile, JSON.stringify({ version: 1, revision: 1, boats: { 'boat-mqtt-test': { provider: 'wvp', revision: 1, deviceId: 'cam-01', channelId: 'channel-01', original: { source: 'publisher', sourceOnDemand: false, rtspTransport: 'automatic' } } } }));
   const native = createMediaTransport({ port: httpPort }), wvp = {
     async voiceAvailable() { return true; }, async ptz(...args) { calls.push(['ptz', ...args]); },
-    async talkStart(_device, _channel, mode) { calls.push(['start', mode]); return { push: { app: 'voice' }, play: mode === 'talk' ? { app: 'voice' } : null }; },
+    async talkStart(_device, _channel, mode) { calls.push(['start', mode]); return { push: { app: 'voice' }, play: mode !== 'broadcast' ? { app: 'voice' } : null }; },
     async openAudio(_target, direction, sdp) {
       assert.match(sdp, /PCMA\/8000/); assert.doesNotMatch(sdp, /m=video/);
       const response = await native({ method: 'POST', path: '/voice/' + (direction === 'push' ? 'whip' : 'whep'), body: Buffer.from(sdp), headers: { 'Content-Type': 'application/sdp' } });
@@ -130,6 +130,9 @@ async function main() {
       await evaluate('window.cameraRtcDebug=[];window.cameraDebugTimer=setInterval(async()=>{const job=boatMonitor.cameraControl.talk,pc=job?.peers.get("push");if(pc){const stats=await pc.getStats();cameraRtcDebug.push({state:pc.connectionState,ice:pc.iceConnectionState,local:pc.localDescription?.sdp,remote:pc.remoteDescription?.sdp,stats:[...stats.values()].filter(s=>["candidate-pair","local-candidate","remote-candidate","transport"].includes(s.type))});if(cameraRtcDebug.length>3)cameraRtcDebug.shift();}},800);document.getElementById("cameraTalkStart").click()');
       try { await until('boatMonitor.cameraControl.talk?.ready', 30000); } catch (error) { fs.writeFileSync(path.join(output, 'camera-rtc-debug.json'), JSON.stringify(await evaluate('cameraRtcDebug'), null, 2)); throw Error(error.message + '\n' + await evaluate('document.getElementById("cameraControlStatus").textContent') + '\n' + logs.join('')); }
       await until('(async()=>{const reports=await boatMonitor.cameraControl.talk.peers.get("play").getStats();return [...reports.values()].some(r=>r.type==="inbound-rtp"&&r.kind==="audio"&&r.bytesReceived>0)})()', 10000);
+      assert.equal(await evaluate('document.getElementById("cameraTalkMode").value'), 'compatible');
+      assert.match(await evaluate('document.getElementById("cameraControlStatus").textContent'), /兼容对讲已连接/);
+      assert.ok(calls.some(call => call[0] === 'start' && call[1] === 'compatible'));
       assert.equal(await evaluate('boatMonitor.cameraControl.talk.stream.getAudioTracks()[0].readyState'), 'live');
       await evaluate('window.cameraMicTrack=boatMonitor.cameraControl.talk.stream.getAudioTracks()[0];document.getElementById("cameraMicMute").click()'); assert.equal(await evaluate('cameraMicTrack.enabled'), false);
       await evaluate('document.getElementById("cameraMicMute").click()'); assert.equal(await evaluate('cameraMicTrack.enabled'), true);

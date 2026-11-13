@@ -94,23 +94,61 @@ function createWvpClient({ env = process.env, config = readWvpConfig(env), trans
     return deviceId + '/' + channelId;
   };
   // WVP 返回的播放地址仅用于提取经过校验的流编号及凭据，不转发其中的服务器地址。
-  function audioTarget(info, kind) {
-    if (!info || !ID.test(info.app || '') || !ID.test(info.stream || '')) throw fault(502, 'WVP 返回了无效的语音流');
+  function mediaTarget(info, kind, label = '语音') {
+    if (!info || !ID.test(info.app || '') || !ID.test(info.stream || '')) throw fault(502, `WVP 返回了无效的${label}流`);
     const query = new URLSearchParams({ app: info.app, stream: info.stream });
     const raw = info.rtc?.url || info.rtc || info.rtcs?.url || info.rtcs;
     if (raw) {
-      let url; try { url = new URL(raw); } catch (_) { throw fault(502, 'WVP 语音地址格式无效'); }
-      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.hash || url.search.length > 2048 || !['/index/api/webrtc', '/index/api/whip', '/index/api/whep'].includes(url.pathname)) throw fault(502, 'WVP 语音地址无效');
+      let url; try { url = new URL(raw); } catch (_) { throw fault(502, `WVP ${label}地址格式无效`); }
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.hash || url.search.length > 2048 || !['/index/api/webrtc', '/index/api/whip', '/index/api/whep'].includes(url.pathname)) throw fault(502, `WVP ${label}地址无效`);
       const seen = new Set();
       for (const [key, value] of url.searchParams) {
-        if (seen.has(key) || !/^[A-Za-z0-9_.@:-]{1,512}$/.test(value)) throw fault(502, 'WVP 语音参数无效'); seen.add(key);
-        if (key === 'app' || key === 'stream') { if (value !== info[key]) throw fault(502, 'WVP 语音流不匹配'); }
-        else if (key === 'type') { if (value !== kind) throw fault(502, 'WVP 语音方向不匹配'); }
+        if (seen.has(key) || !/^[A-Za-z0-9_.@:-]{1,512}$/.test(value)) throw fault(502, `WVP ${label}参数无效`); seen.add(key);
+        if (key === 'app' || key === 'stream') { if (value !== info[key]) throw fault(502, `WVP ${label}流不匹配`); }
+        else if (key === 'type') { if (value !== kind) throw fault(502, `WVP ${label}方向不匹配`); }
         else if (['vhost', 'callId', 'originTypeStr', 'audioCodec', 'videoCodec', 'token'].includes(key)) query.set(key, value);
-        else throw fault(502, 'WVP 语音参数无效');
+        else throw fault(502, `WVP ${label}参数无效`);
       }
     }
     return { app: info.app, stream: info.stream, query: query.toString() };
+  }
+  async function openMedia(target, kind, offer, label) {
+    assertOpen();
+    if (!['push', 'play'].includes(kind) || !target || !ID.test(target.app || '') || !ID.test(target.stream || '') || typeof offer !== 'string' || Buffer.byteLength(offer) > 65536) throw fault(400, `${label}协商参数无效`);
+    const query = new URLSearchParams(target.query);
+    if (query.get('app') !== target.app || query.get('stream') !== target.stream) throw fault(400, `${label}流不匹配`);
+    if (kind === 'push') {
+      query.set('sign', await publishingKey());
+    }
+    const response = await transport({ port: config.zlmPort, path: '/index/api/' + (kind === 'push' ? 'whip' : 'whep') + '?' + query,
+      method: 'POST', body: Buffer.from(offer), format: 'raw', headers: { 'Content-Type': 'application/sdp', Accept: 'application/sdp' }, timeoutMs: 12000 });
+    if (response.status !== 201) {
+      if (kind === 'push') pushKey = '';
+      throw fault(response.status === 404 ? 404 : 503, label === '视频' ? '摄像头视频协商失败，请检查 ZLMediaKit WebRTC 及 H.264 编码' : kind === 'play' ? '摄像头语音回传尚未就绪，请检查对讲能力或改用单向喊话' : '语音发布失败，请检查 ZLMediaKit WebRTC 和 WVP 推流鉴权');
+    }
+    const origin = 'http://127.0.0.1:' + config.zlmPort;
+    let resource; try { resource = new URL(response.headers?.location, origin); } catch (_) { throw fault(502, `${label}服务返回无效会话`); }
+    if (resource.origin !== origin || resource.pathname !== '/index/api/delete_webrtc' || resource.username || resource.password || resource.hash || resource.search.length > 1024 || [...resource.searchParams.keys()].sort().join(',') !== 'id,token' || ![...resource.searchParams.values()].every(value => /^[A-Za-z0-9_.+:/=-]{1,256}$/.test(value))) throw fault(502, `${label}服务返回无效会话`);
+    const session = { resource: resource.pathname + resource.search, sdp: response.body?.toString('utf8') };
+    if (!session.sdp?.startsWith('v=0') || session.sdp.length > 65536) {
+      await closeMedia(session.resource, label).catch(() => {});
+      throw fault(502, `${label}服务返回无效 SDP`);
+    }
+    return session;
+  }
+  async function publishingKey() {
+    if (!pushKey || Date.now() - pushKeyAt > 60000) {
+      const user = await api('/api/user/userInfo', { method: 'POST' }, 'WVP 语音发布鉴权失败');
+      if (typeof user?.pushKey !== 'string' || !/^[A-Za-z0-9_-]{16,256}$/.test(user.pushKey)) throw fault(503, 'WVP 尚未配置语音发布凭据');
+      pushKey = user.pushKey; pushKeyAt = Date.now();
+    }
+    assertOpen(); return pushKey;
+  }
+  async function closeMedia(resource, label) {
+    // 退出、切换来源和关闭服务后仍要允许释放已创建的 WebRTC；不停止共享的国标点播。
+    if (typeof resource !== 'string' || !resource.startsWith('/index/api/delete_webrtc?') || resource.length > 1100) throw fault(400, `${label}会话无效`);
+    const response = await transport({ port: config.zlmPort, path: resource, method: 'DELETE', format: 'raw', timeoutMs: 3000 });
+    if (![200, 204, 404].includes(response.status)) throw fault(503, `${label}媒体会话释放失败`);
   }
   async function pages(path) {
     const all = []; let total = Infinity;
@@ -138,6 +176,12 @@ function createWvpClient({ env = process.env, config = readWvpConfig(env), trans
       if (!ID.test(deviceId || '') || !ID.test(channelId || '')) throw fault(400, 'WVP 设备或通道编号无效');
       return { url: localRtsp(await api('/api/play/start/' + deviceId + '/' + channelId), config), deviceId, channelId };
     },
+    async openVideo(deviceId, channelId, offer, { beforeSend = () => true } = {}) {
+      const info = await api('/api/play/start/' + pair(deviceId, channelId));
+      if (!beforeSend()) throw fault(409, '视频来源或登录状态已变化，请重新连接');
+      return openMedia(mediaTarget(info, 'play', '视频'), 'play', offer, '视频');
+    },
+    closeVideo: resource => closeMedia(resource, '视频'),
     async ptz(deviceId, channelId, command, speed = 100, zoomSpeed = 4, { beforeSend } = {}) {
       const target = pair(deviceId, channelId);
       if (!['left', 'right', 'up', 'down', 'upleft', 'upright', 'downleft', 'downright', 'zoomin', 'zoomout', 'stop'].includes(command) || !Number.isInteger(speed) || speed < 1 || speed > 255 || !Number.isInteger(zoomSpeed) || zoomSpeed < 1 || zoomSpeed > 15) throw fault(400, '云台指令或速度无效');
@@ -150,8 +194,12 @@ function createWvpClient({ env = process.env, config = readWvpConfig(env), trans
       return response.status === 200 && response.data?.code === 0 && ['/index/api/whip', '/index/api/whep', '/index/api/delete_webrtc'].every(route => response.data.data?.includes(route));
     },
     async talkStart(deviceId, channelId, mode) {
-      if (!['talk', 'broadcast'].includes(mode)) throw fault(400, '语音模式无效');
-      const data = await api('/api/play/broadcast/' + pair(deviceId, channelId) + '?broadcastMode=' + (mode === 'broadcast'), {}, 'WVP 无法创建语音通道，请检查摄像头语音能力');
+      if (!['compatible', 'talk', 'broadcast'].includes(mode)) throw fault(400, '语音模式无效');
+      const target = pair(deviceId, channelId);
+      // 部分摄像头会接受 Talk INVITE 后立即重置 RTP；兼容方式使用国标喊话上行，复用视频音轨回传。
+      // 图传是共享流，结束通话只释放本次 WebRTC，不停止点播或服务器录像。
+      const video = mode === 'compatible' ? await api('/api/play/start/' + target, { timeoutMs: 12000 }, '无法连接摄像头图传音频，请检查视频音轨或改用单向喊话') : null;
+      const data = await api('/api/play/broadcast/' + target + '?broadcastMode=' + (mode !== 'talk'), { timeoutMs: 5000 }, 'WVP 无法创建语音通道，请检查摄像头语音能力');
       // 此 WVP 的双向对讲只在多端口 RTP 模式发送 SIP 请求，先检查实际运行节点，避免麦克风已连接却一直等回传。
       const mediaId = data?.streamInfo?.mediaServerId;
       if (mode === 'talk' && mediaId !== undefined) {
@@ -159,43 +207,23 @@ function createWvpClient({ env = process.env, config = readWvpConfig(env), trans
         const media = await api('/api/server/media_server/one/' + mediaId, { timeoutMs: 3000 }, '无法读取 WVP 语音媒体节点配置');
         if (media?.rtpEnable !== true) throw fault(503, 'WVP 双向对讲需要启用媒体节点的多端口 RTP；请由管理员同时更新节点与重启配置，或尝试单向喊话');
       }
-      const push = audioTarget(data?.streamInfo, 'push'), play = mode === 'talk' ? audioTarget(data?.playStreamInfo, 'play') : null;
+      const push = mediaTarget(data?.streamInfo, 'push'), play = mode === 'compatible' ? mediaTarget(video, 'play') : mode === 'talk' ? mediaTarget(data?.playStreamInfo, 'play') : null;
       return { push, play };
     },
     async talkStop(deviceId, channelId) {
       await api('/api/play/broadcast/stop/' + pair(deviceId, channelId), { timeoutMs: 3000 }, 'WVP 语音通道释放失败');
     },
-    async openAudio(target, kind, offer) {
+    async broadcastPublishUrl(target) {
       assertOpen();
-      if (!['push', 'play'].includes(kind) || !target || !ID.test(target.app || '') || !ID.test(target.stream || '') || typeof offer !== 'string' || Buffer.byteLength(offer) > 65536) throw fault(400, '语音协商参数无效');
+      if (!target || !ID.test(target.app || '') || !ID.test(target.stream || '')) throw fault(502, 'WVP 返回了无效的广播流');
+      // 文件播放仅在本机通过RTSP发布；令牌不经由浏览器，也不使用WVP返回的外部主机。
       const query = new URLSearchParams(target.query);
-      if (query.get('app') !== target.app || query.get('stream') !== target.stream) throw fault(400, '语音流不匹配');
-      if (kind === 'push') {
-        if (!pushKey || Date.now() - pushKeyAt > 60000) {
-          const user = await api('/api/user/userInfo', { method: 'POST' }, 'WVP 语音发布鉴权失败');
-          if (typeof user?.pushKey !== 'string' || !/^[A-Za-z0-9_-]{16,256}$/.test(user.pushKey)) throw fault(503, 'WVP 尚未配置语音发布凭据');
-          pushKey = user.pushKey; pushKeyAt = Date.now();
-        }
-        query.set('sign', pushKey);
-      }
-      const response = await transport({ port: config.zlmPort, path: '/index/api/' + (kind === 'push' ? 'whip' : 'whep') + '?' + query,
-        method: 'POST', body: Buffer.from(offer), format: 'raw', headers: { 'Content-Type': 'application/sdp', Accept: 'application/sdp' }, timeoutMs: 12000 });
-      if (response.status !== 201) { pushKey = ''; throw fault(response.status === 404 ? 404 : 503, kind === 'play' ? '摄像头语音回传尚未就绪，请检查对讲能力或改用单向喊话' : '语音发布失败，请检查 ZLMediaKit WebRTC 和 WVP 推流鉴权'); }
-      const origin = 'http://127.0.0.1:' + config.zlmPort;
-      let resource; try { resource = new URL(response.headers?.location, origin); } catch (_) { throw fault(502, '语音服务返回无效会话'); }
-      if (resource.origin !== origin || resource.pathname !== '/index/api/delete_webrtc' || resource.username || resource.password || resource.hash || resource.search.length > 1024 || [...resource.searchParams.keys()].sort().join(',') !== 'id,token' || ![...resource.searchParams.values()].every(value => /^[A-Za-z0-9_.+:/=-]{1,256}$/.test(value))) throw fault(502, '语音服务返回无效会话');
-      const session = { resource: resource.pathname + resource.search, sdp: response.body?.toString('utf8') };
-      if (!session.sdp?.startsWith('v=0') || session.sdp.length > 65536) {
-        await transport({ port: config.zlmPort, path: session.resource, method: 'DELETE', format: 'raw', timeoutMs: 3000 }).catch(() => {});
-        throw fault(502, '语音服务返回无效 SDP');
-      }
-      return session;
+      if (query.get('app') !== target.app || query.get('stream') !== target.stream) throw fault(502, 'WVP 广播流不匹配');
+      query.delete('app'); query.delete('stream'); query.delete('type'); query.set('sign', await publishingKey());
+      return 'rtsp://127.0.0.1:' + config.rtspPort + '/' + target.app + '/' + target.stream + '?' + query;
     },
-    async closeAudio(resource) {
-      if (typeof resource !== 'string' || !resource.startsWith('/index/api/delete_webrtc?') || resource.length > 1100) throw fault(400, '语音会话无效');
-      const response = await transport({ port: config.zlmPort, path: resource, method: 'DELETE', format: 'raw', timeoutMs: 3000 });
-      if (![200, 204, 404].includes(response.status)) throw fault(503, '语音媒体会话释放失败');
-    },
+    openAudio: (target, kind, offer) => openMedia(target, kind, offer, '语音'),
+    closeAudio: resource => closeMedia(resource, '语音'),
     async media() {
       assertOpen();
       if (!config.zlmSecret) return { configured: false, streams: 0 };

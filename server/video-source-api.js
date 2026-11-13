@@ -1,4 +1,4 @@
-/* 每船视频来源：WVP 主动点播 → 本机 RTSP → MediaMTX；同一船的播放与录像共用路径。 */
+/* 每船视频来源：WVP 由 ZLM 直接播放；本机 RTSP → MediaMTX 独立保留录像路径。 */
 'use strict';
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const { createWvpClient, readWvpConfig, ID } = require('./wvp-client');
@@ -164,7 +164,19 @@ function createVideoSourceApi({ env = process.env, accounts, file, client, wvp, 
   }
   const timer = enabled ? setInterval(() => { if (!background) { background = reconcile().catch(() => {}).finally(() => { background = null; }); } }, reconcileMs) : null;
   timer?.unref?.();
-  return { enabled, source, summaries, prepare, cameraBinding(id) {
+  return { enabled, source, summaries, prepare, async openPlayback(id, offer, { beforeSend = () => true } = {}) {
+    assertUsable();
+    const item = validBoat(id) ? own(state.boats, id) : null;
+    if (item?.provider !== 'wvp') throw fault(409, '视频来源已切换，请重新连接');
+    const current = () => !closed && own(state.boats, id) === item && beforeSend();
+    const session = await wvp.openVideo(item.deviceId, item.channelId, offer, { beforeSend: current });
+    // 点播/协商可能晚于切换通道、退出登录或取消请求完成，不能留下旧来源会话。
+    if (!current()) {
+      await wvp.closeVideo(session.resource).catch(() => {});
+      throw fault(409, '视频来源或登录状态已变化，请重新连接');
+    }
+    return session;
+  }, closePlayback: resource => wvp.closeVideo(resource), cameraBinding(id) {
     assertUsable();
     const item = validBoat(id) ? own(state.boats, id) : null;
     return item?.provider === 'wvp' ? { deviceId: item.deviceId, channelId: item.channelId, revision: item.revision } : null;

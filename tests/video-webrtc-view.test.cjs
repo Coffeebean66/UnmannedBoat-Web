@@ -156,6 +156,22 @@ test('服务器切换来源时轮询更新标签并重建会话；相同版本�
   h.fire(5000);await flush();assert.equal(h.peers.length,2);
 });
 
+test('仅WVP接收器设置50ms播放缓冲，兼容新旧API与不支持的浏览器，原UDP/SRT保持默认',async t=>{
+  for(const provider of ['wvp','direct'])for(const mode of ['new','old','unsupported','throws']){
+    const selection={provider,revision:1,applied:true,receiving:true};
+    const h=setup({handler:call=>call.url==='/api/video/media/config'?response(200,{...config,sourceSwitching:true,sources:{'boat-a':selection}}):undefined});
+    t.after(()=>h.view.destroy());h.show();await flush();
+    const receiver={};if(mode==='new')receiver.jitterBufferTarget=null;
+    if(mode==='old')receiver.playoutDelayHint=null;
+    if(mode==='throws')Object.defineProperty(receiver,'jitterBufferTarget',{set(){throw Error('unsupported');}});
+    h.peers[0].ontrack({receiver,track:{},streams:[{getTracks:()=>[]}]});
+    assert.equal(h.video.plays,1,provider+'/'+mode);
+    if(mode==='new')assert.equal(receiver.jitterBufferTarget,provider==='wvp'?50:null);
+    if(mode==='old')assert.equal(receiver.playoutDelayHint,provider==='wvp'?0.05:null);
+    if(mode==='unsupported')assert.deepEqual(receiver,{});
+  }
+});
+
 test('停止、隐藏、登出与销毁会取消来源轮询，刷新来源不会恢复用户已停止的视频',async t=>{
   for(const action of ['stop','hide','logout','destroy']){
     const h=setup({handler:call=>call.url==='/api/video/media/config'?response(200,{...config,sourceSwitching:true,sources:{}}):undefined});t.after(()=>h.view.destroy());
@@ -172,5 +188,14 @@ test('来源状态从等待点播变为收到视频后可以自动恢复，短�
   const h=setup({handler:call=>call.url==='/api/video/media/config'?(unavailable?response(503,{}):response(200,{...config,sourceSwitching:true,sources:{'boat-a':{provider:'wvp',revision:1,applied:true,receiving}}})):undefined});
   t.after(()=>h.view.destroy());h.show();await flush();h.peers[0].connect();
   unavailable=true;h.fire(5000);await flush();assert.equal(h.peers.length,1);assert.equal(h.view.state().active,true);
-  unavailable=false;receiving=true;h.fire(5000);await flush();assert.equal(h.peers.length,2);assert.equal(h.peers[0].closed,true);
+  unavailable=false;receiving=true;h.fire(5000);await flush();assert.equal(h.peers.length,1);assert.equal(h.peers[0].closed,false,'后台拉流恢复不打断已连接的播放器');
+});
+
+test('播放已失败时，来源从未就绪变为已接收才重试；正常遥测及重复轮询不会重试',async t=>{
+  let ready=false;
+  const h=setup({handler:call=>call.url==='/api/video/media/config'?response(200,{...config,sourceSwitching:true,sources:{'boat-a':{provider:'wvp',revision:1,applied:ready,receiving:ready}}}):call.method==='POST'&&!ready?response(404,'offline'):undefined});
+  t.after(()=>h.view.destroy());h.show();await flush();assert.equal(h.view.active,false);assert.equal(h.posts().length,1);
+  h.fire(5000);await flush();assert.equal(h.posts().length,1);
+  ready=true;h.fire(5000);await flush();assert.equal(h.posts().length,2);assert.equal(h.view.active,true);
+  h.fire(5000);await flush();assert.equal(h.posts().length,2);
 });

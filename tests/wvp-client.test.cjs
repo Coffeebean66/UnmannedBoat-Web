@@ -134,6 +134,23 @@ test('语音由本机 WHIP / WHEP 协商，WVP 推流密钥留在服务器，删
   assert.equal(calls.filter(call => call.method === 'DELETE').length, 2); await client.talkStop('camera-01', 'channel-01'); client.close();
 });
 
+test('MP3 广播只向本机 RTSP 发布，保留 WVP 参数并在服务端添加推流密钥', async () => {
+  const calls = [], client = createWvpClient({ env, transport: async call => {
+    calls.push(call);
+    if (call.path.startsWith('/api/user/login?')) return { status: 200, data: { code: 0, data: { accessToken: 'unit.jwt.token.value' } } };
+    if (call.path === '/api/user/userInfo') return { status: 200, data: { code: 0, data: { pushKey: 'private-push-key' } } };
+    if (call.path.startsWith('/api/play/broadcast/')) return { status: 200, data: { code: 0, data: { streamInfo: { app: 'broadcast', stream: 'cam-channel', rtc: 'https://public.example/index/api/webrtc?app=broadcast&stream=cam-channel&type=push&callId=file-call' } } } };
+    throw Error('unexpected route');
+  } });
+  const target = (await client.talkStart('cam', 'channel', 'broadcast')).push, url = new URL(await client.broadcastPublishUrl(target));
+  assert.equal(url.origin, 'null'); assert.equal(url.protocol, 'rtsp:'); assert.equal(url.host, '127.0.0.1:10004'); assert.equal(url.pathname, '/broadcast/cam-channel');
+  assert.equal(url.searchParams.get('callId'), 'file-call'); assert.equal(url.searchParams.get('sign'), 'private-push-key');
+  for (const key of ['app', 'stream', 'type']) assert.equal(url.searchParams.has(key), false);
+  await assert.rejects(client.broadcastPublishUrl({ ...target, stream: 'another-camera' }));
+  await assert.rejects(client.broadcastPublishUrl({ ...target, app: '../file' }));
+  assert.equal(calls.some(call => call.path.startsWith('/index/api/whip')), false, '服务器文件播放不创建浏览器麦克风会话'); client.close();
+});
+
 test('双向对讲先检查实际媒体节点的多端口 RTP，单端口不进入麦克风推流，喊话仍独立', async () => {
   for (const enabled of [false, true]) {
     const calls = [];
@@ -157,6 +174,73 @@ test('语音地址不允许外部凭据、任意路由、重复参数和设备�
   for (const rtc of ['https://user:pass@external/index/api/webrtc?app=talk&stream=s&type=push', 'https://external/other?app=talk&stream=s', 'https://external/index/api/webrtc?app=talk&app=talk&stream=s', 'https://external/index/api/webrtc?app=talk&stream=other']) {
     const client = createWvpClient({ env, transport: async call => call.path.startsWith('/api/user/login?') ? { status: 200, data: { code: 0, data: { accessToken: 'unit.jwt.token.value' } } } : { status: 200, data: { code: 0, data: { streamInfo: { app: 'talk', stream: 's', rtc } } } } });
     await assert.rejects(client.talkStart('camera-01', 'channel-01', 'broadcast')); client.close();
+  }
+});
+
+test('兼容对讲使用喊话发布与共享图传音轨回传，保留播放凭据且结束不停止视频', async () => {
+  const calls = [];
+  const client = createWvpClient({ env, transport: async call => {
+    calls.push(call.path);
+    if (call.path.startsWith('/api/user/login?')) return { status: 200, data: { code: 0, data: { accessToken: 'unit.jwt.token.value' } } };
+    if (call.path === '/api/play/start/camera-01/channel-01') return { status: 200, data: { code: 0, data: { app: 'rtp', stream: 'shared-video', rtc: 'https://external/index/api/webrtc?app=rtp&stream=shared-video&type=play&callId=video-call&token=private-video-token' } } };
+    if (call.path === '/api/play/broadcast/camera-01/channel-01?broadcastMode=true') return { status: 200, data: { code: 0, data: { streamInfo: { app: 'broadcast', stream: 'camera-channel' } } } };
+    if (call.path === '/api/play/broadcast/stop/camera-01/channel-01') return { status: 200, data: { code: 0 } };
+    throw Error('unexpected route: ' + call.path);
+  } });
+  const target = await client.talkStart('camera-01', 'channel-01', 'compatible');
+  assert.equal(target.push.app, 'broadcast'); assert.equal(target.play.app, 'rtp'); assert.equal(target.play.stream, 'shared-video');
+  const query = new URLSearchParams(target.play.query); assert.equal(query.get('callId'), 'video-call'); assert.equal(query.get('token'), 'private-video-token');
+  await client.talkStop('camera-01', 'channel-01');
+  assert.equal(calls.filter(path => path.includes('/api/play/start/')).length, 1);
+  assert.equal(calls.some(path => path.includes('/api/play/stop/') || path.includes('_talk') || path.includes('broadcastMode=false')), false);
+  await assert.rejects(client.talkStart('camera-01', 'channel-01', 'unknown'), error => error.status === 400); client.close();
+});
+
+test('兼容对讲的图传点播失败时，不创建喊话会话', async () => {
+  const calls = [];
+  const client = createWvpClient({ env, transport: async call => {
+    calls.push(call.path);
+    return call.path.startsWith('/api/user/login?') ? { status: 200, data: { code: 0, data: { accessToken: 'unit.jwt.token.value' } } } : { status: 200, data: { code: -1 } };
+  } });
+  await assert.rejects(client.talkStart('camera-01', 'channel-01', 'compatible'), error => error.status === 503 && /图传音频/.test(error.message));
+  assert.equal(calls.some(path => path.includes('/api/play/broadcast/')), false); client.close();
+});
+
+test('国标视频直接向本机ZLM协商WHEP，保留WVP鉴权参数，停止播放不停止点播或语音', async () => {
+  const calls = [], privateToken = 'private-video-token';
+  const client = createWvpClient({ env, transport: async call => {
+    calls.push(call);
+    if (call.path.startsWith('/api/user/login?')) return { status: 200, data: { code: 0, data: { accessToken: 'unit.jwt.token.value' } } };
+    if (call.path === '/api/play/start/camera-01/channel-01') return { status: 200, data: { code: 0, data: { app: 'rtp', stream: 'camera-channel',
+      rtc: 'https://public.invalid/index/api/webrtc?app=rtp&stream=camera-channel&type=play&callId=video-call&token=' + privateToken } } };
+    if (call.path.startsWith('/index/api/whep?')) return { status: 201, headers: { location: '/index/api/delete_webrtc?id=video-123&token=private-resource-token' }, body: Buffer.from('v=0\r\nm=video 9 RTP/AVP 96\r\n') };
+    if (call.method === 'DELETE') return { status: 200 };
+    throw Error('unexpected route');
+  } });
+  const session = await client.openVideo('camera-01', 'channel-01', 'v=0\r\nm=video 9 RTP/AVP 96\r\n');
+  assert.match(session.sdp, /m=video/);
+  const play = calls.find(call => call.path.startsWith('/index/api/whep?'));
+  assert.equal(play.port, 10080); assert.equal(play.method, 'POST'); assert.equal(play.format, 'raw');
+  assert.equal(new URL(play.path, 'http://zlm').searchParams.get('token'), privateToken);
+  assert.equal(new URL(play.path, 'http://zlm').searchParams.get('callId'), 'video-call');
+  client.close(); await client.closeVideo(session.resource);
+  assert.equal(calls.at(-1).path, session.resource);
+  assert.equal(calls.some(call => /broadcast|play\/stop|rtsp/.test(call.path)), false);
+});
+
+test('视频取消后不再向ZLM创建会话，坏地址不被代理，无效SDP会回收已创建资源', async () => {
+  for (const mode of ['cancel', 'bad-url', 'bad-resource', 'bad-sdp']) {
+    const calls = [];
+    const client = createWvpClient({ env, transport: async call => {
+      calls.push(call);
+      if (call.path.startsWith('/api/user/login?')) return { status: 200, data: { code: 0, data: { accessToken: 'unit.jwt.token.value' } } };
+      if (call.path.startsWith('/api/play/start/')) return { status: 200, data: { code: 0, data: { app: 'rtp', stream: 's', ...(mode === 'bad-url' ? { rtc: 'https://public.invalid/admin?app=rtp&stream=s' } : {}) } } };
+      return { status: 201, headers: { location: mode === 'bad-resource' ? 'http://public.invalid/index/api/delete_webrtc?id=x&token=y' : '/index/api/delete_webrtc?id=x&token=y' }, body: Buffer.from(mode === 'bad-sdp' ? 'not-sdp' : 'v=0\r\n') };
+    } });
+    await assert.rejects(client.openVideo('camera-01', 'channel-01', 'v=0\r\n', { beforeSend: () => mode !== 'cancel' }), error => error.status === (mode === 'cancel' ? 409 : 502));
+    assert.equal(calls.filter(call => call.method === 'POST').length, ['cancel', 'bad-url'].includes(mode) ? 0 : 1);
+    assert.equal(calls.filter(call => call.method === 'DELETE').length, mode === 'bad-sdp' ? 1 : 0);
+    client.close();
   }
 });
 

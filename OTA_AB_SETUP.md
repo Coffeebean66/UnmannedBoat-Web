@@ -9,8 +9,11 @@ Web `v1.44.0` 同时支持原复制式OTA和新A/B方案，按船端能力自动
 在主项目 `UnmannedBoat_Controller` 目录执行：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/build-ota-ab.ps1
+cmake --preset OTAAB
+cmake --build --preset OTAAB
 ```
+
+IDE配置预设选择 **`A/B OTA - package (.boatota)`**，构建预设选 `OTAAB` 后直接生成。该入口同时编译A区、B区及Bootloader，再生成完整包；原 `tools/build-ota-ab.ps1` 同样调用这个预设。Windows和Linux均可使用上述CMake命令。
 
 新Bootloader位于 `build/BootloaderAB/UnmannedBoat_Bootloader.hex`，首次A区应用位于 `build/OTAAB_A/UnmannedBoat_Controller.hex`。日常上传 `build/OTAAB/UnmannedBoat_Controller.boatota`。复用现有私密密钥，与服务器一致。分区、选择扇区擦除和Linux编译见主项目 [A/B安装教程](https://github.com/Coffeebean66/UnmannedBoat/blob/main/UnmannedBoat_Controller/OTA_AB_SETUP.md)。
 

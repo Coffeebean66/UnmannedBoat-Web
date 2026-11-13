@@ -11,6 +11,7 @@
       this.deviceId = ''; this.authenticated = false; this.visible = false; this.opened = false; this.destroyed = false;
       this.config = null; this.loading = false; this.generation = 0; this.configGeneration = 0; this.ptz = null; this.talk = null; this.pendingStop = Promise.resolve();
       this.requests = new Set(); this.handlers = []; this.identity = this.authIdentity();
+      this.audioFiles = window.BoatCameraAudio ? new window.BoatCameraAudio({ camera: this, document, auth, fetcher }) : null;
       this.configLoadedAt = 0;
       this.gamepadCommand = ''; this.gamepadNeedsNeutral = true;
       this.panelHome = document.createComment('camera controls home'); this.nodes.cameraControls.before(this.panelHome);
@@ -69,6 +70,7 @@
     reset() {
       ++this.generation; ++this.configGeneration; for (const controller of this.requests) controller.abort(); this.requests.clear();
       this.resetGamepadPtz(); this.endPtz(); this.stopTalk(); this.config = null; this.configLoadedAt = 0; this.loading = false; this.opened = false;
+      this.audioFiles?.reset();
     }
     async request(id, route, { method = 'GET', body, sdp, keepalive = false, signal, timeout = 8000 } = {}) {
       const controller = new AbortController(), abort = () => controller.abort(); signal?.addEventListener('abort', abort, { once: true });
@@ -102,14 +104,15 @@
       for (const button of this.buttons) button.disabled = !ready;
       n.cameraPtzStop.disabled = !ready; n.cameraPtzSpeed.disabled = !ready;
       n.cameraTalkMode.disabled = !ready || !!this.talk;
-      n.cameraTalkStart.disabled = !ready || !this.config?.voice || !!this.talk || !this.mediaDevices?.getUserMedia || !this.PeerConnection;
+      n.cameraTalkStart.disabled = !ready || !this.config?.voice || !!this.talk || !!this.audioFiles?.voiceBusy || !this.mediaDevices?.getUserMedia || !this.PeerConnection;
       n.cameraTalkStart.textContent = this.talk ? '正在连接 / 通话中' : n.cameraTalkMode.value === 'broadcast' ? '开始喊话' : '开始对讲';
       n.cameraTalkStop.disabled = !this.talk; n.cameraMicMute.disabled = !this.talk?.stream;
       n.cameraMicMute.textContent = this.talk?.muted ? '打开麦克风' : '关闭麦克风'; n.cameraMicMute.setAttribute('aria-pressed', String(!!this.talk?.muted));
       n.cameraListen.disabled = !ready || !!this.talk && !this.talk.audioBlocked;
       n.cameraListen.textContent = this.talk ? '播放对讲声音' : n.boatVideo.muted ? '监听画面声音' : '关闭画面声音';
       n.cameraListen.setAttribute('aria-pressed', String(!n.boatVideo.muted && !this.talk));
-      n.cameraVoiceHint.textContent = !this.mediaDevices?.getUserMedia ? '麦克风需要 HTTPS（本机可用 localhost）及浏览器授权。' : this.config?.voice === false ? this.config.voiceReason : '双向对讲需摄像头支持国标语音；仅需向扬声器讲话时选择单向喊话。';
+      n.cameraVoiceHint.textContent = !this.mediaDevices?.getUserMedia ? '麦克风需要 HTTPS（本机可用 localhost）及浏览器授权。' : this.config?.voice === false ? this.config.voiceReason : '推荐兼容对讲；图传需开启音频。仅需向扬声器讲话时选单向喊话，国标双向对讲需设备支持。';
+      this.audioFiles?.render(ready);
     }
     // 十字键与 RT 变焦使用同一云台租约；面板收起也可操作，切换目标后须先松键。
     resetGamepadPtz() {
@@ -200,7 +203,7 @@
         const stream = await this.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
         if (!this.isTalk(job)) { stream.getTracks().forEach(track => track.stop()); return; } job.stream = stream;
         for (const track of stream.getTracks()) track.addEventListener('ended', () => { if (this.isTalk(job)) this.stopTalk('麦克风已断开，语音已结束。'); }, { once: true });
-        const data = await this.request(job.id, '/talk', { method: 'POST', body: { mode: job.mode }, signal: job.controller.signal });
+        const data = await this.request(job.id, '/talk', { method: 'POST', body: { mode: job.mode }, signal: job.controller.signal, timeout: 45000 });
         if (!/^[a-f0-9]{32}$/.test(data.id || '')) throw Error('服务器返回了无效语音会话');
         if (!this.isTalk(job)) { this.request(job.id, '/talk/' + data.id, { method: 'DELETE', keepalive: true }).catch(() => {}); return; }
         job.session = data.id;
@@ -211,8 +214,8 @@
           finally { job.beating = false; }
         }, 1500);
         await this.peer(job, 'push'); if (!this.isTalk(job)) return;
-        if (job.mode === 'talk') {
-          this.notice('麦克风已连接，正在等待摄像头语音回传…');
+        if (job.mode !== 'broadcast') {
+          this.notice(job.mode === 'compatible' ? '麦克风已连接，正在接入摄像头图传音频…' : '麦克风已连接，正在等待摄像头语音回传…');
           const until = Date.now() + 20000;
           for (;;) {
             try { await this.peer(job, 'play'); break; }
@@ -223,7 +226,7 @@
           }
         }
         if (!this.isTalk(job)) return; job.ready = true;
-        this.notice(job.mode === 'talk' ? '双向对讲已连接，麦克风正在发送；结束通话会关闭麦克风。' : '喊话音频已发送，麦克风正在工作；结束通话会关闭麦克风。', 'success'); this.render();
+        this.notice(job.mode === 'compatible' ? '兼容对讲已连接：麦克风通过喊话通道发送，摄像头声音来自图传音轨；结束通话会关闭麦克风。' : job.mode === 'talk' ? '双向对讲已连接，麦克风正在发送；结束通话会关闭麦克风。' : '喊话音频已发送，麦克风正在工作；结束通话会关闭麦克风。', 'success'); this.render();
       } catch (error) {
         if (this.talk !== job) return;
         const message = error.name === 'NotAllowedError' ? '麦克风权限未授权，请在浏览器地址栏允许麦克风后重试。' : error.name === 'NotFoundError' ? '未找到麦克风，请连接或启用电脑麦克风。' : error.message || '语音连接失败，请检查摄像头和服务器。';

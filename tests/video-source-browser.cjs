@@ -11,11 +11,14 @@ async function main(){
   const output=path.resolve(__dirname,'../.test-output');fs.mkdirSync(output,{recursive:true});
   const run=fs.mkdtempSync(path.join(output,'wvp-browser-')),children=[],logs=[],errors=[];
   const [apiPort,whepPort,rtspPort,rtpPort,rtcPort]=await Promise.all([freePort(),freePort(),freePort(),freePort(true),freePort(true)]);
-  const password='b'.repeat(64),mediaCalls=[],wvpCalls=[];
+  const password='b'.repeat(64),mediaCalls=[],wvpCalls=[],wvpRtcCalls=[];
   const client=async()=>({canAuthenticateVideo:true,devices:[{deviceId:'boat-mqtt-test'}]});
   const wvp={enabled:true,async devices(){return {devices:[{deviceId:'camera-01',name:'船载摄像机',online:true}]};},
     async channels(){return {channels:[{channelId:'channel-01',name:'船首主摄像头',online:true}]};},
     async start(deviceId,channelId){wvpCalls.push({deviceId,channelId});return {url:'rtsp://127.0.0.1:'+rtspPort+'/rtp/camera',deviceId,channelId};},
+    // 本机MediaMTX模拟ZLM的SDP/媒体端，验证WVP视频走独立播放接口而非船ID转发路径。
+    async openVideo(deviceId,channelId,offer){wvpRtcCalls.push({method:'POST',deviceId,channelId});const r=await mediaTransport({method:'POST',path:'/rtp/camera/whep',body:Buffer.from(offer),headers:{'Content-Type':'application/sdp'}});assert.equal(r.status,201);return {sdp:r.body.toString(),resource:r.headers.location};},
+    async closeVideo(resource){wvpRtcCalls.push({method:'DELETE'});await mediaTransport({method:'DELETE',path:resource});},
     async media(){return {configured:true,streams:1};},close(){}};
   const mediaTransport=createMediaTransport({port:whepPort}),native=createRecordingTransport({port:apiPort});
   const server=createFixtureServer({env:{BOAT_VIDEO_MEDIA_ENABLED:'1',BOAT_VIDEO_MEDIA_AUTH_TOKEN:'a'.repeat(64),BOAT_VIDEO_MEDIA_READER_PASSWORD:password,
@@ -68,16 +71,19 @@ async function main(){
     await evaluate('document.getElementById("videoSourceWvpChannel").value="channel-01";document.getElementById("videoSourceWvpChannel").dispatchEvent(new Event("change"));document.getElementById("videoSourceForm").requestSubmit()');
     await until('boatMonitor.videoSources.state?.revision===1&&!boatMonitor.videoSources.busy');
     assert.equal(wvpCalls.length>0,true);await evaluate('document.getElementById("platformSettingsClose").click()');
-    await until('document.getElementById("boatVideo").videoWidth===640&&boatMonitor.videoView.playing','WVP来源经RTSP拉流后真实WebRTC解码');
+    await until('document.getElementById("boatVideo").videoWidth===640&&boatMonitor.videoView.playing','WVP来源独立WebRTC路径真实解码');
+    assert.equal(wvpRtcCalls.filter(c=>c.method==='POST').length,1);assert.equal(mediaCalls.filter(c=>c.method==='POST').length,1,'WVP不经过船ID的MediaMTX播放入口');
     assert.match(await evaluate('document.getElementById("videoSource").textContent'),/WVP/);
+    const wvpConf=JSON.parse((await native({method:'GET',path:'/v3/config/paths/get/boat-mqtt-test'})).body);assert.match(wvpConf.source,/\/rtp\/camera$/,'MediaMTX录像拉流独立保留');
     // 另一管理员的服务器切换，当前播放页面不点重新连接也要自动更新。
     const restored=await evaluate('(async()=>{const r=await fetch("/api/video/sources/boats/boat-mqtt-test",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({revision:1,provider:"direct"})});return r.status;})()');assert.equal(restored,200);
     await until('document.getElementById("boatVideo").videoWidth===320&&boatMonitor.videoView.playing','轮询发现服务器切回UDP，自动重连');
+    assert.equal(wvpRtcCalls.filter(c=>c.method==='DELETE').length,1);
     const conf=JSON.parse((await native({method:'GET',path:'/v3/config/paths/get/boat-mqtt-test'})).body);assert.equal(conf.source,'udp+mpegts://127.0.0.1:'+rtpPort);
     const screenshot=await send('Page.captureScreenshot',{format:'png'});fs.writeFileSync(path.join(output,'video-source-1440.png'),Buffer.from(screenshot.data,'base64'));
     await evaluate('document.getElementById("videoStop").click()');await until('!boatMonitor.videoView.active');
     assert.ok(mediaCalls.some(call=>call.method==='DELETE'));assert.deepEqual(errors,[]);
-    console.log('WVP browser passed: UDP320 → admin selection → RTSP640 → WebRTC decoded; server switch discovered by polling; original UDP restored; page stopped and sessions cleaned. WVP API is simulated.');
+    console.log('WVP browser passed: original UDP320 → independent WVP WebRTC640 with recording pull preserved → original UDP restored; page stopped and both session backends cleaned. WVP/ZLM API is simulated.');
   }finally{
     socket?.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));for(const child of children)child.kill();
     await Promise.all(children.map(child=>child.exitCode!==null?Promise.resolve():Promise.race([new Promise(resolve=>child.once('exit',resolve)),wait(3000)])));

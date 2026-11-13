@@ -57,6 +57,7 @@
   <script defer src="video-source-settings.js"></script>
   <script defer src="fleet-view.js"></script>
   <script defer src="video-view.js"></script>
+  <script defer src="camera-audio.js"></script>
   <script defer src="camera-control.js"></script>
   <script defer src="video-recording.js"></script>
   <script defer src="firmware-panel.js"></script>
@@ -121,7 +122,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">无人船监测 <span>v1.72.0</span></div>
+      <div class="sidebar-version">无人船监测 <span>v1.75.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -561,8 +562,19 @@
                 <button type="button" data-camera-command="downleft" aria-label="云台左下">↙</button><button type="button" data-camera-command="down" aria-label="云台向下">↓</button><button type="button" data-camera-command="downright" aria-label="云台右下">↘</button>
               </div><div class="camera-zoom"><button type="button" data-camera-command="zoomin" aria-label="云台放大">变倍 ＋</button><button type="button" data-camera-command="zoomout" aria-label="云台缩小">变倍 −</button></div>
               <label class="camera-speed">移动速度 <output id="cameraSpeedValue">100</output><input id="cameraPtzSpeed" type="range" min="1" max="255" value="100" aria-label="云台移动速度"></label><span class="camera-control-hint">按住移动 · 松开停止</span></div>
-              <div class="camera-voice"><label>语音模式<select id="cameraTalkMode"><option value="talk">双向对讲</option><option value="broadcast">单向喊话</option></select></label><div class="camera-voice-actions"><button id="cameraTalkStart" type="button" class="primary">开始对讲</button><button id="cameraTalkStop" type="button" class="ghost" disabled>结束通话</button><button id="cameraMicMute" type="button" class="ghost" aria-pressed="false" disabled>关闭麦克风</button><button id="cameraListen" type="button" class="ghost" aria-pressed="false">监听画面声音</button></div><p id="cameraVoiceHint" class="camera-control-hint">点击后授权麦克风；摄像头需支持国标语音并连接麦克风、扬声器。</p><audio id="cameraTalkAudio" autoplay></audio></div>
-            </div><p id="cameraControlStatus" class="camera-control-status" role="status" aria-live="polite">选择 WVP 摄像头后可控制云台与语音。</p>
+              <div class="camera-voice"><label>语音模式<select id="cameraTalkMode"><option value="compatible">兼容对讲（推荐）</option><option value="talk">国标双向对讲</option><option value="broadcast">单向喊话</option></select></label><div class="camera-voice-actions"><button id="cameraTalkStart" type="button" class="primary">开始对讲</button><button id="cameraTalkStop" type="button" class="ghost" disabled>结束通话</button><button id="cameraMicMute" type="button" class="ghost" aria-pressed="false" disabled>关闭麦克风</button><button id="cameraListen" type="button" class="ghost" aria-pressed="false">监听画面声音</button></div><p id="cameraVoiceHint" class="camera-control-hint">兼容对讲通过喊话发送、图传音轨接收；摄像头需开启音频并接好麦克风和扬声器。</p><audio id="cameraTalkAudio" autoplay></audio></div>
+            </div>
+            <section class="camera-file-audio" aria-label="服务器音频播报">
+              <div class="camera-audio-heading"><strong>服务器音频</strong><button id="cameraAudioRefresh" type="button" class="subtle">刷新</button></div>
+              <div id="cameraAudioUploadArea" class="camera-audio-upload" hidden><input id="cameraAudioFile" type="file" accept=".mp3,audio/mpeg" aria-label="选择要上传的 MP3"><button id="cameraAudioUpload" type="button" class="ghost" disabled>上传 MP3</button></div>
+              <label class="camera-audio-choice">播报文件<select id="cameraAudioSelect" disabled><option value="">读取服务器音频后选择</option></select></label>
+              <label class="camera-audio-volume" for="cameraAudioVolume"><span>播报音量</span><output id="cameraAudioVolumeValue" for="cameraAudioVolume">100%</output><input id="cameraAudioVolume" type="range" min="0" max="100" step="1" value="100" disabled aria-describedby="cameraAudioVolumeHint"></label>
+              <span id="cameraAudioVolumeHint" class="camera-control-hint">0% 为静音，100% 为原始音量；播放中调节直接生效。</span>
+              <div class="camera-voice-actions"><button id="cameraAudioPlay" type="button" class="primary" disabled>一键播放</button><button id="cameraAudioStop" type="button" class="ghost" disabled>停止播放</button><button id="cameraAudioDelete" type="button" class="subtle" hidden disabled>删除文件</button></div>
+              <p id="cameraAudioStatus" class="camera-audio-status" role="status" aria-live="polite">选择音频后点击一键播放，无需电脑麦克风。</p>
+              <span class="camera-control-hint">MP3 ≤20MB、≤30分钟。播放一次，收起面板或离页后继续；退出登录时停止。与麦克风对讲互斥。</span>
+            </section>
+            <p id="cameraControlStatus" class="camera-control-status" role="status" aria-live="polite">选择 WVP 摄像头后可控制云台与语音。</p>
           </section>
         </article>
         </div>
