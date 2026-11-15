@@ -2,15 +2,20 @@
 (() => {
   'use strict';
   const formats={webrtc:'WebRTC · 低延迟',hls:'HLS',flv:'HTTP-FLV',native:'原生视频',auto:'自动识别'};
+  const orientations=['normal','flip-y','rotate-180'];
   const DEVICE=/^[A-Za-z0-9_-]{1,64}$/,PLAYBACK_BASE='/api/video/media/boats/';
   class BoatVideoView {
     constructor({document=window.document,location=window.location,Hls=window.Hls,mpegts=window.mpegts,
       fetch=window.fetch?.bind(window),RTCPeerConnection=window.RTCPeerConnection,MediaStream=window.MediaStream,
-      AbortController=window.AbortController,setTimeout=window.setTimeout?.bind(window),clearTimeout=window.clearTimeout?.bind(window)}={}) {
+      AbortController=window.AbortController,setTimeout=window.setTimeout?.bind(window),clearTimeout=window.clearTimeout?.bind(window),storage}={}) {
       this.document=document;this.location=location;this.Hls=Hls;this.mpegts=mpegts;
       this.fetch=fetch;this.RTCPeerConnection=RTCPeerConnection;this.MediaStream=MediaStream;this.AbortController=AbortController;
       this.setTimer=setTimeout;this.clearTimer=clearTimeout;
+      // 显示方向按船和图传来源单独保存；禁用本地存储时仍可在本页切换。
+      this.storage=storage;try{if(storage===undefined)this.storage=window.localStorage;}catch(_){}
+      this.orientation='normal';this.orientationKey='';this.orientationPreferences=new Map();
       this.nodes=Object.fromEntries(['boatVideo','videoPlay','videoStop','videoRetry','videoFullscreen','videoStatus','videoDeviceName','videoTitle','videoFormat','videoSource','videoUpdated','videoEmpty','videoMessage'].map(id=>[id,document.getElementById(id)]));
+      this.orientationControls=['videoOrientation','driverVideoOrientation'].map(id=>document.getElementById(id)).filter(Boolean);
       this.video=this.nodes.boatVideo;this.visible=false;this.enabled=true;this.destroyed=false;
       this.deviceId='';this.descriptor=null;this.allowedOrigins=[];this.authenticated=false;this.streaming=false;
       this.player=null;this.attached=false;this.format='';this.active=false;this.playing=false;this.signature='';this.generation=0;this.status='等待选择无人船';
@@ -28,6 +33,7 @@
       });
       this.listen(this.nodes.videoStop,'click',()=>{this.enabled=false;this.reconcile();});
       this.listen(this.nodes.videoRetry,'click',()=>{this.enabled=true;if(this.mediaConfigError)this.resetMediaConfig();this.release();this.reconcile();});
+      for(const select of this.orientationControls)this.listen(select,'change',()=>this.setOrientation(select.value));
       this.listen(this.nodes.videoFullscreen,'click',()=>{
         const stage=this.video.closest('.video-stage');
         const result=stage?.requestFullscreen?stage.requestFullscreen():this.video.webkitEnterFullscreen?.();
@@ -44,7 +50,26 @@
     }
     listen(node,event,handler){node.addEventListener(event,handler);this.handlers.push([node,event,handler]);}
     text(id,value){const node=this.nodes[id];if(node.textContent!==String(value))node.textContent=String(value);}
-    state(){return {deviceId:this.deviceId,format:this.format,active:this.active,playing:this.playing,visible:this.visible,status:this.status};}
+    state(){return {deviceId:this.deviceId,format:this.format,active:this.active,playing:this.playing,visible:this.visible,status:this.status,orientation:this.orientation};}
+    renderOrientation(source) {
+      const key=source&&DEVICE.test(this.deviceId)?'boat-video-orientation-v1:'+this.deviceId+':'+(source.selection?.provider||'direct'):'';
+      if(key!==this.orientationKey){
+        this.orientationKey=key;let saved=this.orientationPreferences.get(key);
+        try{if(key&&saved===undefined)saved=this.storage?.getItem(key);}catch(_){}
+        this.orientation=orientations.includes(saved)?saved:'normal';
+      }
+      this.video.dataset.orientation=this.orientation;
+      for(const select of this.orientationControls){
+        select.value=this.orientation;select.disabled=!key||!this.authenticated||!this.streaming;
+      }
+    }
+    setOrientation(value) {
+      if(!this.orientationKey||!this.authenticated||!this.streaming||!orientations.includes(value))return;
+      this.orientation=value;this.orientationPreferences.set(this.orientationKey,value);
+      try{this.storage?.setItem(this.orientationKey,value);}catch(_){}
+      // 只变换视频元素，不重建播放连接，HUD 和外部工具栏保持正向。
+      this.renderOrientation(this.source());
+    }
     update({deviceId='',descriptor=null,authenticated=false,streaming=false,allowedOrigins=[]}={}) {
       if(this.destroyed)return;
       if(deviceId!==this.deviceId){this.enabled=true;this.resetMediaConfig();}
@@ -126,7 +151,7 @@
       const context=!!(this.authenticated&&this.streaming&&this.deviceId);
       if(context&&this.visible&&this.enabled)this.loadMediaConfig();
       this.scheduleMediaPoll();
-      const source=this.source();this.canPlay=!!(context&&(source||this.mediaConfigError||!this.mediaConfig));
+      const source=this.source();this.renderOrientation(source);this.canPlay=!!(context&&(source||this.mediaConfigError||!this.mediaConfig));
       this.text('videoFormat',source?formats[source.format]:'--');
       this.text('videoSource',source?(source.format==='webrtc'?(source.selection?.provider==='wvp'?'WVP / GB28181':'SRT / UDP')+' → '+source.url.host:source.url.host):'--');
       this.text('videoUpdated',source?.format==='webrtc'?'实时接收 · 无需发布视频地址':Number.isFinite(this.descriptor?.receivedAt)?new Date(this.descriptor.receivedAt).toLocaleString('zh-CN',{hour12:false})+(this.descriptor.retained?' · 保留地址':''):'--');
