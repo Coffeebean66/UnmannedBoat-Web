@@ -7,9 +7,9 @@ const DEVICE=/^[A-Za-z0-9_-]{1,64}$/;
 const REASONS=['正常','驾驶指令超时，已停船','已退出网页操控','紧急停止','网络中断，已停船','固件升级锁定'];
 const fault=(status,message)=>Object.assign(Error(message),{status});
 class ControlService {
-  constructor({bridge,now=Date.now,ackTimeoutMs=1800,inputTimeoutMs=600,capabilityFreshMs=750,stopTimeoutMs=1200,pollMs=50}={}){
+  constructor({bridge,now=Date.now,ackTimeoutMs=1800,missionAckTimeoutMs=5000,missionAcquireRetryMs=200,inputTimeoutMs=600,capabilityFreshMs=750,stopTimeoutMs=1200,pollMs=50}={}){
     this.bridge=bridge;this.now=now;this.ackTimeoutMs=ackTimeoutMs;this.inputTimeoutMs=inputTimeoutMs;
-    this.capabilityFreshMs=capabilityFreshMs;this.stopTimeoutMs=stopTimeoutMs;this.caps=new Map();this.jobs=new Map();this.closed=false;
+    this.capabilityFreshMs=capabilityFreshMs;this.stopTimeoutMs=stopTimeoutMs;this.missionAckTimeoutMs=missionAckTimeoutMs;this.missionAcquireRetryMs=missionAcquireRetryMs;this.caps=new Map();this.jobs=new Map();this.closed=false;
     this.onCapability=event=>this.accept(event);this.onState=event=>{
       if(!bridge.brokerConnected)this.caps.clear();else if(event?.device?.online===false)this.caps.delete(event.device.id);
       this.refresh();
@@ -102,7 +102,8 @@ class ControlService {
     if(!cap||cap.token!==job.token)return Promise.reject(fault(503,'船端驾驶状态已过期'));
     // 把最新设备时钟向前推到发包时刻；500 ms 窗口在单片机再次检查。
     const uptimeMs=(cap.uptimeMs+Math.max(0,Math.floor(this.now()-cap.receivedAt)))>>>0;
-    if(action==='acquire')job.startTick=uptimeMs;
+    // 任务接管重试只发新鲜零输入；年龄计算始终以第一次申请为锚点。
+    if(action==='acquire'){if(job.startTick===undefined)job.startTick=uptimeMs;job.lastAcquireAt=this.now();}
     const sequence=++job.sequence;
     if(sequence>0xffffffff)return Promise.reject(fault(409,'驾驶序号已耗尽，请重新接管'));
     return this.bridge.publishControl(job.id,P.command({token:job.token,uptimeMs,leaseId:job.leaseId,sequence,action,...input}));
@@ -128,7 +129,10 @@ class ControlService {
     for(const job of [...this.jobs.values()]){
       if(job.status==='stopping'){if(now-job.stopAt>=this.stopTimeoutMs)this.drop(job);continue;}
       if(!this.bridge.brokerConnected||!this.live(job.id)||!this.cap(job.id))this.stopJob(job,'stop',fault(503,'驾驶数据已断开，已取消操控'));
-      else if(job.status==='acquiring'&&now-job.startedAt>=this.ackTimeoutMs)this.stopJob(job,'stop',fault(504,job.input.testMode?'单片机未确认测试接管，请检查测试场景固件和驾驶指令通道':job.input.mode===0?'单片机未确认 PWM 接管，请更新支持无传感器反馈接管的固件，并检查驾驶指令通道':'单片机未确认闭环接管，请确认双电调反馈有效且停稳满1秒'));
+      else if(job.status==='acquiring'&&now-job.startedAt>=(job.source==='mission'?this.missionAckTimeoutMs:this.ackTimeoutMs))this.stopJob(job,'stop',fault(504,job.input.testMode?'单片机未确认测试接管，请检查测试场景固件和驾驶指令通道':job.input.mode===0?'单片机未确认 PWM 接管，请更新支持无传感器反馈接管的固件，并检查驾驶指令通道':'单片机未确认闭环接管，请确认双电调反馈有效且停稳满1秒'));
+      else if(job.status==='acquiring'&&job.source==='mission'&&now-job.lastAcquireAt>=this.missionAcquireRetryMs){
+        this.send(job,'acquire',job.input).catch(()=>this.stopJob(job,'stop',fault(503,'任务零输入接管重试发送失败')));
+      }
       else if(job.status==='active'&&now-job.lastInputAt>=this.inputTimeoutMs)this.stopJob(job,'release',fault(504,'驾驶指令超时，已取消操控'));
     }
   }

@@ -29,13 +29,15 @@ test('记录属性与直线/曲线独立，旧航线默认实线，严格校验�
   assert.equal(saved.getQueue('boat-01',q.id).routes[1].segments[0].record,undefined);assert.deepEqual(saved.get('boat-01',r.id),r);
 });
 
-test('普通开始不创建专用轨迹，记录操作仅允许从有效起点开始',async t=>{
+test('普通开始不创建专用轨迹，直接开始并记录会先驶向起点且接近航段不记录',async t=>{
   const f=fixture(t),r=route(f);for(const flag of [null,1,'true'])assert.throws(()=>f.mission.start('boat-01',r.id,'start',r.revision,flag),{status:400});
   assert.throws(()=>f.mission.start('boat-01',r.id,'goto',r.revision,true),{status:400});
-  f.feed('boat-01',N.destination(ORIGIN,180,10));assert.throws(()=>f.mission.start('boat-01',r.id,'start',r.revision,true),{status:409});
-  assert.equal(f.mission.tracks.list('boat-01').length,0);f.feed('boat-01',ORIGIN);await start(f,r,false);
+  await start(f,r,false);
   assert.equal(f.mission.snapshot('boat-01').recordTrack,false);assert.equal(f.mission.tracks.list('boat-01').length,0);
   assert.equal(f.commands().at(-1).payload[29],2);assert.ok(f.commands().at(-1).payload.readInt16LE(30)>0);
+  f.mission.stop('boat-01');await flush(f);f.feed('boat-01',N.destination(ORIGIN,180,10));
+  const job=await start(f,r,true);assert.equal(job.phase,'approach');assert.equal(f.mission.tracks.get('boat-01',job.trackId).pointCount,0);
+  await arrive(f,ORIGIN);assert.equal(job.phase,'route');assert.equal(job.index,1);assert.ok(f.mission.tracks.get('boat-01',job.trackId).pointCount>0);
 });
 
 test('服务器采样真实船位，跳过虚线仍下发运动指令，两段实线之间没有连接边',async t=>{
@@ -81,7 +83,9 @@ test('暂停与继续复用同一份轨迹并断开暂停空窗，失效定位�
   assert.equal(f.mission.snapshot('boat-01').trackId,id);assert.equal(f.mission.tracks.list('boat-01').length,1);
   await tick(f);const resumed=f.mission.tracks.get('boat-01',id);assert.equal(resumed.chunks.length,2);
   f.flags.set('boat-01',{fix:false});await tick(f);const stopped=f.mission.tracks.get('boat-01',id);
-  assert.equal(stopped.pointCount,resumed.pointCount);assert.equal(stopped.status,'failed');assert.equal(stopped.recording,false);
+  assert.equal(stopped.pointCount,resumed.pointCount);assert.equal(stopped.status,'running');assert.equal(stopped.recording,false);
+  f.flags.clear();await tick(f);await tick(f);const recovered=f.mission.tracks.get('boat-01',id);
+  assert.equal(recovered.status,'running');assert.equal(recovered.recording,true);assert.equal(recovered.chunks.length,3,'反馈空窗另建折线，不能跨失效定位续线');
 });
 
 test('循环返回段不记录，下一圈单独建段而且复用原控制租约',async t=>{

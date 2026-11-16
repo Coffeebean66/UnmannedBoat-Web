@@ -348,8 +348,8 @@
       $('missionCurveEdit').hidden=!picking;
       $('missionCurveHint').textContent=picking?'点击地图设置航段 '+(this.curveEditing+1)+' → '+(this.curveEditing+2)+' 的弯曲控制点；此点击不会增加航点。':'';
       for(const el of document.querySelectorAll('[data-mission-editor]'))el.disabled=locked||routeLocked||el.dataset.fixedDisabled==='true';
-      $('missionRunState').textContent=labels[run?.status]||'待命';$('missionRunState').dataset.status=run?.status||'idle';
-      $('missionRunMessage').textContent=run?(run.queue?run.message:run.routeName+' · '+run.message):'先保存航线，再前往开始点。';
+      $('missionRunState').textContent=run?.waitingForFeedback?'等待反馈':labels[run?.status]||'待命';$('missionRunState').dataset.status=run?.status||'idle';
+      $('missionRunMessage').textContent=run?(run.queue?run.message:run.routeName+' · '+run.message):'保存航线后可直接开始，船会先驶向起点。';
       $('missionWaypointProgress').textContent=run?(run.targetIndex+1)+' / '+run.pointCount:'--';
       $('missionDistance').textContent=Number.isFinite(run?.distanceM)?run.distanceM.toFixed(1)+' m':'--';
       $('missionHeading').textContent=Number.isFinite(run?.targetHeading)?run.targetHeading.toFixed(1)+'°':'--';
@@ -358,15 +358,15 @@
       $('missionLoopProgress').title=run?run.queue?'队列已完成 '+run.queue.completedLoops+' 轮；当前航线已完成 '+run.completedLoops+' 圈':'已完成 '+(run.completedLoops??0)+' 圈':'';
       const algorithm=run?.active?run.algorithm:window.boatMonitor?.link?.devices?.find(d=>d.id===this.deviceId)?.controlAlgorithm?.id;
       $('missionAlgorithm').textContent='任务算法：'+(algorithm===1?'最优控制 · LQR航线＋船速LQI/航向LQR':algorithm===0?'原算法 · 前视航线＋PID':'等待船端状态；旧固件沿用原算法');
-      $('missionPhase').textContent=run?.status==='running'?({route:'沿线航行',returning:'返回起点',transit:'前往下一航线',queueReturning:'队列返回起点',goto:'前往起点',home:'返回返航点',hold:'定点保持'}[run.phase]||'沿线航行'):(labels[run?.status]||'--');
+      $('missionPhase').textContent=run?.waitingForFeedback?'零 PWM 等待':run?.status==='running'?({approach:'前往起点',route:'沿线航行',returning:'返回起点',transit:'前往下一航线',queueReturning:'队列返回起点',goto:'前往起点',home:'返回返航点',hold:'定点保持'}[run.phase]||'沿线航行'):(labels[run?.status]||'--');
       // 驾驶台展示服务器的真实执行状态；查询失败时保留数据并明确标为状态过期。
       const driverRun=this.admin?run:null;
-      $('driverMissionState').textContent=this.statusError?'状态过期':labels[driverRun?.status]||'待命';
+      $('driverMissionState').textContent=this.statusError?'状态过期':driverRun?.waitingForFeedback?'等待反馈':labels[driverRun?.status]||'待命';
       $('driverMissionState').dataset.status=this.statusError?'stale':driverRun?.status||'idle';
       $('driverMissionName').textContent=this.runTitle(driverRun)||'暂无运行中的任务';
       $('driverMissionProgress').textContent=driverRun?(driverRun.targetIndex+1)+' / '+driverRun.pointCount:'--';
       $('driverMissionDistance').textContent=Number.isFinite(driverRun?.distanceM)?driverRun.distanceM.toFixed(1)+' m':'--';
-      $('driverMissionPhase').textContent=driverRun?.status==='running'?({route:'沿线航行',returning:'返回起点',transit:'前往下一航线',queueReturning:'队列返回起点',goto:'前往起点',home:'返回返航点',hold:'定点保持'}[driverRun.phase]||'沿线航行'):(labels[driverRun?.status]||'--');
+      $('driverMissionPhase').textContent=driverRun?.waitingForFeedback?'零 PWM 等待':driverRun?.status==='running'?({approach:'前往起点',route:'沿线航行',returning:'返回起点',transit:'前往下一航线',queueReturning:'队列返回起点',goto:'前往起点',home:'返回返航点',hold:'定点保持'}[driverRun.phase]||'沿线航行'):(labels[driverRun?.status]||'--');
       $('driverMissionLoop').textContent=driverRun?.action==='start'?(driverRun.queue?driverRun.queue.currentLoop+' / '+driverRun.queue.loopCount+' 轮':driverRun.loopEnabled?driverRun.currentLoop+' / '+driverRun.loopCount+' 圈':'单次'):'--';
       this.renderRunningBar();
       window.dispatchEvent(new CustomEvent('boat-mission-change',{detail:this.navigationState()}));

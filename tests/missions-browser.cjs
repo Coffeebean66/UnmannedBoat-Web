@@ -123,6 +123,15 @@ async function main(){
     assert.equal(await evaluate('document.getElementById("driverMissionProgress").textContent===(BoatMissions.run().targetIndex+1)+" / "+BoatMissions.run().pointCount'),true);
     assert.equal(await evaluate('document.getElementById("driverMissionLoop").textContent'),'1 / 2 圈');
     const immersiveLease=f.mission.jobs.get('boat-01').leaseId;
+    f.flags.set('boat-01',{motors:false});f.feed();
+    await until('BoatMissions.run()?.waitingForFeedback&&document.getElementById("driverMissionState").textContent==="等待反馈"');
+    assert.equal(await evaluate('document.getElementById("missionPhase").textContent'),'零 PWM 等待');
+    assert.equal(await evaluate('document.getElementById("driverMissionPhase").textContent'),'零 PWM 等待');
+    assert.equal(f.commands().at(-1).payload[29],0);assert.equal(f.commands().at(-1).payload.readInt16LE(30),0);
+    assert.equal(f.mission.jobs.get('boat-01').leaseId,immersiveLease);
+    f.flags.clear();f.feed();
+    await until('BoatMissions.run()?.waitingForFeedback===false&&document.getElementById("driverMissionState").textContent==="执行中"');
+    assert.equal(f.mission.jobs.get('boat-01').leaseId,immersiveLease,'Brief ESC feedback loss recovers in the same mission lease');
     await until('boatMonitor.mapMission.markers.length===0&&boatMonitor.map._lineOverlays.get("mission")?.lines.length===2');
     assert.equal(await evaluate('document.getElementById("driverMissionPointsToggle").hidden&&boatMonitor.mapMission.pointsVisible'),true,'Task mode stays free of waypoint markers while preserving monitoring preferences');
     assert.equal(f.mission.jobs.get('boat-01').leaseId,immersiveLease);

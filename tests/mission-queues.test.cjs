@@ -89,13 +89,14 @@ test('先完成单条航线自身循环，再进入下一条；队列前往起�
 });
 
 test('暂停转场后保留队列位置和冻结航线，继续重新申请租约，异常或手动停止不继续下一条',async t=>{
-  const f=fixture(t),routes=pair(f),q=await start(f,routes);await at(f,ORIGIN);await at(f,routes[0].points[1]);
+  const f=fixture(t,{missionOptions:{feedbackRecoveryMs:200}}),routes=pair(f),q=await start(f,routes);await at(f,ORIGIN);await at(f,routes[0].points[1]);
   const old=f.mission.snapshot('boat-01'),lease=f.mission.jobs.get('boat-01').leaseId;f.mission.pause('boat-01');await flush(f);
   assert.equal(f.mission.snapshot('boat-01').status,'paused');
   const {name,speedMps,arrivalRadiusM,points}=routes[1];f.store.save('boat-01',{name,speedMps,arrivalRadiusM,points:[points[0],N.destination(points[1],90,5)]},routes[1].id,1);
   f.advance(100);f.mission.resume('boat-01',old.runId);await until(()=>f.mission.snapshot('boat-01').status==='running');
   const resumed=f.mission.snapshot('boat-01');assert.equal(resumed.phase,'transit');assert.equal(resumed.queue.routeIndex,1);assert.deepEqual(resumed.route.points,routes[1].points);assert.notEqual(f.mission.jobs.get('boat-01').leaseId,lease);
-  f.flags.set('boat-01',{fix:false});f.advance(100);await flush(f);assert.equal(f.mission.snapshot('boat-01').status,'failed');assert.equal(f.mission.snapshot('boat-01').queue.completedLoops,0);
+  f.flags.set('boat-01',{fix:false});f.advance(100);await flush(f);assert.equal(f.mission.snapshot('boat-01').waitingForFeedback,true);
+  for(let i=0;i<2;i++){f.advance(100);await flush(f);}assert.equal(f.mission.snapshot('boat-01').status,'failed');assert.equal(f.mission.snapshot('boat-01').queue.completedLoops,0);
   f.flags.clear();f.feed('boat-01',ORIGIN);const updated=f.store.get('boat-01',routes[1].id);await start(f,[routes[0],updated],q);
   f.mission.stop('boat-01');await flush(f);assert.equal(f.mission.snapshot('boat-01').status,'stopped');
   const sent=f.commands().length;f.advance(500);assert.equal(f.commands().length,sent);
@@ -105,8 +106,7 @@ test('启动前核对整组速度与版本，未就绪不接管，重启只恢�
   const f=fixture(t),routes=pair(f,{}, {speedMps:3}),q=queue(f,routes);
   assert.throws(()=>f.mission.startQueue('boat-01',q.id,'start',2,[1,1]),{status:409});
   assert.throws(()=>f.mission.startQueue('boat-01',q.id,'start',1,[1,2]),{status:409});
-  f.feed('boat-01',N.destination(ORIGIN,180,10));assert.throws(()=>f.mission.startQueue('boat-01',q.id,'start',1,[1,1]),/不在开始点/);
-  f.feed('boat-01',ORIGIN);f.mission.startQueue('boat-01',q.id,'start',1,[1,1]);await until(()=>!f.mission.active('boat-01'));
+  f.feed('boat-01',N.destination(ORIGIN,180,10));f.mission.startQueue('boat-01',q.id,'start',1,[1,1]);await until(()=>!f.mission.active('boat-01'));
   assert.match(f.mission.snapshot('boat-01').message,/超过船端/);assert.equal(f.commands().length,0);
   const reopened=new MissionService({bridge:f.bridge,control:f.control,store:new MissionStore({env:f.env})});t.after(()=>reopened.close());
   assert.equal(reopened.list().length,0);assert.deepEqual(reopened.store.getQueue('boat-01',q.id),q);
@@ -196,12 +196,13 @@ for(const algorithm of [0,1])test('算法 '+algorithm+' 实际执行组内修改
   await at(f,copies[1].points[0]);await at(f,copies[1].points[1]);assert.equal(f.mission.snapshot('boat-01').status,'completed');
 });
 
-test('组起点改变后前往起点采用副本坐标；原起点不能直接启动',async t=>{
+test('组起点改变后可直接启动并自动接近副本起点，不改变来源航线',async t=>{
   const f=fixture(t),routes=pair(f),q=queue(f,routes),copies=structuredClone(q.routes);copies[0].points[0]=N.destination(ORIGIN,270,15);
   const edited=f.store.saveQueue('boat-01',{name:q.name,routeIds:q.routeIds,routes:copies},q.id,1);
-  assert.throws(()=>f.mission.startQueue('boat-01',q.id,'start',edited.revision,[2,2]),/不在开始点/);
-  await start(f,routes,edited,'goto');assert.deepEqual(f.mission.snapshot('boat-01').route.points[0],copies[0].points[0]);
-  await at(f,copies[0].points[0]);assert.equal(f.mission.snapshot('boat-01').status,'completed');assert.equal(f.mission.snapshot('boat-01').queue.completedLoops,0);
+  await start(f,routes,edited);assert.deepEqual(f.mission.snapshot('boat-01').route.points[0],copies[0].points[0]);
+  assert.equal(f.mission.snapshot('boat-01').phase,'approach');assert.equal(f.mission.snapshot('boat-01').targetIndex,0);
+  await at(f,copies[0].points[0]);assert.equal(f.mission.snapshot('boat-01').status,'running');assert.equal(f.mission.snapshot('boat-01').phase,'route');assert.equal(f.mission.snapshot('boat-01').targetIndex,1);
+  assert.deepEqual(f.store.get('boat-01',routes[0].id).points[0],ORIGIN);
 });
 
 test('HTTP可保存32条256点的完整组副本，独立限制2MiB且不放宽单航线请求',async t=>{

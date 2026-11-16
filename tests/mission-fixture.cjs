@@ -54,8 +54,8 @@ function createMissionFixture(options={}){
     const frames=[];for(const [type,size,version,flag]of [[1,64,1,0xf3],[2,40,2,3],[3,36,2,47],[4,36,1,3]]){
       const b=Buffer.alloc(size);b.set([0xa5,0x5a,version,type,size,flag]);b.writeUInt32LE(sequence,6);b.writeUInt32LE(now()>>>0,10);
       if(type===1)for(const base of [14,38]){b[base]=7;b.writeUInt16LE(2450,base+2);b.writeUInt16LE(5,base+20);}
-      if(type===2){b.writeInt16LE(1000,16);b.writeUInt16LE(o.age??0,20);b.writeUInt32LE(p.sourceTick??(now()>>>0),22);b.writeInt32LE(Math.round(p.latitude*1e7),26);b.writeInt32LE(Math.round(p.longitude*1e7),30);b.writeUInt16LE(Math.round((p.heading??0)*100),34);b[36]=o.fix===false?6:7;}
-      if(type===3){b[5]=o.motors===false?39:47;b[32]=state(id).mode;b[33]=o.heading===false?2:3;b.writeUInt16LE(1000,16);b.writeUInt16LE(o.age??0,20);b.writeUInt16LE(Math.round((p.heading??0)*100),28);}
+      if(type===2){b.writeInt16LE(1000,16);b.writeUInt16LE(o.age??0,20);b.writeUInt32LE(p.sourceTick??(now()>>>0),22);b.writeInt32LE(Math.round(p.latitude*1e7),26);b.writeInt32LE(Math.round(p.longitude*1e7),30);b.writeUInt16LE(Math.round((p.heading??0)*100),34);b[36]=(o.fix===false?0:1)|(o.speed===false?0:2)|(o.rtkHeading===false?0:4);}
+      if(type===3){b[5]=47&~(o.motors===false?8:0)&~(o.filtered===false?2:0);b[32]=state(id).mode;b[33]=(o.heading===false?0:1)|(o.enabled===false?0:2);b.writeUInt16LE(1000,16);b.writeUInt16LE(o.boatAge??o.age??0,20);b.writeUInt16LE(Math.round((p.heading??0)*100),28);}
       b.writeUInt16LE(U.crc16CcittFalse(b,2,size-4),size-2);frames.push(b);
     }
     publish(id,'telemetry',Buffer.concat(frames));const s=state(id);s.uptimeMs=now()>>>0;publish(id,'control-state',s);

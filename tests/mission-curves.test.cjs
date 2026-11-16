@@ -72,13 +72,14 @@ for(const algorithm of [0,1])test('server follows an actual curve with '+(algori
 });
 
 test('curve tracking rejects chord shortcuts and stale feedback while overlapping endpoint radii cannot skip the bend',async t=>{
-  const f=fixture(t),d=definition(),r=f.route('boat-01',d);f.mission.start('boat-01',r.id,'start');await until(()=>f.mission.snapshot('boat-01').status==='running');f.advance(100);
+  const f=fixture(t,{missionOptions:{feedbackRecoveryMs:200}}),d=definition(),r=f.route('boat-01',d);f.mission.start('boat-01',r.id,'start');await until(()=>f.mission.snapshot('boat-01').status==='running');f.advance(100);
   f.advance(100,'boat-01',N.destination(ORIGIN,0,50));await Promise.resolve();f.mission.refresh();assert.equal(f.mission.snapshot('boat-01').status,'failed');assert.match(f.mission.snapshot('boat-01').message,/偏离/);
   f.feed('boat-01',{...ORIGIN,heading:90});const close=f.route('boat-01',{...d,points:[ORIGIN,N.destination(ORIGIN,0,1)],segments:[{type:'curve',control:N.destination(N.destination(ORIGIN,0,.5),90,50)}],arrivalRadiusM:3});
   f.mission.start('boat-01',close.id,'start');await until(()=>f.mission.snapshot('boat-01').status==='running');
   for(let i=0;i<4;i++){f.advance(100);await Promise.resolve();assert.equal(f.mission.snapshot('boat-01').status,'running');}
   assert.equal(f.mission.snapshot('boat-01').targetIndex,1);assert.ok(f.mission.snapshot('boat-01').distanceM>40);
-  f.flags.set('boat-01',{fix:false});f.advance(100);await Promise.resolve();f.mission.refresh();assert.equal(f.mission.snapshot('boat-01').status,'failed');
+  f.flags.set('boat-01',{fix:false});f.advance(100);await Promise.resolve();f.mission.refresh();assert.equal(f.mission.snapshot('boat-01').waitingForFeedback,true);
+  for(let i=0;i<2;i++){f.advance(100);await Promise.resolve();f.mission.refresh();}assert.equal(f.mission.snapshot('boat-01').status,'failed');
 });
 
 test('curved loop finishes the bend, returns along the original straight closing leg and stops at its start',async t=>{

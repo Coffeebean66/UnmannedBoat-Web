@@ -168,7 +168,7 @@
         this.emergencyPending=true;m.stop(run).catch(error=>this.notice('急停确认失败：'+error.message,true)).finally(()=>{this.emergencyPending=false;});
       }
       if(this.cancelMotion&&!this.motionPending&&!active&&run&&['stopped','completed','failed'].includes(run.status))this.cancelMotion=false;
-      if(active||paused)d.text('driverSystemMode',(run.action==='hold'?'定点保持':run.action==='home'?'一键返航':'自动航行')+' · '+(paused?'已暂停':run.status==='running'?'运行中':'准备中'));
+      if(active||paused)d.text('driverSystemMode',(run.action==='hold'?'定点保持':run.action==='home'?'一键返航':'自动航行')+' · '+(paused?'已暂停':run.waitingForFeedback?'等待反馈':run.status==='running'?'运行中':'准备中'));
       if(active||paused){d.text('driverTakeoverStatus',paused?'任务已暂停':run.status==='running'?'服务器已接管':run.status==='stopping'?'等待停船确认':'等待自主接管');d.nodes.driverTakeoverStatus.dataset.state=run.status==='running'?'active':paused?'idle':'pending';}
       d.hud.setNavigation(same?m.navigationState():null);
       this.bindMap();this.drawHome();this.drawTaskPreview();

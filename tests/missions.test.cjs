@@ -74,9 +74,10 @@ test('goto stops at start, requires two new samples, waits for stop ACK, and nev
   f.ack();f.mission.refresh();const result=f.mission.snapshot('boat-01');assert.equal(result.status,'completed');assert.equal(result.stopConfirmed,true);assert.equal(f.control.jobs.size,0);
   f.advance(100);assert.equal(f.mission.snapshot('boat-01').status,'completed');
 });
-test('start requires being at start; ordered samples advance once per point, final point stops with confirmation',async t=>{
-  const f=fixture(t),r=f.route('boat-01',{loopCount:9});f.feed('boat-01',N.destination(ORIGIN,90,50));assert.throws(()=>f.mission.start('boat-01',r.id,'start'),{status:409});
-  f.feed('boat-01',ORIGIN);await running(f,r);f.advance(100);await flush(f);assert.equal(f.mission.snapshot('boat-01').targetIndex,1);
+test('start automatically approaches the first point; ordered samples advance once per point and finish with confirmation',async t=>{
+  const f=fixture(t),r=f.route('boat-01',{loopCount:9});f.feed('boat-01',{...N.destination(ORIGIN,90,50),heading:270});await running(f,r);
+  assert.equal(f.mission.snapshot('boat-01').phase,'approach');assert.equal(f.mission.snapshot('boat-01').targetIndex,0);assert.ok(f.mission.snapshot('boat-01').commandSpeedMps>0);
+  await arrive(f,{...ORIGIN,heading:0});assert.equal(f.mission.snapshot('boat-01').targetIndex,1);assert.equal(f.mission.snapshot('boat-01').phase,'route');
   for(let index=1;index<r.points.length;index++){f.advance(100,'boat-01',{...r.points[index],heading:90});await flush(f);assert.equal(f.mission.snapshot('boat-01').targetIndex,index);f.advance(100);await flush(f);}
   assert.equal(f.mission.snapshot('boat-01').status,'completed');assert.equal(f.mission.snapshot('boat-01').stopConfirmed,true);assert.equal(f.mission.snapshot('boat-01').loopCount,1,'Disabled loops ignore a previously saved count');
 });
@@ -118,24 +119,84 @@ test('goto on a looping route only goes to start and never enters a loop',async 
 
 test('return-leg feedback failures, excessive deviation and manual stop end the job without counting an unfinished lap',async t=>{
   for(const cause of ['fix','cross','stop']){
-    const f=fixture(t),r=f.route('boat-01',{loopEnabled:true,loopCount:3,points:[ORIGIN,N.destination(ORIGIN,0,30)]});await reachReturn(f,r);const before=f.commands().length;
+    const f=fixture(t,{missionOptions:{feedbackRecoveryMs:200}}),r=f.route('boat-01',{loopEnabled:true,loopCount:3,points:[ORIGIN,N.destination(ORIGIN,0,30)]});await reachReturn(f,r);const before=f.commands().length;
     if(cause==='fix'){f.flags.set('boat-01',{fix:false});f.advance(100);}
     else if(cause==='cross')f.advance(100,'boat-01',N.destination(N.destination(ORIGIN,0,15),90,40));
     else f.mission.stop('boat-01');
-    await flush(f);const run=f.mission.snapshot('boat-01');assert.equal(run.status,cause==='stop'?'stopped':'failed');assert.equal(run.completedLoops,0);assert.equal(run.commandSpeedMps,0);
+    await flush(f);if(cause==='fix')for(let i=0;i<2;i++){f.advance(100);await flush(f);}const run=f.mission.snapshot('boat-01');assert.equal(run.status,cause==='stop'?'stopped':'failed');assert.equal(run.completedLoops,0);assert.equal(run.commandSpeedMps,0);
     assert.ok(f.commands().slice(before).every(p=>p.payload.readInt16LE(30)===0));f.advance(100);await flush(f);assert.equal(f.mission.active('boat-01'),false);
   }
 });
-test('stale RTK, invalid position, missing motors and heading fail closed; unconfirmed stop never claims success',async t=>{
+test('persistent invalid RTK, motors or heading first wait at zero PWM then fail; unconfirmed stops never claim success',async t=>{
   for(const failure of [{age:1000},{fix:false},{motors:false},{heading:false}]){
-    const f=fixture(t);await running(f);f.autoAck=false;f.flags.set('boat-01',failure);f.advance(100);assert.equal(f.mission.snapshot('boat-01').status,'stopping');assert.equal(f.commands().at(-1).payload.readInt16LE(30),0);
+    const f=fixture(t,{missionOptions:{feedbackRecoveryMs:200}});await running(f);f.autoAck=false;f.flags.set('boat-01',failure);f.advance(100);assert.equal(f.mission.snapshot('boat-01').status,'running');assert.equal(f.mission.snapshot('boat-01').waitingForFeedback,true);assert.equal(f.commands().at(-1).payload[29],0);assert.equal(f.commands().at(-1).payload.readInt16LE(30),0);
+    for(let i=0;i<2;i++){f.advance(100);await flush(f);}assert.equal(f.mission.snapshot('boat-01').status,'stopping');
     f.advance(1300);f.control.refresh();f.mission.refresh();assert.equal(f.mission.snapshot('boat-01').status,'failed');assert.equal(f.mission.snapshot('boat-01').stopConfirmed,false);
   }
 });
-test('frozen source ticks stop; old samples do not keep a task moving',async t=>{
-  const f=fixture(t);await running(f);const tick=f.now();
+
+test('filtered speed warmup does not block takeover; a running loop waits for valid filtered speed before resuming',async t=>{
+  const f=fixture(t);f.flags.set('boat-01',{filtered:false,boatAge:65535});f.feed();
+  const job=await running(f);assert.equal(job.status,'running');assert.equal(job.feedbackWait,undefined);
+  for(let i=0;i<8;i++){f.advance(100);await flush(f);}assert.equal(job.status,'running');assert.equal(job.feedbackWait,undefined);
+  f.flags.clear();for(let i=0;i<9;i++){f.advance(100);await flush(f);}
+  const lease=job.leaseId,index=job.index,count=f.commands().length;f.flags.set('boat-01',{filtered:false});f.advance(100);await flush(f);
+  assert.equal(job.status,'running');assert.ok(job.feedbackWait);assert.ok(f.commands().slice(count).some(p=>p.payload[29]===0&&p.payload.readInt16LE(30)===0));
+  f.advance(100);await flush(f);assert.equal(f.commands().at(-1).payload[29],2);assert.equal(f.commands().at(-1).payload.readInt16LE(30),0);
+  for(let i=0;i<3;i++){f.advance(100);await flush(f);assert.equal(f.commands().at(-1).payload.readInt16LE(30),0);assert.ok(job.feedbackWait);}
+  f.flags.clear();f.advance(100);await flush(f);assert.equal(job.feedbackWait,null);assert.equal(job.leaseId,lease);assert.equal(job.index,index);assert.ok(job.commandSpeedMps>0);
+});
+
+test('brief motor and navigation failures recover in the same lease without skipping waypoints or replaying thrust',async t=>{
+  for(const failure of [{motors:false},{fix:false},{speed:false},{heading:false}]){
+    const f=fixture(t),job=await running(f);f.advance(100);await flush(f);const index=job.index,lease=job.leaseId;
+    f.flags.set('boat-01',failure);f.advance(100);await flush(f);const first=f.commands().length-1;
+    for(let i=0;i<10;i++){f.advance(100);await flush(f);}
+    assert.equal(job.status,'running');assert.equal(job.index,index);assert.equal(job.commandSpeedMps,0);assert.ok(job.feedbackWait);
+    assert.ok(f.commands().slice(first).every(p=>p.payload[29]===0&&p.payload.readInt16LE(30)===0&&p.payload.readInt16LE(32)===0));
+    f.flags.clear();f.advance(100);await flush(f);assert.ok(job.feedbackWait);assert.equal(f.commands().at(-1).payload[29],2);assert.equal(f.commands().at(-1).payload.readInt16LE(30),0);
+    f.advance(100);await flush(f);assert.equal(job.feedbackWait,null);assert.equal(job.leaseId,lease);assert.equal(job.index,index);assert.ok(job.commandSpeedMps>0);
+  }
+});
+
+test('default feedback recovery expires after five seconds and late recovery or an explicit stop never rearms',async t=>{
+  for(const explicitStop of [false,true]){
+    const f=fixture(t),job=await running(f);f.flags.set('boat-01',{motors:false});f.advance(100);await flush(f);
+    if(explicitStop){f.mission.stop('boat-01');await flush(f);}
+    else{
+      for(let i=0;i<49;i++){f.advance(100);await flush(f);}assert.equal(job.status,'running');assert.ok(job.feedbackWait);
+      f.advance(100);await flush(f);assert.equal(job.status,'failed');assert.match(job.message,/5 秒未恢复/);
+    }
+    assert.equal(job.status,explicitStop?'stopped':'failed');assert.equal(job.stopConfirmed,true);assert.equal(job.feedbackWait,null);
+    const count=f.commands().length;f.flags.clear();for(let i=0;i<5;i++){f.advance(100);await flush(f);}assert.equal(f.commands().length,count);
+  }
+});
+
+test('mission retries fresh zero-input acquisition while waiting to stop, then accepts a recent hardware ACK',async t=>{
+  const f=fixture(t,{autoAck:false}),r=f.route();f.mission.start('boat-01',r.id,'start');await until(()=>f.commands().length===1);
+  for(let i=0;i<20;i++){f.advance(100);await flush(f);}assert.equal(f.mission.snapshot('boat-01').status,'acquiring');
+  const commands=f.commands();assert.ok(commands.length>=10);const lease=commands[0].payload.subarray(16,24).toString('hex');
+  assert.ok(commands.every((p,i)=>p.payload[28]===1&&p.payload[29]===2&&p.payload.readInt16LE(30)===0&&p.payload.readUInt32LE(24)===i+1&&p.payload.subarray(16,24).toString('hex')===lease));
+  f.autoAck=true;f.ack(commands.at(-1));await until(()=>f.mission.snapshot('boat-01').status==='running');
+  assert.equal(f.mission.jobs.get('boat-01').leaseId,lease);f.advance(100);await flush(f);assert.ok(f.mission.snapshot('boat-01').commandSpeedMps>0);
+});
+
+test('mission acquire retries end at five seconds and never bypass the required hardware acknowledgement',async t=>{
+  const f=fixture(t,{autoAck:false}),r=f.route();f.mission.start('boat-01',r.id,'start');await until(()=>f.commands().length===1);
+  for(let i=0;i<50;i++){f.advance(100);await flush(f);}assert.ok(['stopping','failed'].includes(f.mission.snapshot('boat-01').status));assert.notEqual(f.control.jobs.get('boat-01')?.status,'active');
+  assert.ok(f.commands().every(p=>p.payload.readInt16LE(30)===0));assert.equal(f.commands().at(-1).payload[28],4);
+  f.advance(1300);await flush(f);assert.equal(f.mission.snapshot('boat-01').status,'failed');assert.equal(f.control.jobs.size,0);
+});
+
+test('automatic approach still rejects start points over twenty kilometres away',t=>{
+  const f=fixture(t),r=f.route();f.feed('boat-01',N.destination(ORIGIN,180,20001));assert.throws(()=>f.mission.start('boat-01',r.id,'start'),/20 千米/);
+});
+test('frozen source ticks wait at zero and eventually stop; repeated samples never resume motion',async t=>{
+  const f=fixture(t,{missionOptions:{feedbackRecoveryMs:200}});await running(f);const tick=f.now();
   for(let i=0;i<11;i++){f.advance(100,'boat-01',{sourceTick:tick});await flush(f);}
-  assert.equal(f.mission.snapshot('boat-01').status,'failed');assert.match(f.mission.snapshot('boat-01').message,/未更新/);
+  assert.equal(f.mission.snapshot('boat-01').waitingForFeedback,true);assert.equal(f.commands().at(-1).payload[29],0);
+  for(let i=0;i<2;i++){f.advance(100);await flush(f);}
+  assert.equal(f.mission.snapshot('boat-01').status,'failed');assert.match(f.mission.snapshot('boat-01').message,/未恢复/);
 });
 test('missing telemetry, broker loss and boat reboot cancel control without automatic rearm',async t=>{
   for(const cause of ['telemetry','broker','reboot']){
@@ -252,14 +313,15 @@ test('return home uses only the current boat saved point and stops after two fre
   f.advance(100);await flush(f);assert.equal(f.mission.snapshot('boat-01').status,'completed');assert.equal(f.mission.snapshot('boat-01').stopConfirmed,true);
 });
 
-test('station keeping stays at zero speed in its radius, corrects drift and stops on invalid feedback',async t=>{
+test('station keeping stays at zero speed in its radius, corrects drift and recovers brief feedback loss',async t=>{
   const f=fixture(t);f.mission.navigate('boat-01','hold',.5,3);await until(()=>f.mission.snapshot('boat-01').status==='running');
   for(let i=0;i<4;i++){f.advance(100);await flush(f);assert.equal(f.mission.snapshot('boat-01').commandSpeedMps,0);}
   const anchor=f.mission.snapshot('boat-01').route.points[0];assert.deepEqual(anchor,ORIGIN);
   f.advance(100,'boat-01',{...N.destination(ORIGIN,0,10),heading:180});await flush(f);
   assert.ok(f.mission.snapshot('boat-01').commandSpeedMps>0);assert.ok(f.mission.snapshot('boat-01').commandSpeedMps<=.5);
-  f.flags.set('boat-01',{fix:false});f.advance(100);await flush(f);assert.equal(f.mission.snapshot('boat-01').status,'failed');assert.equal(f.commands().at(-1).payload.readInt16LE(30),0);
-  f.flags.clear();f.advance(100);assert.equal(f.mission.snapshot('boat-01').status,'failed','Feedback recovery never automatically resumes station keeping');
+  f.flags.set('boat-01',{fix:false});f.advance(100);await flush(f);assert.equal(f.mission.snapshot('boat-01').waitingForFeedback,true);assert.equal(f.commands().at(-1).payload[29],0);assert.equal(f.commands().at(-1).payload.readInt16LE(30),0);
+  f.flags.clear();f.advance(100);await flush(f);assert.equal(f.commands().at(-1).payload.readInt16LE(30),0,'Restore the heading mode with zero motion first');
+  f.advance(100);await flush(f);assert.equal(f.mission.snapshot('boat-01').waitingForFeedback,false);assert.ok(f.mission.snapshot('boat-01').commandSpeedMps>0);
 });
 
 test('station keeping can wait beyond the progress deadline but stops when drift exceeds its boundary',async t=>{
