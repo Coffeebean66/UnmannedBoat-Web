@@ -126,7 +126,7 @@ test('后台记录不需要浏览器，重启恢复轨迹但不恢复执行；�
   const f=fixture(t),r=route(f),job=await start(f,r);await tick(f);await f.mission.tracks.flush();
   const reopened=new MissionTracks({file:f.mission.tracks.file,now:f.now});assert.equal(reopened.get('boat-01',job.trackId).status,'interrupted');await reopened.close();
   const bad=path.join(f.dir,'broken-tracks.json');fs.writeFileSync(bad,'broken');const broken=new MissionTracks({file:bad,now:f.now});
-  assert.ok(broken.error);assert.throws(()=>broken.start({id:'boat-01'}),{status:503});await broken.close();assert.equal(fs.readFileSync(bad,'utf8'),'broken');
+  assert.ok(broken.error);assert.throws(()=>broken.start({id:'boat-01'}),{status:503});await assert.rejects(broken.clear('boat-01',job.trackId),{status:503});await broken.close();assert.equal(fs.readFileSync(bad,'utf8'),'broken');
   f.mission.stop('boat-01');await flush(f);f.mission.tracks.blocked=true;f.mission.tracks.error='storage fault';
   assert.throws(()=>f.mission.start('boat-01',r.id,'start',r.revision,true),{status:503});
   f.mission.start('boat-01',r.id,'start',r.revision,false);await until(()=>f.mission.snapshot('boat-01').status==='running');assert.equal(f.mission.snapshot('boat-01').recordTrack,false);
@@ -142,6 +142,68 @@ test('单份记录裁剪有界，采样间断和相同源样本不会跨缺失�
   const record=tracks.get('boat-01',job.trackId);assert.equal(record.pointCount,10000);assert.equal(record.truncated,true);assert.equal(record.chunks.reduce((s,c)=>s+c.points.length,0),10000);
 });
 
+test('清除运行和暂停中的轨迹不改变任务控制，恢复后按原航段设置重新记录',async t=>{
+  const f=fixture(t),r=route(f),job=await start(f,r),id=job.trackId;
+  await travel(f,ORIGIN,N.destination(ORIGIN,0,12));
+  const before=f.mission.tracks.get('boat-01',id),runId=job.runId,leaseId=job.leaseId,index=job.index,commands=f.commands().length;
+  assert.ok(before.pointCount>1);
+  const cleared=await f.mission.tracks.clear('boat-01',id);
+  assert.equal(cleared.pointCount,0);assert.deepEqual(cleared.chunks,[]);assert.equal(cleared.recording,false);
+  for(const key of ['id','deviceId','routeId','name','status','startedAt','finishedAt'])assert.deepEqual(cleared[key],before[key],key);
+  assert.ok(cleared.revision>before.revision);assert.equal(cleared.clearedAt,f.now());
+  assert.equal(job.runId,runId);assert.equal(job.leaseId,leaseId);assert.equal(job.index,index);assert.equal(job.status,'running');assert.equal(f.commands().length,commands);
+  assert.equal(JSON.parse(fs.readFileSync(f.mission.tracks.file,'utf8')).tracks[0].pointCount,0,'成功返回前清除结果已落盘');
+  await tick(f,N.destination(ORIGIN,0,16));
+  const after=f.mission.tracks.get('boat-01',id);assert.equal(after.chunks.length,1);assert.equal(after.pointCount,1);assert.ok(N.distance(after.chunks[0].points[0],N.destination(ORIGIN,0,16))<0.1);
+  f.mission.pause('boat-01');await flush(f);const paused=await f.mission.tracks.clear('boat-01',id);
+  assert.equal(paused.status,'paused');assert.equal(paused.pointCount,0);await tick(f);assert.equal(f.mission.tracks.get('boat-01',id).pointCount,0);
+  f.mission.resume('boat-01',job.runId);await until(()=>f.mission.snapshot('boat-01').status==='running');await tick(f);
+  assert.equal(f.mission.snapshot('boat-01').trackId,id);assert.equal(f.mission.tracks.list('boat-01').length,1);
+  assert.equal(f.mission.tracks.get('boat-01',id).chunks.length,1);
+  await travel(f,N.destination(ORIGIN,0,16),r.points[1]);assert.equal(f.mission.snapshot('boat-01').targetIndex,2);
+  const count=f.mission.tracks.get('boat-01',id).pointCount;await travel(f,r.points[1],N.destination(ORIGIN,0,45));
+  assert.equal(f.mission.tracks.get('boat-01',id).pointCount,count,'清除后仍跳过虚线段');assert.deepEqual(f.store.get('boat-01',r.id),r);
+});
+
+test('清除历史记录保留任务信息并持久化，仅作用于选中船和记录',async t=>{
+  const f=fixture(t),r=route(f),job=await start(f,r),id=job.trackId;
+  for(const p of r.points.slice(1))await arrive(f,p);
+  const before=f.mission.tracks.get('boat-01',id);assert.equal(before.status,'completed');assert.ok(before.pointCount>0);
+  f.feed('boat-01',ORIGIN);const other=await start(f,r),otherBefore=f.mission.tracks.get('boat-01',other.trackId);
+  await assert.rejects(f.mission.tracks.clear('boat-02',id),{status:404});
+  await assert.rejects(f.mission.tracks.clear('boat-01','0000000000000000'),{status:404});
+  await assert.rejects(f.mission.tracks.clear('boat-01',id,()=>{throw Object.assign(Error('expired'),{status:401});}),{status:401});
+  assert.deepEqual(f.mission.tracks.get('boat-01',id),before,'授权失败不能清除');
+  const cleared=await f.mission.tracks.clear('boat-01',id);
+  assert.equal(cleared.status,'completed');assert.equal(cleared.startedAt,before.startedAt);assert.equal(cleared.finishedAt,before.finishedAt);assert.equal(cleared.name,before.name);
+  assert.equal(cleared.pointCount,0);assert.deepEqual(cleared.chunks,[]);assert.deepEqual(f.mission.tracks.get('boat-01',other.trackId),otherBefore);
+  const reopened=new MissionTracks({file:f.mission.tracks.file,now:f.now});
+  assert.equal(reopened.error,'');assert.deepEqual(reopened.get('boat-01',id),cleared);await reopened.close();
+  await assert.rejects(reopened.clear('boat-01',id),{status:503});
+});
+
+test('清除等待旧快照写完再落盘，写入失败不返回成功且可恢复重试',async t=>{
+  const f=fixture(t),r=route(f),job=await start(f,r),tracks=f.mission.tracks,id=job.trackId;
+  let release,entered=false,fail=false;const gate=new Promise(resolve=>{release=resolve;}),writeFile=fs.promises.writeFile;
+  t.mock.method(fs.promises,'writeFile',async function(file,...args){
+    if(String(file).startsWith(tracks.file+'.tmp-')){
+      if(!entered){entered=true;await gate;}
+      if(fail)throw Error('simulated disk write failure');
+    }
+    return writeFile.call(this,file,...args);
+  });
+  const oldSave=tracks.flush();await until(()=>entered);
+  let complete=false;const clearing=tracks.clear('boat-01',id).then(result=>{complete=true;return result;});
+  try{await Promise.resolve();assert.equal(complete,false,'旧快照尚未完成时不能宣称清除已保存');}finally{release();}
+  await oldSave;await clearing;
+  assert.equal(JSON.parse(fs.readFileSync(tracks.file,'utf8')).tracks[0].pointCount,0);
+  await tick(f,N.destination(ORIGIN,0,5));await tracks.flush();assert.ok(tracks.get('boat-01',id).pointCount>0);
+  fail=true;await assert.rejects(tracks.clear('boat-01',id),{status:503});assert.ok(tracks.status().storageError);
+  assert.ok(JSON.parse(fs.readFileSync(tracks.file,'utf8')).tracks[0].pointCount>0,'失败时磁盘仍保留上次有效文件');
+  fail=false;await tracks.clear('boat-01',id);assert.equal(tracks.status().storageError,null);
+  assert.equal(JSON.parse(fs.readFileSync(tracks.file,'utf8')).tracks[0].pointCount,0);
+});
+
 test('任务轨迹 API 区分角色、船只、修订和同源请求，客户端不能为前往起点开启记录',async t=>{
   const f=fixture(t,{server:true});await new Promise(resolve=>f.server.listen(0,'127.0.0.1',resolve));const base='http://127.0.0.1:'+f.server.address().port;
   const call=async(endpoint,body,cookie,origin=base)=>{const response=await fetch(base+endpoint,{method:body?'POST':'GET',headers:{origin,...(cookie?{cookie}:{}),...(body?{'content-type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});return {status:response.status,data:await response.json(),cookie:response.headers.get('set-cookie')?.split(';')[0]};};
@@ -155,4 +217,26 @@ test('任务轨迹 API 区分角色、船只、修订和同源请求，客户端
   assert.equal((await call(endpoint.replace('boat-01','boat-02'),null,admin)).status,404);assert.equal((await call(endpoint+'&deviceId=boat-01',null,admin)).status,400);
   assert.equal((await call(endpoint,null,admin)).data.track.deviceId,'boat-01');
   const listed=(await call('/api/missions?deviceId=boat-01',null,admin)).data;assert.equal(listed.tracks.length,1);assert.equal(listed.tracks[0].chunks,undefined);assert.equal(listed.trackStorage.persistent,true);
+});
+
+test('清除接口支持管理员和驾驶员，拒绝访客、跨站、错误船只及无效请求',async t=>{
+  const f=fixture(t,{server:true});await new Promise(resolve=>f.server.listen(0,'127.0.0.1',resolve));const base='http://127.0.0.1:'+f.server.address().port;
+  const call=async(endpoint,{body,cookie,origin=base,method=body===undefined?'GET':'POST'}={})=>{
+    const response=await fetch(base+endpoint,{method,headers:{...(origin?{origin}:{}),...(cookie?{cookie}:{}),...(body===undefined?{}:{'content-type':'application/json'})},...(body===undefined?{}:{body:JSON.stringify(body)})});
+    return {status:response.status,data:await response.json(),cookie:response.headers.get('set-cookie')?.split(';')[0]};
+  };
+  const login=async(username,password)=>(await call('/api/auth/login',{body:{username,password}})).cookie;
+  const admin=await login('operator','browser-admin-test-only'),guest=await login('observer','browser-guest-test-only');
+  assert.equal((await call('/api/auth/users',{cookie:admin,body:{username:'track.driver',password:'track driver test only',role:'driver'}})).status,201);
+  const driver=await login('track.driver','track driver test only'),r=route(f),job=await start(f,r),id=job.trackId,endpoint='/api/missions/tracks/clear',body={deviceId:'boat-01',id},before=f.mission.tracks.get('boat-01',id);
+  assert.ok(before.pointCount>0);
+  for(const [options,status]of [[{body},401],[{body,cookie:guest},403],[{body,cookie:admin,origin:'https://example.invalid'},403],[{body,cookie:admin,origin:null},403],[{cookie:admin},405],[{body,cookie:admin,method:'DELETE'},405],[{body:{...body,deviceId:'boat-02'},cookie:admin},404],[{body:{...body,id:'0000000000000000'},cookie:admin},404],[{body:{...body,all:true},cookie:admin},400],[{body:{...body,id:1234567890123456},cookie:admin},400],[{body:{id},cookie:admin},400],[{body:[],cookie:admin},400],[{body:{...body,note:'x'.repeat(1100)},cookie:admin},413]]){
+    assert.equal((await call(endpoint,options)).status,status,JSON.stringify(options));
+    assert.deepEqual(f.mission.tracks.get('boat-01',id),before,'无效请求不得清空轨迹');
+  }
+  assert.equal((await call(endpoint+'?all=true',{body,cookie:admin})).status,405);
+  const cleared=await call(endpoint,{body,cookie:driver});assert.equal(cleared.status,200);assert.equal(cleared.data.cleared,true);assert.equal(cleared.data.track.pointCount,0);
+  assert.equal(cleared.data.tracks.find(t=>t.id===id).pointCount,0);assert.equal(cleared.data.recording.persistent,true);assert.equal(f.mission.active('boat-01'),true);
+  await tick(f,N.destination(ORIGIN,0,5));assert.ok(f.mission.tracks.get('boat-01',id).pointCount>0);
+  assert.equal((await call(endpoint,{body,cookie:admin})).status,200);
 });

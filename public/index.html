@@ -122,7 +122,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">无人船监测 <span>v1.77.0</span></div>
+      <div class="sidebar-version">无人船监测 <span>v1.78.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -182,7 +182,7 @@
         </div>
         <section id="missionTrackCard" class="mission-card mission-track-card" aria-labelledby="missionTrackTitle">
           <div class="mission-card-heading"><div><h2 id="missionTrackTitle">任务实测轨迹</h2><p class="muted">服务器按实线航段记录 · 关闭网页后继续 · 按船保留历史</p></div><span id="missionTrackState" class="mission-state">暂无记录</span></div>
-          <div class="mission-track-tools"><label class="mission-field">查看记录<select id="missionTrackSelect"><option value="">最近一次记录</option></select></label><button id="missionTrackToggle" type="button" class="small-button" aria-pressed="true">隐藏实测轨迹</button><button id="missionTrackFit" type="button" class="small-button">显示整条记录</button></div>
+          <div class="mission-track-tools"><label class="mission-field">查看记录<select id="missionTrackSelect"><option value="">最近一次记录</option></select></label><button id="missionTrackToggle" type="button" class="small-button" aria-pressed="true">隐藏实测轨迹</button><button id="missionTrackFit" type="button" class="small-button">显示整条记录</button><button id="missionTrackClear" type="button" class="small-button mission-danger" disabled>清除当前轨迹</button></div>
           <p id="missionTrackSummary" class="muted">点击“开始任务并记录轨迹”后生成独立记录。</p>
           <p id="missionTrackStatus" class="mission-note" role="status">虚线段、前往起点、自动返回和转场段不计入任务轨迹。遥测历史仍按原方式保存。</p>
         </section>

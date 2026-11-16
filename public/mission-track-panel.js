@@ -1,4 +1,4 @@
-/* 任务轨迹只读取服务器记录；显示/隐藏、切换记录不会改变采样或控制船只。 */
+/* 任务实测轨迹：显隐只影响画面，清除写入服务器；始终不改变船只的运动控制。 */
 (() => {
   'use strict';
   const $=id=>document.getElementById(id);
@@ -6,27 +6,51 @@
   class MissionTrackPanel{
     constructor(){
       this.selection='';this.visible=true;this.track=null;this.generation=0;this.attached=new WeakSet();this.drawKeys=new WeakMap();
-      $('missionTrackSelect').onchange=()=>{this.selection=$('missionTrackSelect').value;this.track=null;this.error='';this.cancel();this.sync();};
+      $('missionTrackSelect').onchange=()=>{this.selection=$('missionTrackSelect').value;this.track=null;this.error='';this.notice='';this.cancel();this.cancelClear();this.sync();};
       $('missionTrackToggle').onclick=()=>{this.visible=!this.visible;this.render();};
+      $('missionTrackClear').onclick=()=>this.clear();
       $('missionTrackFit').onclick=()=>{
         const points=this.track?.chunks.flatMap(c=>c.points)||[];
         if(points.length){this.visible=true;this.render();window.BoatMissions?.map?.fitLocations(points,{maxZoom:18,padding:[35,35]});}
       };
       window.addEventListener('boat-mission-change',()=>this.sync());
       window.addEventListener('boat-view-change',()=>this.render());
-      window.addEventListener('pagehide',()=>this.cancel());this.sync();
+      window.addEventListener('pagehide',()=>{this.cancel();this.cancelClear();});this.sync();
     }
     get missions(){return window.BoatMissions;}
-    selectLatest(){this.selection='';this.visible=true;this.sync();}
+    selectLatest(){this.selection='';this.visible=true;this.notice='';this.sync();}
     cancel(){this.generation++;this.controller?.abort();this.controller=null;this.pending='';}
+    cancelClear(){this.clearing?.controller.abort();this.clearing=null;}
+    async clear(){
+      const m=this.missions,s=this.summary;
+      if(this.clearing||!m?.admin||!s?.pointCount)return;
+      const continuation=['preparing','running'].includes(s.status)?'任务会继续运行，后续按原设置重新记录。':s.status==='paused'?'任务保持暂停，继续后按原设置重新记录。':'记录名称和任务信息会保留。';
+      if(!window.confirm('清除“'+s.name+'”当前已记录的 '+s.pointCount+' 个实测点？服务器中的这些轨迹点会被清空。'+continuation))return;
+      this.cancel();const operation={deviceId:m.deviceId,id:s.id,scope:this.scope,controller:new AbortController()};
+      this.clearing=operation;this.error='';this.notice='';this.render();
+      const current=()=>this.clearing===operation&&this.scope===operation.scope&&this.missions?.deviceId===operation.deviceId&&this.summary?.id===operation.id&&this.missions?.admin;
+      const timer=setTimeout(()=>operation.controller.abort(),5000);
+      try{
+        const result=await m.request('/tracks/clear',{method:'POST',body:JSON.stringify({deviceId:operation.deviceId,id:operation.id}),signal:operation.controller.signal});
+        if(!current())return;
+        this.track=result.track;m.trackSummaries=result.tracks;m.trackStorage=result.recording;
+        this.notice='当前轨迹已清除并保存到服务器。'+continuation;this.sync();
+      }catch(error){
+        if(current())this.error=error.name==='AbortError'?'清除请求超时，结果待确认，请刷新任务记录':error.message;
+      }finally{
+        clearTimeout(timer);
+        if(this.clearing===operation){this.clearing=null;this.render();if(this.scope===operation.scope)m.poll(true);}
+      }
+    }
     isShowing(map){return !!this.missions?.admin&&this.visible&&!!this.summary&&this.track?.id===this.summary.id&&!!map;}
     sync(){
       const m=this.missions,key=JSON.stringify([m?.deviceId,window.BoatAuth?.generation,m?.admin]);
-      if(key!==this.scope){this.scope=key;this.cancel();this.selection='';this.track=null;this.error='';}
+      if(key!==this.scope){this.scope=key;this.cancel();this.cancelClear();this.selection='';this.track=null;this.error='';this.notice='';}
       this.summaries=m?.admin?m.trackSummaries||[]:[];
       if(this.selection&&!this.summaries.some(t=>t.id===this.selection))this.selection='';
+      const previousId=this.summary?.id;
       this.summary=this.summaries.find(t=>t.id===this.selection)||this.summaries[0]||null;
-      if(this.track&&this.track.id!==this.summary?.id)this.track=null;
+      if(previousId!==this.summary?.id){this.cancel();this.cancelClear();this.track=null;this.error='';this.notice='';}
       const signature=JSON.stringify(this.summaries.map(t=>[t.id,t.name,t.startedAt]));
       if(signature!==this.optionsKey){
         this.optionsKey=signature;$('missionTrackSelect').replaceChildren(new Option('最近一次记录',''),...this.summaries.map(t=>new Option(t.name+' · '+new Date(t.startedAt).toLocaleString('zh-CN',{hour12:false}),t.id)));
@@ -35,7 +59,7 @@
       this.render();
       const summary=this.summary;
       // 摘要随原任务轮询更新；只有点数/状态改变才重新读取坐标，不重复拉取静态历史。
-      if(!m?.admin||!summary||this.track?.id===summary.id&&this.track.revision===summary.revision)return;
+      if(this.clearing||!m?.admin||!summary||this.track?.id===summary.id&&this.track.revision===summary.revision)return;
       const pending=summary.id+':'+summary.revision;if(this.pending?.startsWith(summary.id+':'))return;
       this.load(summary,pending);
     }
@@ -52,13 +76,16 @@
     }
     render(){
       const m=this.missions,s=this.summary;
-      $('missionTrackSelect').disabled=!m?.admin||!this.summaries?.length;
+      $('missionTrackSelect').disabled=!m?.admin||!this.summaries?.length||!!this.clearing;
       $('missionTrackToggle').disabled=!s;$('missionTrackToggle').textContent=this.visible?'隐藏实测轨迹':'显示实测轨迹';$('missionTrackToggle').setAttribute('aria-pressed',String(this.visible));
-      $('missionTrackFit').disabled=!this.track?.pointCount;
+      $('missionTrackFit').disabled=!this.track?.pointCount||!!this.clearing;
+      $('missionTrackClear').disabled=!m?.admin||!s?.pointCount||!!this.clearing||!!m?.statusError||!!m?.trackStorage?.storageError;
+      $('missionTrackClear').textContent=this.clearing?'正在清除…':'清除当前轨迹';
+      $('missionTrackClear').title='清空当前记录在服务器保存的实测点；任务继续，后续按原规则重新记录。';
       $('missionTrackState').textContent=m?.statusError?'状态同步中断':s?labels[s.status]||'记录状态未知':'暂无记录';
-      $('missionTrackSummary').textContent=s?s.name+' · '+s.pointCount+' 个实测点 · '+(s.recording?'实线段 · 正在记录':s.status==='running'?'虚线 / 转场 / 返回段 · 暂不记录':labels[s.status]||'等待中')+(s.truncated?' · 较早轨迹已裁剪':''):'点击“开始任务并记录轨迹”后生成独立记录。';
+      $('missionTrackSummary').textContent=s?s.name+' · '+s.pointCount+' 个实测点 · '+(s.recording?'实线段 · 正在记录':s.status==='running'?s.clearedAt&&!s.pointCount?'轨迹已清空 · 后续按实线航段记录':'虚线 / 转场 / 返回段 · 暂不记录':labels[s.status]||'等待中')+(s.truncated?' · 较早轨迹已裁剪':''):'点击“开始任务并记录轨迹”后生成独立记录。';
       const storage=m?.trackStorage;
-      $('missionTrackStatus').textContent=storage?.storageError||this.error||m?.statusError||(s?(storage?.persistent?'服务器保存；刷新后可重新查看。':'当前为内存记录，服务器重启后清空。')+'绿色实测线按航段分开，跳过的航程不会连线。':'虚线段、前往起点、自动返回和转场段不计入任务轨迹。遥测历史仍按原方式保存。');
+      $('missionTrackStatus').textContent=storage?.storageError||this.error||m?.statusError||(this.clearing?'正在清除当前轨迹并保存到服务器…':this.notice)||(s?(storage?.persistent?'服务器保存；刷新后可重新查看。':'当前为内存记录，服务器重启后清空。')+'绿色实测线按航段分开，跳过的航程不会连线。':'虚线段、前往起点、自动返回和转场段不计入任务轨迹。遥测历史仍按原方式保存。');
       $('missionTrackStatus').dataset.error=String(!!storage?.storageError||!!this.error||!!m?.statusError);
       this.draw();window.dispatchEvent(new CustomEvent('boat-mission-track-change'));
     }

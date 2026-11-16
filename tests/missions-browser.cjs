@@ -602,7 +602,39 @@ async function main(){
       assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth+1'),true,'Recording controls fit '+width);
       await evaluate('document.getElementById("missionTrackCard").scrollIntoView({block:"center",behavior:"instant"})');await shot('mission-recording-'+width);
     }
-    console.log('PASS: recording selectors, line/curve attribute independence, real start-and-record buttons, headless server recording, skipped legs, persisted playback, map overlays, private group settings and 320/375/1440px layouts.');
+    // 清除是服务器操作：取消不改数据，确认后所有地图移除实测线且刷新不会恢复。
+    const otherRecording=f.mission.tracks.list('boat-01').find(t=>t.id!==recordingId),historyBefore=f.mission.tracks.get('boat-01',recordingId);
+    await evaluate('window.confirm=()=>false;document.getElementById("missionTrackClear").click()');
+    assert.deepEqual(f.mission.tracks.get('boat-01',recordingId),historyBefore,'Cancelling clear preserves the server record');
+    await evaluate('window.confirm=()=>true;window.__trackFetch=window.fetch;window.fetch=async function(input,options){const response=await window.__trackFetch(input,options);if(input==="/api/missions/tracks/clear")await new Promise(resolve=>setTimeout(resolve,350));return response;};document.getElementById("missionTrackClear").click()');
+    assert.equal(await evaluate('!!BoatMissionTracks.clearing&&document.getElementById("missionTrackClear").disabled&&document.getElementById("missionTrackSelect").disabled'),true,'Pending clear cannot be submitted twice or target another record');
+    await until('!BoatMissionTracks.clearing&&BoatMissionTracks.track?.pointCount===0&&/已清除/.test(document.getElementById("missionTrackStatus").textContent)');
+    assert.equal(await evaluate('[BoatMissions.map,boatMonitor.map,BoatMissionQueue.preview?.map].filter(Boolean).every(map=>!map._lineOverlays.has("mission-recording"))'),true,'Every shared map removes the old measured path');
+    assert.equal(await evaluate('document.getElementById("missionTrackClear").disabled'),true,'An empty selected record cannot be cleared again');
+    assert.equal(f.mission.tracks.get('boat-01',recordingId).finishedAt,historyBefore.finishedAt);
+    assert.deepEqual(f.mission.tracks.summary(f.mission.tracks.records.get(otherRecording.id)),otherRecording,'Other task recordings are untouched');
+    assert.equal(JSON.parse(fs.readFileSync(f.mission.tracks.file,'utf8')).tracks.find(t=>t.id===recordingId).pointCount,0);
+    await send('Page.navigate',{url:base+'/#missions'});await until('BoatMissions.deviceId==="boat-01"&&BoatMissionTracks.summaries?.length>=2&&BoatMissions.map?.ready');
+    await evaluate('document.getElementById("missionTrackSelect").value='+JSON.stringify(recordingId)+';document.getElementById("missionTrackSelect").dispatchEvent(new Event("change"))');
+    await until('BoatMissionTracks.track?.id==='+JSON.stringify(recordingId)+'&&BoatMissionTracks.track?.pointCount===0');
+    assert.equal(await evaluate('BoatMissions.map._lineOverlays.has("mission-recording")'),false,'Reload never restores a cleared historical path');
+    // 运行中清除不发布控制命令；虚线段保持空白，后面的实线段从新坐标起记录。
+    f.feed('boat-01',{...ORIGIN,heading:0});
+    await evaluate('BoatMissions.load('+JSON.stringify(recordingRouteId)+')');await until('!document.getElementById("missionStartRecord").disabled');
+    await evaluate('document.getElementById("missionStartRecord").click()');await until('BoatMissions.run()?.status==="running"&&BoatMissions.run()?.targetIndex===1&&BoatMissionTracks.track?.pointCount>0');
+    assert.equal(await evaluate('BoatMissionTracks.notice'),'', 'A new selection cannot show an older record clear notice');
+    const activeRecordingId=f.mission.snapshot('boat-01').trackId;
+    f.feed('boat-01',recordingPoints[1]);await until('BoatMissions.run()?.targetIndex===2&&BoatMissionTracks.track?.pointCount>1');
+    const activeJob=f.mission.jobs.get('boat-01'),activeLease=activeJob.leaseId;
+    await evaluate('window.confirm=()=>true;document.getElementById("missionTrackClear").click()');
+    await until('!BoatMissionTracks.clearing&&BoatMissionTracks.track?.pointCount===0');
+    assert.equal(f.mission.active('boat-01'),true);assert.equal(activeJob.index,2);assert.equal(activeJob.leaseId,activeLease);assert.equal(activeJob.trackId,activeRecordingId);
+    assert.equal(await evaluate('BoatMissions.map._lineOverlays.has("mission-recording")'),false);
+    f.feed('boat-01',recordingPoints[2]);await until('BoatMissions.run()?.targetIndex===3');f.feed('boat-01',N.destination(ORIGIN,0,75));
+    await until('BoatMissionTracks.track?.pointCount>1&&BoatMissions.map._lineOverlays.has("mission-recording")');
+    assert.deepEqual(f.mission.tracks.get('boat-01',activeRecordingId).chunks.map(c=>c.segmentIndex),[2],'Only the new solid leg is recorded after clear');
+    await evaluate('document.getElementById("missionStop").click()');await until('BoatMissions.run()?.status==="stopped"');
+    console.log('PASS: recording controls, headless sampling, skipped legs, persisted playback, private group settings, confirmed history/active clearing, disabled pending/empty controls, shared overlays, reload and 320/375/1440px layouts.');
     await evaluate('BoatWorkspace.navigate("driving",{focus:false});boatMonitor.driver.navigation.selectMode("auto");document.getElementById("driverQueueSettings").click()');
     assert.equal(await evaluate('document.getElementById("driverQueueDialog").open'),true);
     await evaluate('BoatAuth.logout()');await evaluate('BoatAuth.login("observer","browser-guest-test-only")');await until('BoatAuth.user?.role==="guest"');

@@ -16,9 +16,16 @@ function createMissionApi({bridge,control,accounts,env=process.env,store,service
     if(!browserRead&&!accounts.sameOrigin(req))throw fault(403,'请从本站操作航线任务');
   }
   return {manager,store:library,close(){if(closed)return manager.closePromise;closed=true;return manager.close();},async handle(req,res,url){
-    if(!['/api/missions','/api/missions/route','/api/missions/queue','/api/missions/run','/api/missions/home','/api/missions/tracks'].includes(url.pathname))return false;
+    if(!['/api/missions','/api/missions/route','/api/missions/queue','/api/missions/run','/api/missions/home','/api/missions/tracks','/api/missions/tracks/clear'].includes(url.pathname))return false;
     try{
       const session=accounts?.sessionFor?.(req),read=req.method==='GET';authorize(req,res,session,!read);
+      if(url.pathname==='/api/missions/tracks/clear'){
+        if(req.method!=='POST'||url.search)throw fault(405,'清除任务轨迹只支持不带查询参数的POST请求');
+        const input=await readJson(req,1024);authorize(req,res,session,true);
+        if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(k=>!['deviceId','id'].includes(k))||typeof input.deviceId!=='string'||!DEVICE.test(input.deviceId)||typeof input.id!=='string'||!ID.test(input.id))throw fault(400,'清除任务轨迹请求不正确');
+        const track=await manager.tracks.clear(input.deviceId,input.id,()=>authorize(req,res,session,true));
+        json(res,200,{cleared:true,track,tracks:manager.tracks.list(input.deviceId),recording:manager.tracks.status()});return true;
+      }
       if(url.pathname==='/api/missions/tracks'){
         if(!read)throw fault(405,'任务轨迹只支持读取');
         if(!canOperate(session.value))throw fault(403,'仅管理员或驾驶员可以读取任务轨迹');

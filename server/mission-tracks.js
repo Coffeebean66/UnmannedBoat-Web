@@ -15,7 +15,7 @@ class MissionTracks{
       const data=JSON.parse(fs.readFileSync(file,'utf8'));if(data.version!==1||!Array.isArray(data.tracks)||data.tracks.length>MAX_TRACKS)throw Error('Invalid tracks');
       let total=0;
       for(const record of data.tracks){
-        if(!ID.test(record?.id||'')||!DEVICE.test(record.deviceId||'')||this.records.has(record.id)||typeof record.name!=='string'||record.name.length>80||!ID.test(record.routeId||'')||!STATUSES.includes(record.status)||!Number.isSafeInteger(record.revision)||record.revision<1||!Number.isFinite(record.startedAt)||record.finishedAt!==null&&!Number.isFinite(record.finishedAt)||!Array.isArray(record.chunks)||record.chunks.length>MAX_POINTS)throw Error('Invalid track');
+        if(!ID.test(record?.id||'')||!DEVICE.test(record.deviceId||'')||this.records.has(record.id)||typeof record.name!=='string'||record.name.length>80||!ID.test(record.routeId||'')||!STATUSES.includes(record.status)||!Number.isSafeInteger(record.revision)||record.revision<1||!Number.isFinite(record.startedAt)||record.finishedAt!==null&&!Number.isFinite(record.finishedAt)||record.clearedAt!==undefined&&!Number.isFinite(record.clearedAt)||!Array.isArray(record.chunks)||record.chunks.length>MAX_POINTS)throw Error('Invalid track');
         let count=0;
         for(const chunk of record.chunks){
           if(!Array.isArray(chunk.points)||!chunk.points.length||!Number.isInteger(chunk.segmentIndex)||chunk.segmentIndex<0||!ID.test(chunk.routeId||''))throw Error('Invalid track segment');
@@ -37,6 +37,18 @@ class MissionTracks{
   summary(record){const {chunks,...summary}=record;return clone(summary);}
   list(deviceId){return [...this.records.values()].filter(r=>r.deviceId===deviceId).sort((a,b)=>b.startedAt-a.startedAt).map(r=>this.summary(r));}
   get(deviceId,id){const record=this.records.get(id);if(!record||record.deviceId!==deviceId)throw fault(404,'未找到当前无人船的任务轨迹');return clone(record);}
+  async clear(deviceId,id,authorize){
+    if(this.closed||this.blocked)throw fault(503,this.error||'任务轨迹存储不可用');
+    this.get(deviceId,id);authorize?.();
+    const record=this.records.get(id);
+    // 只清空实测点；正在运行或暂停的任务继续复用原记录，后续另起折线。
+    this.open.delete(id);record.chunks=[];record.pointCount=0;record.recording=false;record.truncated=false;record.clearedAt=this.now();this.touch(record);
+    // 若旧快照仍在落盘，先等它结束，再保存清除结果，避免重启后旧轨迹回来。
+    if(this.writing)await this.writing;
+    await this.flush();
+    if(this.error)throw fault(503,'轨迹已在内存清空，但尚未保存到磁盘，请检查存储权限后刷新重试');
+    return this.get(deviceId,id);
+  }
   status(){return {persistent:!!this.file,storageError:this.error||null,lastSavedAt:this.lastSavedAt,sampleMs:1000,maxPoints:MAX_POINTS,maxTotalPoints:MAX_TOTAL,maxTracks:MAX_TRACKS};}
   start(job){
     if(this.closed||this.blocked||this.error)throw fault(503,this.error||'任务轨迹存储不可用');
