@@ -37,7 +37,7 @@ async function main(){
     };
     const until=async expression=>{
       for(let i=0;i<160;i++){if(await evaluate(expression))return;await wait(25);}
-      const state=await evaluate('({startup:window.BoatStartup?.active,phase:document.documentElement.dataset.startup,screen:!!document.getElementById("startupScreen"),login:document.getElementById("accountLoginDialog")?.open,account:window.BoatAuth?.state()})');
+      const state=await evaluate('({startup:window.BoatStartup?.active,phase:document.documentElement.dataset.startup,screen:!!document.getElementById("startupScreen"),login:document.getElementById("accountLoginDialog")?.open,account:window.BoatAuth?.state(),settings:{open:document.getElementById("platformSettingsDialog")?.open,status:document.getElementById("startupSettingsStatus")?.textContent,hidden:document.getElementById("startupSettings")?.hidden,busy:document.getElementById("startupSettingsForm")?.getAttribute("aria-busy")}})');
       throw Error('Condition timed out: '+expression+'\n'+JSON.stringify(state)+'\n'+errors.join('\n'));
     };
     const navigate=async(theme,width,height,extra='')=>{
@@ -132,7 +132,8 @@ async function main(){
     await evaluate('document.getElementById("platformSettingsClose").click()');
     await until('!document.getElementById("platformSettingsDialog").open');
     await evaluate('BoatAuth.logout()');await navigate('dark',1440,900);
-    await until('window.BoatStartup&&!BoatStartup.active&&window.BoatAuth?.ready&&document.getElementById("accountLoginDialog").open');
+    // 关闭动画后可早于主页面脚本就绪，操作平台按钮前须等待其事件绑定完成。
+    await until('window.boatMonitor&&window.BoatStartup&&!BoatStartup.active&&window.BoatAuth?.ready&&document.getElementById("accountLoginDialog").open');
     await evaluate('BoatAuth.login("observer","browser-guest-test-only")');
     await until('BoatAuth.user?.role==="guest"');
     assert.equal(await evaluate('document.getElementById("startupSettings").hidden'),true);

@@ -1,4 +1,4 @@
-/* 启动层独立于业务数据；入场后静止等待确认，脚本未加载时默认隐藏。 */
+/* 启动层独立于业务数据；入场后保留圆圈与进度条循环等待确认，脚本未加载时默认隐藏。 */
 :root[data-startup] { overflow:hidden; }
 .startup-screen {
   --startup-grid:rgba(93,135,255,.055);
@@ -57,13 +57,10 @@
 .startup-skip span { padding:1px 5px;border:1px solid var(--line);border-radius:4px;color:var(--faint);font-size:9px; }
 .startup-skip b { font-weight:400; }
 .startup-skip:hover:not(:disabled) { background:var(--soft);border-color:var(--line);color:var(--text); }
-/* 等待阶段不再自动消失，并停止循环动效以免持续占用资源。 */
+/* 等待阶段持续播放轨道、波纹和进度条，只有按键或点击才进入后台。 */
 :root[data-startup="waiting"] .startup-screen { cursor:pointer; }
-:root[data-startup="waiting"] .startup-orbit { animation-play-state:paused; }
-:root[data-startup="waiting"] .startup-wave { animation:none;opacity:0; }
 :root[data-startup="waiting"] .startup-status-dot { animation:none; }
 :root[data-startup="waiting"] .startup-loading { color:var(--muted); }
-:root[data-startup="waiting"] .startup-loader::after { animation:none;width:100%; }
 :root[data-startup="waiting"] .startup-skip span { display:none; }
 @keyframes startup-orbit { to { transform:rotate(360deg); } }
 @keyframes startup-wave { 0% { transform:scale(.95);opacity:0; } 20% { opacity:.16; } 100% { transform:scale(1.34);opacity:0; } }

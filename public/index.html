@@ -45,6 +45,7 @@
   <script defer src="attitude-view.js"></script>
   <script defer src="artificial-horizon.js"></script>
   <script defer src="compass-view.js"></script>
+  <script defer src="theme-transition.js"></script>
   <script defer src="ui.js"></script>
   <script defer src="workspace-navigation.js"></script>
   <script defer src="map-view.js"></script>
@@ -148,7 +149,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">无人船监测 <span>v1.80.0</span></div>
+      <div class="sidebar-version">无人船监测 <span>v1.81.1</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -411,7 +412,7 @@
           <div class="driver-brand"><i data-icon="boat"></i><strong>驾驶控制</strong><small>实时操控与自主导航</small></div>
           <div class="driver-device-picker"><label for="driverDeviceSelect" class="sr-only">选择驾驶无人船</label><select id="driverDeviceSelect"><option value="">未选择无人船</option></select><button type="button" class="driver-icon-button" data-driver-proxy="cloudRefresh" aria-label="刷新设备" title="刷新设备"><i data-icon="refresh"></i></button></div>
           <div class="driver-top-status"><span class="driver-system-mode" id="driverSystemMode">监测待机</span><span title="定位状态" id="driverTopFix">RTK · --</span><span title="未接入蜂窝信号遥测">蜂窝 · 未上报</span><span title="左右电调实际母线电压，不推算电池电量" id="driverTopPower">供电 · --</span><time id="driverUtc" title="当前浏览器 UTC 时间">UTC --:--:--</time></div>
-          <div class="driver-connection"><span id="driverBoatName" class="sr-only">未选择无人船</span><span id="driverLinkStatus" class="driver-link-status" data-connected="false">等待实时连接</span><button id="driverConnectionToggle" type="button" class="driver-power" aria-label="连接无人船" title="连接无人船"><i data-icon="power"></i></button><button id="driverThemeToggle" type="button" class="driver-icon-button" data-driver-proxy="themeToggle" aria-label="切换白天和深色主题" title="切换白天和深色主题"><i data-icon="sun"></i></button><button type="button" class="driver-icon-button" data-driver-proxy="settingsEntry" aria-label="当前船调参设置" title="当前船调参设置"><i data-icon="settings"></i></button></div>
+          <div class="driver-connection"><span id="driverBoatName" class="sr-only">未选择无人船</span><span id="driverLinkStatus" class="driver-link-status" data-connected="false">等待实时连接</span><button id="driverConnectionToggle" type="button" class="driver-power" aria-label="连接无人船" title="连接无人船"><i data-icon="power"></i></button><button type="button" class="driver-icon-button" data-driver-proxy="settingsEntry" aria-label="当前船调参设置" title="当前船调参设置"><i data-icon="settings"></i></button></div>
           <div hidden><button id="driverAccount" type="button" data-driver-proxy="accountLoginOpen"><strong id="driverOperator">未登录</strong></button><button id="driverLogout" type="button" data-driver-proxy="accountLogout">退出登录</button><button id="driverSystemSettings" type="button" data-driver-proxy="platformSettingsToggle">平台设置</button></div>
         </header>
         <div id="driverStage" class="driver-stage">
@@ -498,6 +499,7 @@
         </aside>
         <div id="driverFocusTools" class="driver-focus-tools">
           <button id="driverImmersiveToggle" type="button" class="small-button driver-immersive-toggle" title="返回进入驾驶前的页面，也可按 Esc"><i data-icon="arrow"></i><span>返回后台 · Esc</span></button><button id="driverSwapMedia" type="button" class="small-button"><i data-icon="map"></i><span>地图主画面</span></button>
+          <button id="driverThemeToggle" type="button" class="small-button driver-icon-button" data-driver-proxy="themeToggle" aria-label="切换到浅色主题" title="切换到浅色主题"><i data-icon="sun"></i></button>
           <button id="driverDetailsToggle" type="button" class="small-button" aria-expanded="false" aria-controls="driverDetailsPanel"><i data-icon="activity"></i>航行详情</button>
           <details id="driverDisplayOptions" class="driver-display-options"><summary><i data-icon="layers"></i>显示</summary><div class="driver-display-options-panel"><button id="driverInstrumentToggle" type="button" class="small-button" aria-pressed="false">仪表：隐藏</button><label for="driverOverlayOpacity" title="0% 隐藏 HUD，操控与急停保持可见">HUD 可见度 <output id="driverOverlayOpacityValue" for="driverOverlayOpacity">100%</output></label><input id="driverOverlayOpacity" type="range" min="0" max="100" step="5" value="100" aria-label="驾驶 HUD 可见度，0为隐藏100为完全显示"></div></details>
           <button id="driverLayoutToggle" type="button" class="driver-layout-launch" aria-expanded="false" aria-controls="driverLayoutEditor" title="调整各模块的位置、大小和透明度">布局编辑</button>

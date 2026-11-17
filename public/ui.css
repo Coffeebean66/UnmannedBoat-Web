@@ -140,6 +140,8 @@ dialog::backdrop{background:#0a1d3375;backdrop-filter:blur(4px)}
   .attitude-values b{font-size:23px}.attitude-values span{font-size:9px}
   .dialog-head .card-icon{display:none}.preset{grid-template-columns:1fr}.preset .button-row{grid-column:1;grid-row:3;margin-top:7px}
 }
+/* 日月切换围绕图标中心旋转，不影响按钮位置及驾驶画面的布局。 */
+#themeToggle svg,#driverThemeToggle svg { transform-box:fill-box;transform-origin:center; }
 @media(prefers-reduced-motion:reduce){
   html{scroll-behavior:auto}
   button,.meter i,.dial-value,.switch-track::after,.toast{transition:none}

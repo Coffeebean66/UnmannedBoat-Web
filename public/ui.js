@@ -35,15 +35,22 @@
   };
   const icon=name=>'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="'+(paths[name]||paths.activity)+'"/></svg>';
   function decorate(root=document){root.querySelectorAll('[data-icon]').forEach(el=>el.innerHTML=icon(el.dataset.icon));}
-  function setTheme(theme) {
-    document.documentElement.dataset.theme=theme;
-    const button=document.getElementById('themeToggle'),dark=theme==='dark';
-    button.innerHTML=icon(dark?'sun':'moon');
-    button.setAttribute('aria-label',dark?'切换到浅色主题':'切换到深色主题');
-    button.title=button.getAttribute('aria-label');button.setAttribute('aria-pressed',String(dark));
-    document.querySelector('meta[name=theme-color]').content=dark?'#19191e':'#fafbfc';
-    try{localStorage.setItem('boat_web_theme_v1',theme);}catch(_){}
-    window.dispatchEvent(new Event('boat-theme-change'));
+  function setTheme(theme,options={}) {
+    if(theme!=='dark'&&theme!=='light')return;
+    const apply=()=>{
+      document.documentElement.dataset.theme=theme;
+      const dark=theme==='dark';
+      for(const button of document.querySelectorAll('#themeToggle,#driverThemeToggle')){
+        button.innerHTML=icon(dark?'sun':'moon');
+        button.setAttribute('aria-label',dark?'切换到浅色主题':'切换到深色主题');
+        button.title=button.getAttribute('aria-label');button.setAttribute('aria-pressed',String(dark));
+      }
+      document.querySelector('meta[name=theme-color]').content=dark?'#19191e':'#fafbfc';
+      try{localStorage.setItem('boat_web_theme_v1',theme);}catch(_){}
+      window.dispatchEvent(new Event('boat-theme-change'));
+    };
+    // 首次恢复主题保持直接显示，只有用户主动点击时播放切换动画。
+    if(window.BoatThemeTransition)window.BoatThemeTransition.run(apply,options);else apply();
   }
   decorate();
   // 首次打开使用深色后台主题；显式选择过的主题继续恢复。
@@ -57,7 +64,7 @@
   }):null;
   headerSize?.observe(header);
   window.addEventListener('pagehide',()=>headerSize?.disconnect(),{once:true});
-  document.getElementById('themeToggle').onclick=()=>setTheme(document.documentElement.dataset.theme==='dark'?'light':'dark');
+  document.getElementById('themeToggle').onclick=()=>setTheme(document.documentElement.dataset.theme==='dark'?'light':'dark',{animate:true});
   const clock=document.getElementById('dashboardTime');
   function updateClock(){if(!document.hidden){const now=new Date();clock.dateTime=now.toISOString();clock.textContent=now.toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});}}
   updateClock();const clockTimer=setInterval(updateClock,1000);
