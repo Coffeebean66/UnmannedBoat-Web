@@ -38,8 +38,8 @@ button:hover:not(:disabled) { border-color:var(--accent); }
 }
 .brand-group { display:flex;align-items:center;gap:12px;flex:none;min-width:0; }
 .brand { flex:none;width:calc(var(--sidebar-width) - 22px);gap:10px;font-size:17px;font-weight:650;letter-spacing:.02em;color:var(--text); }
-/* 原图保持原配色，浅色底衬让咖啡豆在深浅主题下都清晰可见。 */
-.brand-coffee-logo { display:block;flex:none;width:80px;height:42px;object-fit:contain;background:#fff;border-radius:5px; }
+/* 保留图案原色，透明区域随主题融入顶部栏底色。 */
+.brand-coffee-logo { display:block;flex:none;width:80px;height:42px;object-fit:contain;background:var(--panel);border-radius:5px; }
 .brand-mark,.brand-mark svg { width:32px;height:34px;filter:none;color:var(--accent); }
 .brand-caption { font-size:7px;letter-spacing:.16em;margin-top:3px;color:var(--faint); }
 .topbar-context { font-size:11px;gap:8px;color:var(--muted); }
