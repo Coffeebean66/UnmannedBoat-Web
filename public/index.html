@@ -6,6 +6,7 @@
   <meta name="theme-color" content="#19191e">
   <title>无人船监测平台</title>
   <link rel="icon" href="data:,">
+  <link rel="preload" href="assets/coffeebean-logo.png" as="image" fetchpriority="high">
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="ui.css">
@@ -29,6 +30,7 @@
   <link rel="stylesheet" href="mission-panel.css">
   <link rel="stylesheet" href="driver-layout.css">
   <link rel="stylesheet" href="driver-immersive.css">
+  <link rel="stylesheet" href="startup.css">
   <script defer src="vendor/leaflet/leaflet.js"></script>
   <script defer src="vendor/leaflet-rotate/leaflet-rotate.js"></script>
   <script defer src="vendor/hls/hls.min.js"></script>
@@ -50,6 +52,7 @@
   <script defer src="map-velocity-view.js"></script>
   <script defer src="map-mission-view.js"></script>
   <script defer src="map-settings.js"></script>
+  <script defer src="startup-settings.js"></script>
   <script defer src="user-management.js"></script>
   <script defer src="online-users.js"></script>
   <script defer src="mqtt-device-settings.js"></script>
@@ -77,6 +80,26 @@
   <script defer src="update-panel.js"></script>
 </head>
 <body>
+  <section id="startupScreen" class="startup-screen" role="dialog" aria-modal="true" aria-label="无人船监测平台欢迎页" tabindex="-1">
+    <div class="startup-grid" aria-hidden="true"></div>
+    <div class="startup-content">
+      <p class="startup-eyebrow">WELCOME ABOARD</p>
+      <div class="startup-emblem">
+        <span class="startup-wave" aria-hidden="true"></span><span class="startup-wave startup-wave-delayed" aria-hidden="true"></span>
+        <span class="startup-orbit" aria-hidden="true"></span>
+        <img id="startupLogo" class="startup-logo" src="assets/coffeebean-logo.png" alt="coffeebean" width="480" height="274" fetchpriority="high" decoding="async">
+        <span id="startupWordmark" class="startup-wordmark" hidden>coffeebean</span>
+        <span class="startup-bearing" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M4 13 12 9l8 4-2 6H6l-2-6ZM8 10V5h8v5M12 5V2M2 21q2-2 5 0t5 0 5 0 5 0" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/></svg></span>
+      </div>
+      <h2 class="startup-title">无人船监测平台</h2>
+      <p class="startup-subtitle">UNMANNED VESSEL MONITOR</p>
+      <p class="startup-loading" role="status"><span class="startup-status-dot" aria-hidden="true"></span><span id="startupStatus">正在打开监测工作台</span></p>
+      <div class="startup-loader" aria-hidden="true"></div>
+    </div>
+    <p class="startup-signature">coffeebean · 无人船监测</p>
+    <button id="startupSkip" class="startup-skip" type="button"><b id="startupButtonLabel">跳过动画</b><span aria-hidden="true">Esc</span></button>
+  </section>
+  <script src="startup.js"></script>
   <a class="skip-link" href="#fleet">跳到监测内容</a>
   <header class="topbar">
     <div class="brand-group">
@@ -125,7 +148,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">无人船监测 <span>v1.78.2</span></div>
+      <div class="sidebar-version">无人船监测 <span>v1.80.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -607,6 +630,15 @@
   <dialog id="platformSettingsDialog" class="platform-settings-dialog" aria-labelledby="platformSettingsTitle">
     <div class="dialog-head"><div class="title-with-icon"><span class="card-icon blue" data-icon="settings"></span><div><p class="eyebrow">PLATFORM SETTINGS</p><h2 id="platformSettingsTitle">平台设置</h2></div></div><button id="platformSettingsClose" class="ghost">返回监控<span data-icon="close"></span></button></div>
     <div class="dialog-scroll"><p class="platform-settings-intro">管理整个平台的用户、无人船接入账号与地图配置。单船 PID 与电控参数请从对应船只卡片的“调参设置”进入。</p>
+      <section id="startupSettings" class="map-settings" aria-labelledby="startupSettingsTitle" hidden>
+        <div class="map-settings-heading"><div class="map-settings-title"><span class="card-icon blue" data-icon="settings"></span><div><h3 id="startupSettingsTitle">启动动画</h3><p>管理员配置 · 对所有用户下次打开页面生效</p></div></div></div>
+        <form id="startupSettingsForm">
+          <label class="gamepad-haptics-switch"><input id="startupSettingsEnabled" type="checkbox" checked disabled>启用 coffeebean 启动动画</label>
+          <p class="map-settings-description">开启时，动画播放完后按任意键或点击进入后台；关闭时直接进入。设置保存在服务器，刷新、重启和更新后保留。</p>
+          <div class="map-settings-actions"><button id="startupSettingsRead" type="button" class="subtle" disabled>重新读取</button><button id="startupSettingsSave" type="submit" class="primary" disabled>保存启动设置</button></div>
+        </form>
+        <p id="startupSettingsStatus" class="map-settings-status" role="status" aria-live="polite">尚未读取启动设置。</p>
+      </section>
       <section id="userManagement" class="user-management" aria-labelledby="userManagementTitle" hidden>
         <div class="user-management-heading">
           <div class="user-management-title"><span class="card-icon blue" data-icon="settings"></span><div><h3 id="userManagementTitle">用户与账户</h3><p>PLATFORM USERS · 仅管理员可操作</p></div></div>
@@ -728,7 +760,7 @@
       <section id="optimalParameterSection" class="optimal-parameters" aria-labelledby="optimalParameterHeading" hidden>
         <h3 id="optimalParameterHeading" class="device-settings-heading">LQI / LQR 专用参数<span>按当前船独立读取与保存</span></h3>
         <p class="parameter-group-note">先读取实际配置，再逐项调节。写入需结束任务和接管、两路反馈正常且停稳满1秒；航线参数用于下次任务。保存Flash同时保留当前通用参数，上电仍默认原PID。</p>
-        <p id="optimalParameterUnsupported" class="cloud-readonly" hidden>当前固件支持算法切换，但尚不支持LQR在线调参，请先更新船端固件。</p>
+          <p id="optimalParameterUnsupported" class="cloud-readonly" hidden>船端未声明LQR在线调参能力。能切换LQR不代表能读取其参数，请更新船端固件，并同步更新Web前后端。</p>
         <p id="optimalParameterStatus" role="status" data-tone="neutral">点击“读取LQR参数”获取当前船的实际配置</p>
         <div id="optimalParameterFields" class="parameter-fields"></div>
         <div class="optimal-parameter-actions"><button id="fillOptimalDefaults" type="button" class="subtle" disabled>填入参考初值</button><div class="button-row"><button id="readOptimalParameters" type="button" disabled>读取LQR参数</button><button id="writeOptimalParameters" type="button" class="primary" disabled>写入LQR参数</button><button id="saveOptimalFlash" type="button" disabled>保存LQR到Flash</button></div></div>

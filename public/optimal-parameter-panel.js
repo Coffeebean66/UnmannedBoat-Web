@@ -74,7 +74,7 @@ class OptimalParameterPanel {
   async command(kind,preset){
     window.BoatAuth.assertManage();
     if(this.owner.busy||this.link.pending)throw Error('请等待当前参数操作完成');
-    if(!this.supported)throw Error('请先更新支持LQR在线调参的船端固件');
+    if(!this.supported)throw Error('船端未声明支持LQR在线调参；支持切换LQR不等于支持读取LQR参数，请更新船端固件并同步更新Web前后端');
     if(this.box.hidden||this.link.readOnly)throw Error(this.link.parameterReadOnlyReason||'请确认当前船正在使用新算法且在线');
     const generation=this.link.generation,deviceId=this.link.selectedId;
     let values;

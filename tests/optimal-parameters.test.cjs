@@ -20,6 +20,27 @@ test('LQR wire round trips 15 typed values and rejects CRC, padding, extra field
   for(const value of [0,2,true,'1'])assert.equal(PP.capability(Buffer.from(JSON.stringify({...capability,optimalParameters:value}))),null);
   assert.deepEqual(O.guidanceConfig(O.defaults),{sampleS:.1,headingTauS:1.2,crossWeight:.25,headingWeight:2,inputWeight:4,maxOffsetDeg:60});
 });
+
+test('LQR diagnostics identify the rejected field without accepting malformed responses',()=>{
+  const crc=b=>{b.writeUInt16LE(P.crc16CcittFalse(b,2,52),54);return b;};
+  const changed=(at,value)=>{const b=reply();b[at]=value;return crc(b);};
+  const missingSpeed=reply();missingSpeed.writeUInt16LE(0,44);
+  const badValue=reply();badValue.writeUInt16LE(0,14);
+  const badCrc=reply();badCrc[14]^=1;
+  for(const [bytes,expected]of [
+    [reply().subarray(1),/长度/],[changed(0,0),/帧头/],[badCrc,/CRC/],
+    [changed(2,4),/版本/],[changed(3,0x90),/通用参数响应.*0x90.*0x92/],
+    [changed(3,0x91),/响应类型/],[changed(4,55),/帧长字段/],[changed(5,7),/状态码/],
+    [changed(46,1),/保留字节/],[crc(missingSpeed),/最大船速/],[crc(badValue),/船速模型稳态增益/]
+  ]){
+    assert.equal(O.response(bytes),null);assert.equal(O.inspectResponse(bytes).frame,null);
+    assert.match(O.inspectResponse(bytes).error,expected);
+  }
+  for(let status=0;status<=6;status++){
+    const inspected=O.inspectResponse(reply(O.defaults,status));
+    assert.equal(inspected.error,'');assert.deepEqual(inspected.frame,O.response(reply(O.defaults,status)));
+  }
+});
 function panel(){
   const inputs=O.fields.map(f=>({dataset:{optimalKey:f.key},value:String(f.value/f.scale)})),ids={},storage=new Map();
   const auth={canManage:true,assertManage(){if(!this.canManage)throw Error('访客只读');}};

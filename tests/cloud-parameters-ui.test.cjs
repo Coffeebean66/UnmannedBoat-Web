@@ -213,7 +213,19 @@ test('LQR云端读取不携带值，必须支持新能力，普通参数ACK不�
   const b=Buffer.from(O.command('optimalWrite',987,O.defaults));b[3]=0x92;b.writeUInt16LE(2500,44);b.writeUInt16LE(P.crc16CcittFalse(b,2,52),54);
   h.respond({frame:b.toString('base64')});const result=await h.cloud.request('optimalRead');assert.equal(result.parameters.speedGainMmS,2500);
   assert.deepEqual(JSON.parse(h.pendingPost().at(-1).body),{deviceId:'boat-1',kind:'optimalRead'});
-  h.respond({frame:frame()});await assert.rejects(h.cloud.request('optimalWrite',O.defaults),error=>error.uncertain);
+  h.respond({frame:frame()});await assert.rejects(h.cloud.request('optimalWrite',O.defaults),error=>error.uncertain&&/通用参数响应.*0x90.*0x92/.test(error.message));
+  b[14]^=1;h.respond({frame:b.toString('base64')});
+  await assert.rejects(h.cloud.request('optimalRead'),error=>error.uncertain&&/CRC校验失败/.test(error.message));
   h.algorithm({id:1,lqrAvailable:true});await h.cloud.refreshDevices();const before=h.pendingPost().length;
   await assert.rejects(h.cloud.request('optimalRead'),/更新船端/);assert.equal(h.pendingPost().length,before);
+});
+
+test('LQR browser timeout identifies the browser-to-server request and preserves server rejection details',async()=>{
+  const h=await setup();h.algorithm({id:1,lqrAvailable:true,onlineTuning:true});await h.cloud.refreshDevices();
+  h.respond({error:'读取LQR参数响应超时；本次LQR响应被拒绝：LQR响应CRC校验失败'},504);
+  await assert.rejects(h.cloud.request('optimalRead'),/本次LQR响应被拒绝.*CRC校验失败/);
+  let release;h.block(()=>new Promise(resolve=>{release=resolve;}));
+  const waiting=h.cloud.request('optimalRead'),rejected=assert.rejects(waiting,/浏览器未收到服务器确认/);
+  await flush();const timer=[...h.timers.values()].find(item=>item.delay===7000);assert.ok(timer);timer.fn();await rejected;
+  assert.equal(h.pendingPost().length,2);release();await flush();
 });

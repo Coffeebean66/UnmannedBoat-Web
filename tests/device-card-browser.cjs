@@ -18,7 +18,7 @@ async function main(){
     list:()=>({brokerConnected:true,devices}),state:id=>({brokerConnected:true,device:devices.find(device=>device.id===id)})});
   const env={BOAT_ACCOUNTS_ENABLED:'1',BOAT_ADMIN_USERNAME:'operator',BOAT_ADMIN_PASSWORD:'device-card-admin-test-only',
     BOAT_GUEST_USERNAME:'observer',BOAT_GUEST_PASSWORD:'device-card-guest-test-only',BOAT_AMAP_KEY:'',BOAT_AMAP_SECURITY_CODE:''};
-  const server=createServer({env,cloud:bridge,accountOptions:{storeFile:path.join(run,'accounts.json')},mapOptions:{file:path.join(run,'map-settings.json')}});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const server=createServer({env,cloud:bridge,startupOptions:{defaultEnabled:false,file:path.join(run,'startup-settings.json')},accountOptions:{storeFile:path.join(run,'accounts.json')},mapOptions:{file:path.join(run,'map-settings.json')}});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const emit=(deviceId=fixture.deviceId)=>bridge.emit('telemetry',{deviceId,receivedAt:Date.now()-80,ageMs:0,payload:telemetry(++fixture.sequence),...fixture.timing});
   const feed=setInterval(()=>{if(fixture.feed)emit();},100);
   const profile=fs.mkdtempSync(path.join(output,'chrome-device-card-')),errors=[];

@@ -25,12 +25,15 @@ async function main(){
       if(kind==='algorithm'){fixture.algorithm=input.algorithm;return algorithmFrame(fixture.algorithm);}
       if(kind.startsWith('optimal')){
         if(kind==='optimalWrite'&&!fixture.lqrStatus)fixture.optimal={...input};
-        return optimalFrame(fixture.optimal,kind==='optimalRead'?0:fixture.lqrStatus);
+        if(fixture.lqrReply==='legacy')return parameterFrame(fixture.values);
+        const response=optimalFrame(fixture.optimal,kind==='optimalRead'?0:fixture.lqrStatus);
+        if(fixture.lqrReply==='crc')response[14]^=1;
+        return response;
       }
       return parameterFrame(fixture.values,status);
     }});
   const env={BOAT_ACCOUNTS_ENABLED:'1',BOAT_ADMIN_USERNAME:'operator',BOAT_ADMIN_PASSWORD:'browser-admin-test-only',BOAT_GUEST_USERNAME:'observer',BOAT_GUEST_PASSWORD:'browser-guest-test-only'};
-  const server=createServer({env,cloud:bridge});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const server=createServer({env,cloud:bridge,startupOptions:{defaultEnabled:false,file:path.join(output,'cloud-parameters-startup-default.json')}});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const feed=setInterval(()=>bridge.emit('telemetry',{deviceId:'boat-cloud-test',receivedAt:Date.now(),ageMs:0,payload:telemetry()}),100);
   const profile=fs.mkdtempSync(path.join(output,'chrome-cloud-parameters-')),errors=[];
   const browser=spawn(process.env.CHROME_PATH||'C:/Program Files/Google/Chrome/Application/chrome.exe',['--headless','--no-first-run','--no-default-browser-check','--use-angle=swiftshader','--enable-unsafe-swiftshader','--remote-debugging-port=0','--user-data-dir='+profile],{windowsHide:true,stdio:'ignore'});
@@ -71,6 +74,15 @@ async function main(){
     await until('!document.getElementById("readOptimalParameters").disabled');await evaluate('document.getElementById("readOptimalParameters").click()');
     await until('document.getElementById("optimalParameterStatus").textContent.includes("LQR读取成功")&&!boatMonitor.params.busy');
     assert.equal(await evaluate('document.querySelector("[data-optimal-key=speedGainMmS]").value'),'2.5');
+    for(const [mode,message]of [['legacy','通用参数响应'],['crc','CRC校验失败']]){
+      fixture.lqrReply=mode;
+      await until('!document.getElementById("readOptimalParameters").disabled');await evaluate('document.getElementById("readOptimalParameters").click()');
+      await until('document.getElementById("optimalParameterStatus").textContent.includes('+JSON.stringify(message)+')&&!boatMonitor.params.busy');
+      assert.equal(await evaluate('boatMonitor.params.optimalPanel.confirmed'),null);
+      assert.equal(await evaluate('document.getElementById("saveOptimalFlash").disabled'),true);
+    }
+    fixture.lqrReply=null;await until('!document.getElementById("readOptimalParameters").disabled');await evaluate('document.getElementById("readOptimalParameters").click()');
+    await until('document.getElementById("optimalParameterStatus").textContent.includes("LQR读取成功")&&!boatMonitor.params.busy');
     await evaluate('document.querySelector("[data-optimal-key=speedGainMmS]").value="3.125"');
     await until('!document.getElementById("saveOptimalFlash").disabled');
     assert.match(await evaluate('boatMonitor.params.optimalPanel.command("optimalFlash").then(()=>"unexpected",e=>e.message)'),/先写入/);

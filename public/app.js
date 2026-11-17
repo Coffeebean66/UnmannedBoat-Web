@@ -9,6 +9,7 @@
   const horizon=new BoatArtificialHorizon($('imuHorizon'));
   const compass=new BoatCompassView($('boatCompass'));
   const mapSettings=new BoatMapSettingsPanel();
+  const startupSettings=new BoatStartupSettingsPanel();
   const users=new BoatUserManagementPanel({toast});
   const onlineUsers=new BoatOnlineUsersPanel();
   const mqttDevices=new BoatMqttDeviceSettingsPanel();
@@ -462,7 +463,7 @@
     if(!await selecting||request!==videoOpenSequence||generation!==cloud.generation||cloud.selectedId!==id||!cloud.wanted||accountGeneration!==window.BoatAuth?.generation)return;
     window.BoatWorkspace?.navigate('video');
   }
-  const openPlatformSettings=()=>{window.BoatAuth?.assertPlatformManage();$('platformSettingsDialog').showModal();users.open();onlineUsers.open();mqttDevices.open();videoDevices.open();videoSources.open();videoRecording.open();mapSettings.open();driver.gamepad.haptics?.open();};
+  const openPlatformSettings=()=>{window.BoatAuth?.assertPlatformManage();$('platformSettingsDialog').showModal();startupSettings.open();users.open();onlineUsers.open();mqttDevices.open();videoDevices.open();videoSources.open();videoRecording.open();mapSettings.open();driver.gamepad.haptics?.open();};
   on('settingsToggle',openSettings);
   on('firmwareToggle',()=>{if(driver.active||driver.pending)throw Error('请先停船并退出电脑操控');firmware.open(cloud.selectedId);});
   on('settingsEntry',openSettings);
@@ -471,7 +472,7 @@
   on('platformSettingsToggle',openPlatformSettings);
   on('sidebarPlatformSettings',openPlatformSettings);
   on('platformSettingsClose',()=>$('platformSettingsDialog').close());
-  $('platformSettingsDialog').addEventListener('close',()=>{users.close();onlineUsers.close();mqttDevices.close();videoDevices.close();videoSources.close();videoRecording.close();mapSettings.close();});
+  $('platformSettingsDialog').addEventListener('close',()=>{startupSettings.close();users.close();onlineUsers.close();mqttDevices.close();videoDevices.close();videoSources.close();videoRecording.close();mapSettings.close();});
   window.addEventListener('pagehide',()=>{users.destroy();onlineUsers.destroy();mqttDevices.destroy();videoDevices.destroy();firmware.destroy();},{once:true});
   for(const [id,kind] of [['readParameters','read'],['writeParameters','write'],['saveFlash','flash']])on(id,async()=>{
     if(!$('settingsDialog').open||$('settingsDialog').dataset.deviceId!==cloud.selectedId)throw Error('调参对象已变化，请从对应无人船重新进入');

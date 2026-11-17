@@ -67,7 +67,7 @@
         const pending={kind,generation,deviceId,accountGeneration,resolve,reject,
           abort:typeof AbortController==='function'?new AbortController():null};
         this.pending=pending;
-        pending.timer=setTimeout(()=>this.finishParameter(pending,this.uncertain(kind,'云端参数响应超时，尚未收到设备确认')),kind==='flash'||kind==='optimalFlash'?22000:7000);
+        pending.timer=setTimeout(()=>this.finishParameter(pending,this.uncertain(kind,kind.startsWith('optimal')?'云端LQR参数请求超时，浏览器未收到服务器确认':'云端参数响应超时，尚未收到设备确认')),kind==='flash'||kind==='optimalFlash'?22000:7000);
         this.notify();
         const current=()=>{
           if(this.pending!==pending||this.generation!==generation||this.selectedId!==deviceId||
@@ -80,7 +80,7 @@
           await window.BoatAuth.verifyManage();current();
           // 点击时刷新能力，不使用过期的在线/固件能力缓存发送命令。
           await this.refreshDevices();current();
-          if(kind.startsWith('optimal')&&!this.devices.find(d=>d.id===deviceId)?.controlAlgorithm?.onlineTuning)throw Object.assign(Error('当前固件不支持LQR在线调参，请先更新船端固件'),{status:409});
+          if(kind.startsWith('optimal')&&!this.devices.find(d=>d.id===deviceId)?.controlAlgorithm?.onlineTuning)throw Object.assign(Error('船端未声明支持LQR在线调参；支持切换LQR不等于支持读取LQR参数，请先更新船端固件，并同步更新Web前后端'),{status:409});
           const body={deviceId,kind,...(kind==='read'||kind==='optimalRead'?{}:{values})};
           pending.sent=true;
           const result=await this.api('parameters',{method:'POST',body:JSON.stringify(body),...(pending.abort?{signal:pending.abort.signal}:{})});
@@ -88,7 +88,7 @@
           if(typeof result.frame!=='string'||result.frame.length!==76||!/^[A-Za-z0-9+/]*={0,2}$/.test(result.frame))throw Error('参数响应格式错误，尚未收到有效设备确认');
           const raw=atob(result.frame),bytes=Uint8Array.from(raw,char=>char.charCodeAt(0));
           const frame=kind.startsWith('optimal')?BoatModules.optimalParameters.response(bytes):kind==='algorithm'?BoatModules.controlAlgorithm.response(bytes):decodeParameterFrame(bytes);
-          if(!frame)throw Error('参数响应校验失败，尚未收到有效设备确认');
+          if(!frame)throw Error(kind.startsWith('optimal')?'LQR参数响应校验失败：'+BoatModules.optimalParameters.inspectResponse(bytes).error:'参数响应校验失败，尚未收到有效设备确认');
           if(kind==='algorithm'){
             const device=this.devices.find(device=>device.id===deviceId);
             if(device?.controlAlgorithm)device.controlAlgorithm={...device.controlAlgorithm,id:frame.algorithm};

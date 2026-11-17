@@ -17,10 +17,11 @@ const {createControlApi}=require('./server/control-api');
 const {createMissionApi}=require('./server/mission-api');
 const {createDriverLayoutApi}=require('./server/driver-layout-api');
 const {createGamepadHapticsApi}=require('./server/gamepad-haptics-api');
+const {createStartupSettingsApi}=require('./server/startup-settings-api');
 const {version:packageVersion}=require('./package.json');
 const ROOT=path.join(__dirname,'public');
 const MIME={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json; charset=utf-8','.glb':'model/gltf-binary','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon','.txt':'text/plain; charset=utf-8'};
-function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},apiOptions={},updateOptions={},accountOptions={},mapOptions={},mqttAdminOptions={},videoMediaOptions={},videoRecordingOptions={},videoSourceOptions={},cameraOptions={},firmwareOptions={},controlOptions={},missionOptions={},driverLayoutOptions={},gamepadHapticsOptions={}}={}) {
+function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},apiOptions={},updateOptions={},accountOptions={},mapOptions={},mqttAdminOptions={},videoMediaOptions={},videoRecordingOptions={},videoSourceOptions={},cameraOptions={},firmwareOptions={},controlOptions={},missionOptions={},driverLayoutOptions={},gamepadHapticsOptions={},startupOptions={}}={}) {
   const base=fs.realpathSync(root);
   const contentSecurityPolicy=getVideoContentSecurityPolicy(MAP_CONTENT_SECURITY_POLICY,env);
   const bridge=cloud||new CloudBridge({env,...cloudOptions});
@@ -32,6 +33,7 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
   const mapApi=createMapConfigApi({...mapOptions,env,accounts});
   const driverLayoutApi=createDriverLayoutApi({...driverLayoutOptions,env,accounts});
   const gamepadHapticsApi=createGamepadHapticsApi({...gamepadHapticsOptions,env,accounts});
+  const startupApi=createStartupSettingsApi({...startupOptions,env,accounts});
   const mqttDeviceApi=createMqttDeviceApi({...mqttAdminOptions,accounts});
   const videoSourceApi=createVideoSourceApi({...videoSourceOptions,env,accounts});
   const cameraApi=createCameraControlApi({sources:videoSourceApi,...cameraOptions,env,accounts});
@@ -56,6 +58,7 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
       if(await accounts.handle(req,res,url))return;
       if(await driverLayoutApi.handle(req,res,url))return;
       if(await gamepadHapticsApi.handle(req,res,url))return;
+      if(await startupApi.handle(req,res,url))return;
       if(await videoSourceApi.handle(req,res,url))return;
       if(await cameraApi.handle(req,res,url))return;
       if(await videoMediaApi.handle(req,res,url))return;
@@ -91,13 +94,14 @@ function createServer({root=ROOT,key,cert,env=process.env,cloud,cloudOptions={},
   };
   const server=key&&cert?https.createServer({key,cert},handler):http.createServer(handler);
   const originalClose=server.close.bind(server);
-  server.close=(callback)=>{const missionsClosed=missionApi.close();controlApi.close();firmwareApi.close();const cameraClosed=cameraApi.close();const recordingClosed=videoRecordingApi.close();const mediaClosed=videoMediaApi.close();const sourcesClosed=videoSourceApi.close();const layoutClosed=driverLayoutApi.close();const hapticsClosed=gamepadHapticsApi.close();mqttDeviceApi.close();mapApi.close();accounts.close();updateApi.close();api.close();const historyClosed=bridge.stop();return originalClose((...args)=>{Promise.allSettled([missionsClosed,cameraClosed,mediaClosed,recordingClosed,sourcesClosed,historyClosed,layoutClosed,hapticsClosed]).then(()=>callback?.(...args));});};
+  server.close=(callback)=>{const missionsClosed=missionApi.close();controlApi.close();firmwareApi.close();const cameraClosed=cameraApi.close();const recordingClosed=videoRecordingApi.close();const mediaClosed=videoMediaApi.close();const sourcesClosed=videoSourceApi.close();const layoutClosed=driverLayoutApi.close();const hapticsClosed=gamepadHapticsApi.close();const startupClosed=startupApi.close();mqttDeviceApi.close();mapApi.close();accounts.close();updateApi.close();api.close();const historyClosed=bridge.stop();return originalClose((...args)=>{Promise.allSettled([missionsClosed,cameraClosed,mediaClosed,recordingClosed,sourcesClosed,historyClosed,layoutClosed,hapticsClosed,startupClosed]).then(()=>callback?.(...args));});};
   server.boatCloud=bridge;server.boatCloudApi=api;server.boatUpdateApi=updateApi;server.boatRelease=current;server.boatAccounts=accounts;
   server.boatRecordingApi=videoRecordingApi;
   server.boatVideoSourceApi=videoSourceApi;
   server.boatCameraApi=cameraApi;
   server.boatDriverLayoutApi=driverLayoutApi;
   server.boatGamepadHapticsApi=gamepadHapticsApi;
+  server.boatStartupApi=startupApi;
   server.boatFirmwareApi=firmwareApi;
   server.boatControlApi=controlApi;
   server.boatMissionApi=missionApi;

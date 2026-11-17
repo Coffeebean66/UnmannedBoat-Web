@@ -96,7 +96,16 @@
   if (typeof document === 'undefined' || !document.getElementById('accountLoginDialog')) return;
   const $ = id => document.getElementById(id), dialog = $('accountLoginDialog');
   const auth = window.BoatAuth = new BoatAccountAuth();
+  let loginAfterStartup=false;
   function openLogin() {
+    // 鉴权照常完成，只延后弹窗，防止浏览器顶层dialog盖住品牌入场动画。
+    if(window.BoatStartup?.active){
+      if(!loginAfterStartup){
+        loginAfterStartup=true;
+        window.BoatStartup.finished.then(()=>{loginAfterStartup=false;if(auth.enabled&&!auth.user)openLogin();});
+      }
+      return;
+    }
     $('accountPassword').value = ''; $('accountLoginError').textContent = '';
     if (!dialog.open) dialog.showModal();
     document.documentElement.classList.add('account-modal-open');

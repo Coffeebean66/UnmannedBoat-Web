@@ -4,9 +4,11 @@
 missions.json
 driver-layout.json
 gamepad-haptics.json
+startup-settings.json
 video-sources.json
 .video-sources.*.tmp
 .gamepad-haptics.*.tmp
+.startup-settings.*.tmp
 mission-tracks.json
 mission-tracks.json.tmp-*
 .missions-*.tmp

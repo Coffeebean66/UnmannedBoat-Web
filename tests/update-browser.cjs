@@ -45,7 +45,7 @@ const mock = '(' + function () {
 
 async function main() {
   fs.mkdirSync(output, { recursive: true });
-  const server = createServer(); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const server = createServer({ startupOptions: { defaultEnabled: false, file: path.join(output, 'update-startup-default.json') } }); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const profile = fs.mkdtempSync(path.join(output, 'chrome-update-')), errors = [];
   const browser = spawn(process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe', [
     '--headless', '--no-first-run', '--no-default-browser-check', '--use-angle=swiftshader',

@@ -31,7 +31,7 @@ async function main(){
     authenticated.push({id,authorized});return {authorized};
   };
   const transport=createMediaTransport({port:upstreamPort});
-  const server=createServer({env,cloud:bridge,accountOptions:{storeFile:path.join(run,'accounts.json')},mapOptions:{file:path.join(run,'maps.json')},
+  const server=createServer({env,cloud:bridge,startupOptions:{defaultEnabled:false,file:path.join(run,'startup-settings.json')},accountOptions:{storeFile:path.join(run,'accounts.json')},mapOptions:{file:path.join(run,'maps.json')},
     mqttAdminOptions:{client},videoMediaOptions:{client,upstreamPort,transport:async operation=>{
       const response=await transport(operation);requests.push({method:operation.method,path:operation.path,status:response.status});return response;
     }}});

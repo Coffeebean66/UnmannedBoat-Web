@@ -37,7 +37,7 @@ async function main(){
   }
   const start=async()=>{
     mqtt=new SimulatedMQTT();bridge=new CloudBridge({env,connect:()=>mqtt,now:()=>now,tickMs:100,historyOptions:{file}});
-    server=createServer({env,cloud:bridge,accountOptions:{storeFile:path.join(run,'accounts.json')},mapOptions:{file:path.join(run,'map-settings.json')},
+    server=createServer({env,cloud:bridge,startupOptions:{defaultEnabled:false,file:path.join(run,'startup-settings.json')},accountOptions:{storeFile:path.join(run,'accounts.json')},mapOptions:{file:path.join(run,'map-settings.json')},
       mqttAdminOptions:{client:async()=>({devices:[],revision:'a'.repeat(64),canCreate:true})}});
     const handler=server.listeners('request')[0];server.removeListener('request',handler);
     server.on('request',(req,res)=>{

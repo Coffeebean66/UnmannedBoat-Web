@@ -45,7 +45,7 @@ async function main(){
   }
   const mqtt=new SimulatedMQTT(),env={BOAT_CLOUD_ENABLED:'1',BOAT_MQTT_URL:'mqtt://fixture.invalid:1883',BOAT_ACCOUNTS_ENABLED:'1',BOAT_ADMIN_USERNAME:'fleet-admin',BOAT_ADMIN_PASSWORD:'fleet-browser-administrator',BOAT_GUEST_USERNAME:'fleet-guest',BOAT_GUEST_PASSWORD:'fleet-browser-observer',BOAT_AMAP_KEY:'',BOAT_AMAP_SECURITY_CODE:''};
   bridge=new CloudBridge({env,connect:()=>mqtt,tickMs:100});
-  const server=createServer({env,cloud:bridge,accountOptions:{storeFile:path.join(run,'accounts.json')},mapOptions:{file:path.join(run,'map-settings.json')},mqttAdminOptions:{client:async()=>({devices:[],revision:'a'.repeat(64),canCreate:true})}});
+  const server=createServer({env,cloud:bridge,startupOptions:{defaultEnabled:false,file:path.join(run,'startup-settings.json')},accountOptions:{storeFile:path.join(run,'accounts.json')},mapOptions:{file:path.join(run,'map-settings.json')},mqttAdminOptions:{client:async()=>({devices:[],revision:'a'.repeat(64),canCreate:true})}});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));mqtt.emit('connect');
   feed=setInterval(()=>{for(const item of vessels.values())if(item.running){bridge.acceptMessage('boats/'+item.id+'/telemetry',telemetry(item));capability(item);}},100);
   const profile=fs.mkdtempSync(path.join(output,'chrome-fleet-'));

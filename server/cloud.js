@@ -225,6 +225,7 @@ class CloudBridge extends EventEmitter {
         return !!(device&&this.snapshot(device).online&&device.uplinkClock.accept(payload,this.monotonicNow()));
       }
       const value=parameters.response(payload),pending=this.pendingParameters.get(parts[1]);
+      if(pending){const problem=parameters.responseProblem(payload,pending);if(problem)pending.responseProblem=problem;}
       if(!value||!pending||value.token!==pending.token||value.uptimeMs!==pending.uptimeMs||value.sequence!==pending.sequence)return false;
       if((pending.kind.startsWith('optimal')?'optimal':pending.kind==='algorithm'?'algorithm':'parameters')!==value.kind)return false;
       const device=this.devices.get(parts[1]);if(!this.parameterLive(device)){this.cancelParameters(parts[1],503,'设备数据已过期，参数结果未知，请读取确认');return false;}
@@ -278,7 +279,11 @@ class CloudBridge extends EventEmitter {
     this.pendingParameters.delete(id);clearTimeout(pending.timer);pending.signal?.removeEventListener('abort',pending.onAbort);
     if(error)pending.reject(error);else pending.resolve(frame);this.emit('state',this.state(id));
   }
-  cancelParameters(id,status,message){this.finishParameters(id,Object.assign(Error(message),{status}));}
+  cancelParameters(id,status,message){
+    // 船端执行后会更换令牌；即使它先触发取消，也保留先前坏响应的具体原因。
+    const problem=this.pendingParameters.get(id)?.responseProblem;
+    this.finishParameters(id,Object.assign(Error(message+(problem?'；本次LQR响应被拒绝：'+problem:'')),{status}));
+  }
   requestParameters(id,kind,values,{signal}={}){
     try{parameters.validateOperation(kind,values);}catch(error){return Promise.reject(Object.assign(error,{status:400}));}
     if(typeof id!=='string'||!DEVICE_ID.test(id))return Promise.reject(Object.assign(Error('设备编号不正确'),{status:400}));
@@ -290,7 +295,7 @@ class CloudBridge extends EventEmitter {
     if(kind==='algorithm'&&(!Number.isInteger(device.capability.algorithm)||values.algorithm===1&&!device.capability.lqr))
       return Promise.reject(Object.assign(Error('当前固件不支持该控制算法，请先更新船端固件'),{status:409}));
     if(kind.startsWith('optimal')&&device.capability.optimalParameters!==1)
-      return Promise.reject(Object.assign(Error('当前固件不支持LQR在线调参，请先更新船端固件'),{status:409}));
+      return Promise.reject(Object.assign(Error('船端未声明支持LQR在线调参；支持切换LQR不等于支持读取LQR参数，请先更新船端固件，并同步更新Web前后端'),{status:409}));
     if(signal?.aborted)return Promise.reject(Object.assign(Error('参数操作已取消'),{status:409}));
     const sequence=this.parameterSequence=(this.parameterSequence+1)>>>0,cap=device.capability;
     const payload=parameters.envelope(cap.token,cap.uptimeMs,parameters.commandFrame(kind,sequence,values));
@@ -298,7 +303,7 @@ class CloudBridge extends EventEmitter {
     return new Promise((resolve,reject)=>{
       const pending={resolve,reject,sequence,kind,algorithm:values?.algorithm,token:cap.token,uptimeMs:cap.uptimeMs,signal,timer:null,onAbort:()=>this.cancelParameters(id,409,'登录或连接已变化，参数结果未知，请读取确认')};
       this.pendingParameters.set(id,pending);signal?.addEventListener('abort',pending.onAbort,{once:true});
-      pending.timer=setTimeout(()=>this.cancelParameters(id,504,'参数响应超时，结果未知，请读取确认后再试'),kind==='flash'||kind==='optimalFlash'?this.flashTimeoutMs:this.parameterTimeoutMs);pending.timer.unref?.();
+      pending.timer=setTimeout(()=>this.cancelParameters(id,504,parameters.timeoutMessage(pending)),kind==='flash'||kind==='optimalFlash'?this.flashTimeoutMs:this.parameterTimeoutMs);pending.timer.unref?.();
       try{this.client.publish(this.prefix+'/'+id+'/parameter-command',payload,{qos:0,retain:false},error=>{if(error&&this.pendingParameters.get(id)===pending)this.cancelParameters(id,503,'参数发送失败，结果未知，请读取确认');});}
       catch(_){this.cancelParameters(id,503,'参数发送失败，结果未知，请读取确认');}
       this.emit('state',this.state(id));

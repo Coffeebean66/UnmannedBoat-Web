@@ -33,15 +33,26 @@ function command(kind,sequence,values){
   if(values)fields.forEach((f,i)=>{b[14+i*2]=values[f.key]&255;b[15+i*2]=values[f.key]>>>8;});
   const crc=P.crc16CcittFalse(b,2,52);b[54]=crc&255;b[55]=crc>>>8;return b;
 }
-function response(value){
+// 解析与诊断共用同一组检查，避免错误提示与实际接纳条件不一致。
+function inspectResponse(value){
   const b=Uint8Array.from(value||[]),u16=i=>b[i]|b[i+1]<<8;
-  if(b.length!==56||b[0]!==0xa5||b[1]!==0x5a||b[2]!==5||b[3]!==0x92||b[4]!==56||b[5]>6||
-    b.slice(46,54).some(x=>x!==0)||u16(44)<100||u16(44)>20000||P.crc16CcittFalse(b,2,52)!==u16(54))return null;
+  const fail=error=>({frame:null,error});
+  if(b.length!==56)return fail('LQR响应长度错误，应为56字节');
+  if(b[0]!==0xa5||b[1]!==0x5a)return fail('LQR响应帧头错误');
+  if(P.crc16CcittFalse(b,2,52)!==u16(54))return fail('LQR响应CRC校验失败');
+  if(b[2]!==5)return fail('LQR参数协议版本不匹配，应为v5');
+  if(b[3]!==0x92)return fail(b[3]===0x90?'船端返回了通用参数响应（0x90），本次需要LQR响应（0x92）':'船端响应类型不匹配，本次需要LQR响应（0x92）');
+  if(b[4]!==56)return fail('LQR响应中的帧长字段错误');
+  if(b[5]>6)return fail('LQR响应状态码不支持');
+  if(b.slice(46,54).some(x=>x!==0))return fail('LQR响应保留字节非零，报文布局可能不匹配');
+  if(u16(44)<100||u16(44)>20000)return fail('LQR响应缺少有效的最大船速，报文布局可能不匹配');
   const parameters=Object.fromEntries(fields.map((f,i)=>[f.key,u16(14+i*2)]));
-  try{validate(parameters);}catch(_){return null;}
+  const invalid=fields.find(f=>parameters[f.key]<f.min||parameters[f.key]>f.max);
+  if(invalid)return fail('LQR响应的“'+invalid.label+'”超出允许范围');
   const u32=i=>(b[i]|b[i+1]<<8|b[i+2]<<16|b[i+3]<<24)>>>0;
-  return {messageType:0x92,status:b[5],requestSequence:u32(6),timestampMs:u32(10),parameters,maxTargetMmS:u16(44)};
+  return {frame:{messageType:0x92,status:b[5],requestSequence:u32(6),timestampMs:u32(10),parameters,maxTargetMmS:u16(44)},error:''};
 }
+function response(value){return inspectResponse(value).frame;}
 function guidanceConfig(values){validate(values);return {sampleS:.1,headingTauS:values.guidanceTauMs/1000,crossWeight:values.guidanceQCrossX100/100,
   headingWeight:values.guidanceQYawX100/100,inputWeight:values.guidanceRInputX100/100,maxOffsetDeg:values.guidanceMaxCdeg/100};}
-module.exports={fields,defaults,kinds,validate,command,response,guidanceConfig};
+module.exports={fields,defaults,kinds,validate,command,response,inspectResponse,guidanceConfig};

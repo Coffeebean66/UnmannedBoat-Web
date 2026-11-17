@@ -31,6 +31,18 @@ function capability(payload){
 }
 function commandFrame(kind,sequence,values){validateOperation(kind,values);return Buffer.from(kind.startsWith('optimal')?optimal.command(kind,sequence,values):kind==='algorithm'?algorithms.command(sequence,values.algorithm):kind==='read'?P.encodeParameterReadRequest(sequence):kind==='flash'?P.encodeParameterSaveRequest(sequence,values):P.encodeParameterWriteRequest(sequence,values));}
 function envelope(token,uptimeMs,frame){const result=Buffer.alloc(72);result.write('BPC1',0,'ascii');Buffer.from(token,'hex').copy(result,4);result.writeUInt32LE(uptimeMs,12);frame.copy(result,16);return result;}
+// 仅为本次事务保留诊断，不接纳坏帧，也不保存令牌或原始报文到日志。
+function responseProblem(payload,pending){
+  if(!pending.kind.startsWith('optimal')||!Buffer.isBuffer(payload)||payload.length!==72||payload.toString('ascii',0,4)!=='BPC1'||
+    payload.subarray(4,12).toString('hex')!==pending.token||payload.readUInt32LE(12)!==pending.uptimeMs||payload.readUInt32LE(22)!==pending.sequence)return '';
+  return optimal.inspectResponse(payload.subarray(16)).error;
+}
+function timeoutMessage(pending){
+  if(!pending.kind.startsWith('optimal'))return '参数响应超时，结果未知，请读取确认后再试';
+  const operation={optimalRead:'读取LQR参数',optimalWrite:'写入LQR参数',optimalFlash:'保存LQR参数到Flash'}[pending.kind];
+  return operation+'响应超时：服务器未收到匹配本次请求的有效LQR响应（0x92）'+
+    '；请核对船端固件、服务器和网页版本是否配套，结果未知，请读取确认后再试';
+}
 function response(payload){
   if(!Buffer.isBuffer(payload)||payload.length!==72||payload.toString('ascii',0,4)!=='BPC1')return null;
   const frame=payload.subarray(16),decoded=optimal.response(frame)||algorithms.response(frame)||P.decodeParameterFrame(frame);if(!decoded)return null;
@@ -39,4 +51,4 @@ function response(payload){
   return {token:payload.subarray(4,12).toString('hex'),uptimeMs:payload.readUInt32LE(12),sequence:decoded.requestSequence,frame:Buffer.from(frame),status:decoded.status,
     kind:decoded.messageType===0x92?'optimal':decoded.messageType===0x91?'algorithm':'parameters',...(decoded.messageType===0x91?{algorithm:decoded.algorithm}:{})};
 }
-module.exports={RANGES,validateValues,validateOperation,capability,commandFrame,envelope,response};
+module.exports={RANGES,validateValues,validateOperation,capability,commandFrame,envelope,response,responseProblem,timeoutMessage};

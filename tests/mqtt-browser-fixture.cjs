@@ -26,7 +26,8 @@ function createFixtureServer(options={}){
       if(kind==='write'&&fixture.replyStatus===0)fixture.values={...values};
       const bytes=P.encodeParameterWriteRequest(321,fixture.values);bytes[3]=0x90;bytes[5]=fixture.replyStatus;new DataView(bytes.buffer).setUint16(54,P.crc16CcittFalse(bytes,2,52),true);return Buffer.from(bytes);
     }});
-  const server=createServer({...options,cloud:bridge,env:{...process.env,BOAT_CLOUD_ENABLED:'1',BOAT_CLOUD_PASSWORD:'mqtt-browser-legacy-test-only',BOAT_ACCOUNTS_ENABLED:'1',BOAT_ADMIN_USERNAME:'operator',BOAT_ADMIN_PASSWORD:'browser-admin-test-only',BOAT_GUEST_USERNAME:'observer',BOAT_GUEST_PASSWORD:'browser-guest-test-only',BOAT_AMAP_KEY:'',BOAT_AMAP_SECURITY_CODE:'',...options.env}});
+  // 非启动页专项使用关闭状态，避免等待欢迎页输入；专项用独立状态文件显式开启。
+  const server=createServer({...options,startupOptions:{defaultEnabled:false,file:path.join(__dirname,'../.test-output/browser-startup-default.json'),...options.startupOptions},cloud:bridge,env:{...process.env,BOAT_CLOUD_ENABLED:'1',BOAT_CLOUD_PASSWORD:'mqtt-browser-legacy-test-only',BOAT_ACCOUNTS_ENABLED:'1',BOAT_ADMIN_USERNAME:'operator',BOAT_ADMIN_PASSWORD:'browser-admin-test-only',BOAT_GUEST_USERNAME:'observer',BOAT_GUEST_PASSWORD:'browser-guest-test-only',BOAT_AMAP_KEY:'',BOAT_AMAP_SECURITY_CODE:'',...options.env}});
   const handler=server.listeners('request')[0];server.removeListener('request',handler);
   server.on('request',(req,res)=>{
     if(req.url!=='/__test/mqtt')return handler(req,res);

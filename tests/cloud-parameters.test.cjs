@@ -54,6 +54,58 @@ test('LQR HTTP retains admin/guest/origin guards, validates all model fields and
   const result=await waiting;assert.equal(result.status,200);assert.equal(O.response(Buffer.from(result.json.frame,'base64')).status,3);
 });
 
+test('LQR timeouts distinguish silence, legacy ACK, bad CRC and invalid layout without retries',async t=>{
+  for(const cause of ['silent','legacy','crc','padding','maxSpeed','value']){
+    const f=bridgeFixture(t,{parameterTimeoutMs:20});f.live();f.cap(TOKEN,5000,'boat-01',{}, {algorithm:1,lqr:true,optimalParameters:1});
+    const waiting=f.bridge.requestParameters('boat-01','optimalRead');
+    const expected={silent:/未收到.*有效LQR响应/,legacy:/通用参数响应.*0x90.*0x92/,crc:/CRC校验失败/,padding:/保留字节非零/,maxSpeed:/最大船速/,value:/船速模型稳态增益/}[cause];
+    const rejected=assert.rejects(waiting,error=>{
+      assert.equal(error.status,504);assert.match(error.message,expected);
+      assert.match(error.message,/读取LQR参数响应超时/);assert.ok(!error.message.includes(TOKEN));return true;
+    });
+    if(cause!=='silent'){
+      const payload=f.response(undefined,cause==='legacy'?{kind:'read'}:{});
+      if(cause==='crc')payload[30]^=1;
+      if(cause==='padding')payload[62]=1;
+      if(cause==='maxSpeed')payload.writeUInt16LE(0,60);
+      if(cause==='value')payload.writeUInt16LE(0,30);
+      if(['padding','maxSpeed','value'].includes(cause))payload.writeUInt16LE(P.crc16CcittFalse(payload.subarray(16),2,52),70);
+      assert.equal(f.bridge.acceptMessage('boats/boat-01/parameter-response',payload),false);
+    }
+    await new Promise(resolve=>setTimeout(resolve,30));await rejected;
+    assert.equal(f.client.sent.length,1);assert.equal(f.bridge.pendingParameters.size,0);
+  }
+});
+
+test('unrelated and retained replies cannot supply LQR diagnostics; a valid response still succeeds after a bad one',async t=>{
+  const f=bridgeFixture(t,{parameterTimeoutMs:20});f.live();f.cap(TOKEN,5000,'boat-01',{}, {algorithm:1,lqr:true,optimalParameters:1});
+  const waiting=f.bridge.requestParameters('boat-01','optimalRead');
+  const rejected=assert.rejects(waiting,error=>{
+    assert.match(error.message,/未收到.*有效LQR响应/);assert.doesNotMatch(error.message,/本次LQR响应被拒绝/);return true;
+  });
+  for(const bad of [f.response(undefined,{kind:'read',token:NEXT}),f.response(undefined,{kind:'read',uptimeMs:1}),f.response(undefined,{kind:'read',sequence:(f.client.sent.at(-1).payload.readUInt32LE(22)+1)>>>0})])
+    assert.equal(f.bridge.acceptMessage('boats/boat-01/parameter-response',bad),false);
+  assert.equal(f.bridge.acceptMessage('boats/another/parameter-response',f.response(undefined,{kind:'read'})),false);
+  assert.equal(f.bridge.acceptMessage('boats/boat-01/parameter-response',f.response(undefined,{kind:'read'}),{retain:true}),false);
+  await new Promise(resolve=>setTimeout(resolve,30));await rejected;
+  f.cap(NEXT,5100,'boat-01',{}, {algorithm:1,lqr:true,optimalParameters:1});
+  const valid=f.bridge.requestParameters('boat-01','optimalRead');
+  const payload=f.response();payload[30]^=1;
+  assert.equal(f.bridge.acceptMessage('boats/boat-01/parameter-response',payload),false);
+  const actual=f.response();assert.equal(f.bridge.acceptMessage('boats/boat-01/parameter-response',actual),true);
+  assert.deepEqual(await valid,actual.subarray(16));
+});
+
+test('LQR rejected-response detail survives the following capability token change and reaches HTTP callers',async t=>{
+  const f=await apiFixture(t),admin=await f.login();f.live();f.cap(TOKEN,5000,'boat-01',{}, {algorithm:1,lqr:true,optimalParameters:1});
+  const waiting=f.operate(admin,{deviceId:'boat-01',kind:'optimalRead'});await until(()=>f.client.sent.length===1);
+  const payload=f.response();payload[30]^=1;
+  assert.equal(f.bridge.acceptMessage('boats/boat-01/parameter-response',payload),false);
+  f.cap(NEXT,5100,'boat-01',{}, {algorithm:1,lqr:true,optimalParameters:1});
+  const result=await waiting;assert.equal(result.status,409);assert.match(result.json.error,/本次LQR响应被拒绝.*CRC校验失败/);
+  assert.ok(!result.json.error.includes(TOKEN));assert.equal(f.client.sent.length,1);
+});
+
 test('BPC1 protocol validates exact capability, complete typed ranges and CRC response',()=>{
   const cap=Buffer.from(JSON.stringify({version:1,token:TOKEN,uptimeMs:0xffffffff}));assert.deepEqual(PP.capability(cap),{token:TOKEN,uptimeMs:0xffffffff});
   for(const value of [{version:2,token:TOKEN,uptimeMs:1},{version:1,token:TOKEN.toUpperCase(),uptimeMs:1},{version:1,token:[TOKEN],uptimeMs:1},{version:1,token:TOKEN,uptimeMs:-1},{version:1,token:TOKEN,uptimeMs:2**32},{version:1,token:TOKEN,uptimeMs:1,extra:true}])assert.equal(PP.capability(Buffer.from(JSON.stringify(value))),null);

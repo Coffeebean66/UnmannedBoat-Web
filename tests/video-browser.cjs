@@ -55,7 +55,7 @@ async function main(){
   }
   const mqtt=new MQTT(),env={BOAT_CLOUD_ENABLED:'1',BOAT_MQTT_URL:'mqtt://local-video-fixture.invalid:1883',BOAT_ACCOUNTS_ENABLED:'1',BOAT_ADMIN_USERNAME:ADMIN.username,BOAT_ADMIN_PASSWORD:ADMIN.password,BOAT_GUEST_USERNAME:GUEST.username,BOAT_GUEST_PASSWORD:GUEST.password,BOAT_AMAP_KEY:'',BOAT_AMAP_SECURITY_CODE:'',BOAT_VIDEO_ALLOWED_ORIGINS:mediaOrigin};
   const bridge=new CloudBridge({env,connect:()=>mqtt,tickMs:250});
-  const server=createServer({env,cloud:bridge,accountOptions:{storeFile:path.join(run,'accounts.json')},mapOptions:{file:path.join(run,'map-settings.json')},mqttAdminOptions:{client:async()=>({devices:[],revision:'f'.repeat(64),canCreate:true})}});
+  const server=createServer({env,cloud:bridge,startupOptions:{defaultEnabled:false,file:path.join(run,'startup-settings.json')},accountOptions:{storeFile:path.join(run,'accounts.json')},mapOptions:{file:path.join(run,'map-settings.json')},mqttAdminOptions:{client:async()=>({devices:[],revision:'f'.repeat(64),canCreate:true})}});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));mqtt.emit('connect');
   const publish=(id,format='native',filename='sample.mp4',extra={})=>{
     const descriptor={version:1,url:mediaOrigin+'/'+filename+'?boat='+encodeURIComponent(id),format,title:id+' 船载摄像头',...extra};
