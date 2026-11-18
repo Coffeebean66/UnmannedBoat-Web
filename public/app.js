@@ -21,6 +21,7 @@
   const firmware=new BoatFirmwarePanel();
   // 驾驶导航先释放接管，再同步参数入口门槛，避免点击仍处于旧的 disabled 状态。
   const driver=new BoatDriverControl({toast,cameraControl,onOpenSettings:()=>{syncParameterAccess();$('settingsEntry').click();}});
+  const hostControl=new BoatHostControlPanel({toast});
   const fleet=new BoatFleetLink(cloud);
   const fleetView=new BoatFleetView({onSelect:id=>selectBoat(id),onConfigure:id=>openBoatSettings(id).catch(error=>toast(error.message)),onVideo:id=>openBoatVideo(id).catch(error=>toast(error.message)),onFirmware:id=>{if(driver.active||driver.pending)return toast('请先停船并退出电脑操控');firmware.open(id);}});
   const fleetMapView=new BoatFleetMapView({onSelect:id=>selectBoat(id)});
@@ -259,6 +260,8 @@
   function render() {
     if(document.hidden)return;
     driver.update({deviceId:cloud.authenticated?cloud.selectedId:'',connected:link.connected,authenticated:cloud.authenticated,
+      parameterBusy:params.busy||!!link.pending||firmware.busy});
+    hostControl.update({deviceId:cloud.authenticated?cloud.selectedId:'',connected:link.connected,authenticated:cloud.authenticated,
       parameterBusy:params.busy||!!link.pending||firmware.busy});
     syncParameterAccess();
     const fleetPage=window.BoatWorkspace?.current==='fleet',fleetState=fleet.state();
@@ -639,6 +642,6 @@
   window.addEventListener('resize',()=>render());
   window.addEventListener('boat-theme-change',()=>{readChartPalette();map?.setTheme(document.documentElement.dataset.theme);fleetMapView.setTheme(document.documentElement.dataset.theme);render();});
   // 提供浏览器控制台诊断入口，界面不显示原始字节流。
-  window.boatMonitor={link,params,viewer,horizon,compass,driver,track,map,mapVectors,mapMission,mapSettings,mqttDevices,fleet,fleetView,fleetMapView,videoView,cameraControl,videoSources,videoRecording,selectBoat,openBoatSettings,openBoatVideo,
+  window.boatMonitor={link,params,viewer,horizon,compass,driver,hostControl,track,map,mapVectors,mapMission,mapSettings,mqttDevices,fleet,fleetView,fleetMapView,videoView,cameraControl,videoSources,videoRecording,selectBoat,openBoatSettings,openBoatVideo,
     historyState:()=>({deviceId:cloud.selectedId,recordedAt:state.historical?.receivedAt||null,points:track.pointCount,chartSamples:state.history.length,message:state.historyMessage})};
 })();

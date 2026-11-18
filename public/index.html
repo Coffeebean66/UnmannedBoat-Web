@@ -31,6 +31,7 @@
   <link rel="stylesheet" href="driver-layout.css">
   <link rel="stylesheet" href="driver-immersive.css">
   <link rel="stylesheet" href="startup.css">
+  <link rel="stylesheet" href="host-control.css">
   <script defer src="vendor/leaflet/leaflet.js"></script>
   <script defer src="vendor/leaflet-rotate/leaflet-rotate.js"></script>
   <script defer src="vendor/hls/hls.min.js"></script>
@@ -73,6 +74,7 @@
   <script defer src="driver-gamepad.js"></script>
   <script defer src="driver-data-alerts.js"></script>
   <script defer src="driver-control.js"></script>
+  <script defer src="host-control.js"></script>
   <script defer src="mission-panel.js"></script>
   <script defer src="mission-track-panel.js"></script>
   <script defer src="mission-queue-preview.js"></script>
@@ -149,7 +151,7 @@
     <div class="sidebar-bottom">
       <div id="sourceSideNote" class="side-note"><span data-icon="radio"></span><div>MQTT 云端监测<p>无人船 / 服务器 / 浏览器</p></div></div>
       <button id="sidebarPlatformSettings" class="sidebar-setting"><span data-icon="settings"></span>平台设置<span data-icon="arrow"></span></button>
-      <div class="sidebar-version">无人船监测 <span>v1.81.1</span></div>
+      <div class="sidebar-version">无人船监测 <span>v1.82.0</span></div>
     </div>
   </aside>
   <div class="app-shell">
@@ -300,7 +302,7 @@
         <article class="card kpi-card">
           <div class="kpi-heading"><span class="card-icon teal" data-icon="location"></span><h2>目标船速 <small>Target</small></h2></div>
           <div class="kpi-value"><strong id="boatTarget">--</strong><span>m/s</span></div>
-          <p>遥控请求 <b id="boatRequested">--</b> m/s</p>
+          <p>控制请求 <b id="boatRequested">--</b> m/s</p>
         </article>
         <article class="card kpi-card">
           <div class="kpi-heading"><span class="card-icon blue" data-icon="compass"></span><h2>融合航向 <small>Heading</small></h2></div>
@@ -324,6 +326,11 @@
           <div class="meter"><i id="boatMeter"></i></div>
         </article>
       </section>
+      <article id="hostControlPanel" class="card host-control-card" aria-label="上位机控制与目标值">
+        <div class="card-title"><div class="title-with-icon"><span data-icon="sliders"></span><h2>上位机控制</h2><span id="hostControlStatus" class="state" role="status">等待实时连接</span></div><button id="hostControlToggle" type="button" class="small-button" data-host-control-toggle aria-pressed="false" hidden disabled>开启上位机控制</button></div>
+        <dl class="host-control-values"><div><dt>上位机目标速度</dt><dd><b id="hostTargetSpeed">--</b><small>m/s</small></dd></div><div><dt>上位机目标航向 · 真北</dt><dd><b id="hostTargetHeading">--</b><small>°</small></dd></div><div><dt>串口数据年龄</dt><dd id="hostTargetAge">--</dd></div></dl>
+        <p id="hostControlNotice" class="host-control-notice" role="status">请先选择无人船</p>
+      </article>
       <section class="grid navigation-grid" aria-label="实时航行监测">
         <div class="workspace-slot" data-workspace-slot="overview-map">
         <article id="navigation" class="card map-card">
@@ -427,6 +434,8 @@
         <article class="driver-console" aria-label="驾驶操控控制台">
           <div class="driver-console-heading driver-panel-heading"><h2><i data-icon="sliders"></i>驾驶控制</h2><details id="driverControlOptions" class="driver-control-options"><summary title="输入设备、测试场景与操作说明"><i data-icon="settings"></i><span class="sr-only">操作设置</span></summary><div class="driver-control-options-panel">
             <strong>驾驶选项</strong>
+            <button id="driverHostControlToggle" type="button" class="small-button" data-host-control-toggle aria-pressed="false" hidden disabled>开启上位机控制</button>
+            <p class="driver-option-hint">上位机目标：<b id="driverHostTargets">-- m/s · --°</b>。开启后由串口持续控制，关闭网页仍继续；关闭上位机控制后立即停船。</p>
             <label class="driver-source-field">控制输入<select id="driverInputSource"><option value="keyboard">键盘</option><option value="gamepad">游戏手柄 · Xbox 标准</option></select></label>
             <section id="driverGamepadPanel" class="driver-gamepad-panel" aria-label="游戏手柄设置" hidden>
               <label class="driver-source-field">选择手柄<select id="driverGamepadDevice"><option value="">连接手柄后按一次按钮</option></select></label>

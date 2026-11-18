@@ -8,6 +8,8 @@ const INPUT={mode:1,throttle:0,turn:0,targetHeading:9000};
 const ENV={BOAT_CLOUD_ENABLED:'1',BOAT_CLOUD_ORIGIN:'https://boat.test',BOAT_CLOUD_PASSWORD:'legacy-test-password-fixture',BOAT_ACCOUNTS_ENABLED:'1',BOAT_ADMIN_USERNAME:'control-admin',BOAT_ADMIN_PASSWORD:'control test password',BOAT_GUEST_USERNAME:'control-guest',BOAT_GUEST_PASSWORD:'654321'};
 function telemetry(){const packet=Buffer.alloc(176);for(const [offset,length,version,type]of [[0,64,1,1],[64,40,2,2],[104,36,2,3],[140,36,1,4]]){const frame=packet.subarray(offset,offset+length);frame.set([0xa5,0x5a,version,type,length]);frame.writeUInt16LE(UART.crc16CcittFalse(frame,2,length-4),length-2);}return packet;}
 function status(values={}){return {version:1,token:TOKEN,uptimeMs:1000,state:0,leaseId:P.ZERO,sequence:0,mode:1,reason:0,enabled:true,timeoutMs:500,...values};}
+const HOST={enabled:false,valid:true,targetSpeedMmS:-1234,targetHeadingCdeg:35999,ageMs:0,timeoutMs:300};
+function hostStatus(values={}){return status({testMode:false,hostControl:{...HOST},...values});}
 class MQTT extends EventEmitter{
   constructor(){super();this.connected=true;this.sent=[];this.subscriptions=[];}
   subscribe(topics,options,callback){this.subscriptions.push(topics);callback?.(null,topics.map(topic=>({topic,qos:0})));}
@@ -46,6 +48,80 @@ test('BDC1 uses a stable forty-byte signed little-endian protocol vector and str
   assert.deepEqual(P.status(Buffer.from(JSON.stringify(status()))),status());
   for(const value of [{...status(),version:2},{...status(),timeoutMs:501},{...status(),leaseId:'unsafe'},{...status(),token:P.ZERO},{...status(),token:[TOKEN]},{...status(),state:3},{...status(),sequence:-1},{...status(),extra:true}])assert.equal(P.status(Buffer.from(JSON.stringify(value))),null);
   for(const value of [{...INPUT,throttle:1001},{...INPUT,mode:'1'},{...INPUT,targetHeading:36000},{...INPUT,turn:NaN}])assert.throws(()=>P.controls(value),{status:400});
+});
+
+test('host targets retain signed speed and full-circle heading with strict optional status compatibility',()=>{
+  const value=hostStatus();assert.deepEqual(P.status(Buffer.from(JSON.stringify(value))),value);
+  const active=hostStatus({state:3,mode:2,leaseId:CLIENT,hostControl:{...HOST,enabled:true}});
+  assert.deepEqual(P.status(Buffer.from(JSON.stringify(active))),active);
+  assert.ok(Buffer.byteLength(JSON.stringify(active))<448);
+  for(const changes of [{enabled:true},{valid:'true'},{targetSpeedMmS:-32769},{targetSpeedMmS:32768},{targetHeadingCdeg:36000},{ageMs:300},{timeoutMs:1000},{extra:1}])
+    assert.equal(P.status(Buffer.from(JSON.stringify(hostStatus({hostControl:{...HOST,...changes}})))),null,JSON.stringify(changes));
+  const invalid=hostStatus({hostControl:{...HOST,valid:false,targetHeadingCdeg:65535,ageMs:65535}});
+  assert.ok(P.status(Buffer.from(JSON.stringify(invalid))),'Invalid raw targets are diagnostic values and cannot become live commands');
+  const command=P.command({token:TOKEN,uptimeMs:1000,leaseId:CLIENT,sequence:1,action:'host_enable',mode:2,throttle:0,turn:0,targetHeading:0});
+  assert.equal(command[28],5);assert.equal(command[29],2);assert.equal(command.length,40);
+});
+
+test('host enable waits for actual MCU confirmation and excludes browser, mission, parameter and OTA ownership',async t=>{
+  const f=fixture(t);f.publish(hostStatus({uptimeMs:1100}));
+  const pending=f.manager.setHostControl('boat-01',true),command=f.client.sent.at(-1);let done=false;
+  pending.then(()=>{done=true;});assert.equal(command.payload[28],5);assert.equal(f.manager.hostSnapshot('boat-01').busy,true);
+  assert.throws(()=>f.manager.acquire('boat-01','session-a',CLIENT,INPUT),{status:409});
+  await assert.rejects(f.bridge.requestParameters('boat-01','read'),{status:409});
+  f.bridge.firmwareSubscribed=true;assert.throws(()=>f.bridge.claimFirmware('boat-01'),{status:409});
+  const ack={state:3,testMode:false,hostControl:{...HOST,enabled:true}};
+  assert.equal(f.ack(command,{...ack,token:NEXT},'boat-02'),true);await Promise.resolve();assert.equal(done,false);
+  const retained=hostStatus({...ack,leaseId:command.payload.subarray(16,24).toString('hex'),sequence:1,mode:2,uptimeMs:1100});
+  assert.equal(f.publish(retained,'boat-01',{retain:true}),false);assert.equal(done,false);
+  f.ack(command,ack);const value=await pending;
+  assert.equal(value.hostControl.enabled,true);assert.equal(value.hostControl.targetSpeedMmS,-1234);
+  assert.equal(f.manager.snapshot('boat-01').source,'host');assert.equal(f.manager.snapshot('boat-01').ready,false);
+  assert.throws(()=>f.manager.acquire('boat-01','mission-owner',CLIENT,INPUT,{source:'mission'}),{status:409});
+  f.manager.releaseOwner('session-a');assert.equal(f.client.sent.at(-1),command,'Account/browser departure does not manufacture a stop for local serial control');
+  const stopping=f.manager.setHostControl('boat-01',false),stop=f.client.sent.at(-1);
+  assert.equal(stop.payload[28],6);assert.equal(stop.payload.subarray(16,24).toString('hex'),command.payload.subarray(16,24).toString('hex'));
+  assert.equal(stop.payload.readUInt32LE(24),2);assert.equal(f.bridge.controlLocks.has('boat-01'),true);
+  f.ack(stop,{state:2,testMode:false,hostControl:{...HOST,enabled:false}});
+  assert.equal((await stopping).hostControl.enabled,false);assert.equal(f.bridge.controlLocks.has('boat-01'),false);
+});
+
+test('host status restores ownership after server restart and stale target readings are never shown as valid',async t=>{
+  const f=fixture(t);f.publish(hostStatus({uptimeMs:1100,state:3,mode:2,leaseId:CLIENT,sequence:1,hostControl:{...HOST,enabled:true}}));
+  assert.equal(f.bridge.controlLocks.has('boat-01'),true);assert.equal(f.manager.hostSnapshot('boat-01').hostControl.valid,true);
+  f.setTime(f.now()+300);assert.equal(f.manager.hostSnapshot('boat-01').hostControl.valid,false);
+  assert.throws(()=>f.manager.acquire('boat-01','session-a',CLIENT,INPUT),{status:409});
+  f.live();f.publish(hostStatus({uptimeMs:1500,reason:7,state:3,mode:2,leaseId:CLIENT,sequence:1,hostControl:{...HOST,enabled:true,valid:false,ageMs:300}}));
+  assert.match(f.manager.hostSnapshot('boat-01').message,/超时/);
+  f.publish(hostStatus({token:NEXT,uptimeMs:0}));
+  assert.equal(f.bridge.controlLocks.has('boat-01'),false);assert.equal(f.manager.snapshot('boat-01').ready,true);
+});
+
+test('a host toggle timeout reports an unknown result and recognizes a later real MCU state without replay',async t=>{
+  const f=fixture(t);f.publish(hostStatus({uptimeMs:1100}));
+  const pending=f.manager.setHostControl('boat-01',true),command=f.client.sent.at(-1);
+  f.setTime(f.now()+1800);f.live();f.manager.refresh();
+  await assert.rejects(pending,error=>error.status===504&&/结果未知/.test(error.message));
+  assert.equal(f.client.sent.length,1);assert.equal(f.manager.hostOperations.size,0);
+  f.ack(command,{uptimeMs:2900,state:3,testMode:false,hostControl:{...HOST,enabled:true}});
+  assert.equal(f.manager.hostSnapshot('boat-01').hostControl.enabled,true);assert.equal(f.bridge.controlLocks.has('boat-01'),true);
+});
+
+test('host HTTP interface is read-only for guests and requires same-origin operator requests plus actual ACK',async t=>{
+  const f=await apiFixture(t);f.publish(hostStatus({uptimeMs:1100}));
+  const route='/api/cloud/host-control';
+  assert.equal((await f.call(route+'?deviceId=boat-01')).status,401);
+  const guest=await f.login('guest');
+  const read=await f.call(route+'?deviceId=boat-01',{cookie:guest});assert.equal(read.status,200);assert.equal(read.json.hostControl.targetSpeedMmS,-1234);
+  assert.equal(read.json.leaseId,undefined);assert.equal(read.json.token,undefined);
+  assert.equal((await f.call(route,{cookie:guest,method:'POST',body:{deviceId:'boat-01',enabled:true}})).status,403);
+  const admin=await f.login();
+  assert.equal((await f.call(route,{cookie:admin,origin:'https://other.test',method:'POST',body:{deviceId:'boat-01',enabled:true}})).status,403);
+  assert.equal((await f.call(route,{cookie:admin,method:'POST',body:{deviceId:'boat-01',enabled:'true'}})).status,400);
+  const pending=f.call(route,{cookie:admin,method:'POST',body:{deviceId:'boat-01',enabled:true}});
+  await until(()=>f.client.sent.some(command=>command.payload[28]===5));
+  f.ack(undefined,{state:3,testMode:false,hostControl:{...HOST,enabled:true}});
+  const result=await pending;assert.equal(result.status,200);assert.equal(result.json.hostControl.enabled,true);
 });
 
 test('normal PWM accepts empty sensor-validity telemetry without a test flag and retains acknowledged control',async t=>{

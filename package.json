@@ -1,6 +1,6 @@
 {
   "name": "unmanned-boat-monitor-web",
-  "version": "1.81.1",
+  "version": "1.82.0",
   "private": true,
   "engines": {
     "node": ">=18"
@@ -20,6 +20,7 @@
     "test:browser": "node tests/browser-smoke.cjs",
     "test:startup:browser": "node tests/startup-browser.cjs",
     "test:theme:browser": "node tests/theme-browser.cjs",
+    "test:host:browser": "node tests/host-control-browser.cjs",
     "test:amap:browser": "node tests/amap-browser.cjs",
     "test:rotation:browser": "node tests/map-rotation-browser.cjs",
     "test:satellite:browser": "node tests/satellite-browser.cjs",

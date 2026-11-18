@@ -107,6 +107,7 @@
         if(event.detail?.selectedId!==this.context.deviceId){this.stop('无人船已切换，已停止原船操控');this.nodes.driverMapOptions.open=false;}
       });
       if(auth)this.listen(auth,'change',()=>{if(!this.admin())this.stop('驾驶权限已失效，已停船并退出操控');this.render();});
+      this.listen(window,'boat-host-control-change',event=>{if(event.detail?.deviceId===this.context.deviceId){this.lastPoll=0;this.poll();}});
       this.layout=new window.BoatDriverLayout({document,onEditingChange:editing=>{
         if(editing){this.keys.clear();this.stop('已进入布局编辑，已停船并退出操控');}
         else if(this.stopReason==='已进入布局编辑，已停船并退出操控'){this.stopReason='';this.message='布局已保存，点击启用操控继续驾驶。';}
@@ -462,7 +463,7 @@
       this.nodes.driverLinkStatus.dataset.connected=String(this.context.connected);
       this.text('driverLinkStatus',this.context.connected?'实时遥测已连接':'等待实时连接');
       this.text('driverMqttStatus',this.context.connected?'MQTT · 已连接':'MQTT · 未连接');
-      this.text('driverSystemMode',this.active?(this.testMode?'手动驾驶 · 测试场景':'手动驾驶 · 已接管'):this.pending?'手动驾驶 · 等待确认':'监测待机');
+      this.text('driverSystemMode',this.remote?.state===3?'上位机控制':this.active?(this.testMode?'手动驾驶 · 测试场景':'手动驾驶 · 已接管'):this.pending?'手动驾驶 · 等待确认':'监测待机');
       const utc=new Date();this.text('driverUtc','UTC '+utc.toISOString().slice(11,19));this.nodes.driverUtc.dateTime=utc.toISOString();
       this.text('driverOperator',this.auth?.user?this.auth.user.username+' · '+({admin:'管理员',driver:'驾驶员',guest:'访客'}[this.auth.user.role]):'未登录');
       this.nodes.driverAccount.title=this.auth?.user?'切换登录账户':'登录平台';
@@ -485,8 +486,8 @@
         this.nodes.driverMapLayer.querySelector('[value="tianditu"]').disabled=map.config?.tianditu?.configured!==true;
       }
       const state=this.active?(this.testMode?'test':'active'):this.pending?'pending':'idle';this.nodes.driverState.dataset.state=state;
-      this.text('driverState',this.active?(this.testMode?'测试场景 · 已接管':'电脑已接管'):this.pending?'等待船端确认':this.remote?.state===2?'停船保护':'监测待机');
-      this.text('driverTakeoverStatus',this.active?(this.testMode?'测试接管':'电脑已接管'):this.pending?'等待船端确认':this.remote?.state===2?'停船保护':'未接管');
+      this.text('driverState',this.remote?.state===3?'上位机已接管':this.active?(this.testMode?'测试场景 · 已接管':'电脑已接管'):this.pending?'等待船端确认':this.remote?.state===2?'停船保护':'监测待机');
+      this.text('driverTakeoverStatus',this.remote?.state===3?'上位机已接管':this.active?(this.testMode?'测试接管':'电脑已接管'):this.pending?'等待船端确认':this.remote?.state===2?'停船保护':'未接管');
       this.nodes.driverTakeoverStatus.dataset.state=state;
       this.nodes.driverEnable.disabled=!this.permitted()||this.active||this.pending||!this.remote?.ready||(this.gamepad&&!this.gamepad.canAcquire())||(this.testMode&&!this.remote?.testSupported)||(Number(this.nodes.driverMode.value)===2&&!Number.isFinite(this.actualHeading));
       this.nodes.driverTestMode.hidden=!this.admin();

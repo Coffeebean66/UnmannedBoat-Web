@@ -21,20 +21,31 @@ function createControlApi({bridge,accounts,service,serviceOptions={}}={}){
   const manager=service||new ControlService({bridge,...serviceOptions});let closed=false;
   const unsubscribe=accounts?.onInvalidate?.(key=>manager.releaseOwner(key))||(()=>{});
   const json=(res,status,value)=>{if(res.destroyed||res.writableEnded)return;res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
-  function authorize(req,res,owner){
+  function authorize(req,res,owner,readOnly=false){
     if(!accounts?.enabled||closed)throw fault(503,'网页操控需要启用平台账户');
     if(!owner||!accounts.isActive(owner)||req.aborted||res.destroyed)throw fault(401,'请登录有效的管理员或驾驶员账户');
-    if(!canOperate(owner.value))throw fault(403,'仅管理员或驾驶员可以接管无人船');
+    if(!readOnly&&!canOperate(owner.value))throw fault(403,'仅管理员或驾驶员可以接管无人船');
   }
   return {
     manager,
     async handle(req,res,url){
-      if(url.pathname!=='/api/cloud/control')return false;
+      if(!['/api/cloud/control','/api/cloud/host-control'].includes(url.pathname))return false;
+      const host=url.pathname==='/api/cloud/host-control';
       let owner;
       try{
-        owner=accounts?.sessionFor?.(req);authorize(req,res,owner);
+        owner=accounts?.sessionFor?.(req);authorize(req,res,owner,host&&req.method==='GET');
         const read=req.method==='GET',browserRead=read&&!req.headers.origin&&(!req.headers['sec-fetch-site']||req.headers['sec-fetch-site']==='same-origin');
         if(!browserRead&&!accounts.sameOrigin(req))throw fault(403,'请从本站发起网页操控');
+        if(host){
+          if(read){
+            if([...url.searchParams.keys()].some(key=>key!=='deviceId')||url.searchParams.getAll('deviceId').length!==1||!DEVICE.test(url.searchParams.get('deviceId')||''))throw fault(400,'无人船标识不正确');
+            json(res,200,manager.hostSnapshot(url.searchParams.get('deviceId')));return true;
+          }
+          if(req.method!=='POST'||url.search)throw fault(405,'上位机控制仅支持GET或POST');
+          const input=await readJson(req);authorize(req,res,owner);
+          if(!input||Object.keys(input).length!==2||!Object.hasOwn(input,'deviceId')||!Object.hasOwn(input,'enabled'))throw fault(400,'上位机开关字段不正确');
+          const result=await manager.setHostControl(input.deviceId,input.enabled);authorize(req,res,owner);json(res,200,result);return true;
+        }
         if(read){
           if([...url.searchParams.keys()].some(key=>!['deviceId','clientId'].includes(key))||url.searchParams.getAll('deviceId').length!==1||url.searchParams.getAll('clientId').length!==1)throw fault(400,'驾驶状态请求字段不正确');
           const id=url.searchParams.get('deviceId'),clientId=url.searchParams.get('clientId');

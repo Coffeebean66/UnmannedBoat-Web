@@ -4,12 +4,13 @@
 const crypto=require('node:crypto');
 const P=require('./control-protocol');
 const DEVICE=/^[A-Za-z0-9_-]{1,64}$/;
-const REASONS=['正常','驾驶指令超时，已停船','已退出网页操控','紧急停止','网络中断，已停船','固件升级锁定'];
+const REASONS=['正常','驾驶指令超时，已停船','已退出网页操控','紧急停止','网络中断，已停船','固件升级锁定','上位机目标无效，已停船','上位机串口指令超时，已停船'];
 const fault=(status,message)=>Object.assign(Error(message),{status});
 class ControlService {
   constructor({bridge,now=Date.now,ackTimeoutMs=1800,missionAckTimeoutMs=5000,missionAcquireRetryMs=200,inputTimeoutMs=600,capabilityFreshMs=750,stopTimeoutMs=1200,pollMs=50}={}){
     this.bridge=bridge;this.now=now;this.ackTimeoutMs=ackTimeoutMs;this.inputTimeoutMs=inputTimeoutMs;
     this.capabilityFreshMs=capabilityFreshMs;this.stopTimeoutMs=stopTimeoutMs;this.missionAckTimeoutMs=missionAckTimeoutMs;this.missionAcquireRetryMs=missionAcquireRetryMs;this.caps=new Map();this.jobs=new Map();this.closed=false;
+    this.hostOperations=new Map();this.hostLocks=new Set();
     this.onCapability=event=>this.accept(event);this.onState=event=>{
       if(!bridge.brokerConnected)this.caps.clear();else if(event?.device?.online===false)this.caps.delete(event.device.id);
       this.refresh();
@@ -23,11 +24,13 @@ class ControlService {
   snapshot(id,owner='',clientId=''){
     const cap=this.cap(id),job=this.jobs.get(id),owned=this.own(job,owner,clientId),supported=!!cap;
     const active=!!(cap&&this.live(id)&&cap.state===1),available=!this.closed&&this.bridge?.enabled&&this.bridge?.brokerConnected&&this.bridge?.controlSubscribed&&this.live(id);
-    const ready=!!(available&&cap&&cap.state!==1&&!job&&!this.bridge.firmwareLocks?.has(id)&&!this.bridge.pendingParameters?.has(id));
+    const ready=!!(available&&cap&&cap.state!==1&&cap.state!==3&&!job&&!this.hostOperations.has(id)&&!this.bridge.firmwareLocks?.has(id)&&!this.bridge.pendingParameters?.has(id));
     const state=cap?.state??null,status=job?.status||(active?'active':state===2?'hold':available&&cap?'idle':'unavailable');
     let message=this.closed||!this.bridge?.enabled||!this.bridge?.brokerConnected?'云端 MQTT 通道未就绪':!this.live(id)?'船端实时遥测未就绪或已超时':!this.bridge.controlSubscribed?'驾驶主题订阅未就绪，请检查 MQTT 驾驶主题权限及管理组件':!cap?'尚未收到有效的船端驾驶状态，请检查固件及 MQTT 驾驶主题权限':job?.status==='acquiring'?'等待单片机确认接管':job?.status==='stopping'?'正在停船并释放操控':active?(owned?'网页已接管，遥控器无效':'该船已由其他驾驶会话接管'):REASONS[cap?.reason??0];
     if(job?.source==='mission')message=job.status==='stopping'?'任务正在停船并释放控制':'服务器航线任务正在控制此船，请先停止任务';
-    return {deviceId:id,supported,ready,active,owned,state,status,source:job?.source||null,reason:cap?.reason??null,message,mode:cap?.mode??0,
+    if(cap?.state===3)message=cap.hostControl?.valid?'上位机已接管，SBUS及网页驾驶不可用':REASONS[cap.reason]||'上位机已接管，等待有效目标';
+    return {deviceId:id,supported,ready,active,owned,state,status,source:cap?.state===3?'host':job?.source||null,reason:cap?.reason??null,message,mode:cap?.mode??0,
+      hostSupported:!!cap?.hostControl,hostControl:this.hostSnapshot(id).hostControl,
       testSupported:!!cap&&Object.hasOwn(cap,'testMode'),testMode:cap?.testMode===true,
       sequence:cap?.sequence??0,clientSequence:owned?job.lastBrowserSequence:0,...(owned?{leaseId:job.leaseId}:{}),timeoutMs:500};
   }
@@ -44,9 +47,19 @@ class ControlService {
     // 一个连接代次内状态只前进；较旧的 MQTT 状态不得回退已接受的 ACK。
     if(previous&&previous.token===value.token){
       const delta=(value.uptimeMs-previous.uptimeMs)>>>0;
-      if(delta>0x7fffffff||delta===0&&(value.leaseId===previous.leaseId?value.sequence<=previous.sequence:value.leaseId!==job?.leaseId))return;
+      const expectedLease=job?.leaseId||this.hostOperations.get(deviceId)?.leaseId;
+      if(delta>0x7fffffff||delta===0&&(value.leaseId===previous.leaseId?value.sequence<=previous.sequence:value.leaseId!==expectedLease))return;
     }
     this.caps.set(deviceId,{...value,receivedAt:this.now()-sourceAge});
+    // 从船端真实状态恢复互斥，即使服务器重启，也不能向已被上位机接管的船启动任务/OTA。
+    if(value.state===3){this.hostLocks.add(deviceId);this.bridge.controlLocks?.add(deviceId);}
+    else if(this.hostLocks.delete(deviceId)&&!job&&!this.hostOperations.has(deviceId))this.bridge.releaseControl?.(deviceId);
+    const hostOperation=this.hostOperations.get(deviceId);
+    if(hostOperation){
+      if(value.token!==hostOperation.token)this.finishHost(hostOperation,fault(409,'船端连接已变化，上位机开关结果未知，请刷新确认'));
+      else if(value.leaseId===hostOperation.leaseId&&value.sequence>=hostOperation.sequence&&
+        (hostOperation.enabled?value.state===3:value.state!==3))this.finishHost(hostOperation);
+    }
     if(!job)return;
     if(value.token!==job.token){this.drop(job,fault(409,'船端连接已变化，网页操控已取消'));return;}
     if(value.leaseId===job.leaseId&&value.state===1&&!!value.testMode!==!!job.input.testMode){
@@ -68,13 +81,48 @@ class ControlService {
     if(input.throttle!==0||input.turn!==0)throw fault(400,'接管时运动输入必须归零');
     this.assertReady(id);const cap=this.cap(id);
     if(input.testMode&&!Object.hasOwn(cap,'testMode'))throw fault(409,'当前船端未声明测试场景能力，请先更新单片机固件');
-    if(this.jobs.has(id)||cap.state===1)throw fault(409,'这艘船已有驾驶会话，请先停止并释放操控');
+    if(this.jobs.has(id)||this.hostOperations.has(id)||cap.state===1||cap.state===3)throw fault(409,cap.state===3?'请先关闭上位机控制，再启用网页驾驶或航线任务':'这艘船已有驾驶会话，请先停止并释放操控');
     this.bridge.claimControl(id);
     const job={id,owner,clientId,source,leaseId:crypto.randomBytes(8).toString('hex'),token:cap.token,sequence:0,lastBrowserSequence:0,lastInputAt:this.now(),startedAt:this.now(),status:'acquiring',input:{...input},resolve:null,reject:null};
     this.jobs.set(id,job);
     const promise=new Promise((resolve,reject)=>{job.resolve=resolve;job.reject=reject;});
     this.send(job,'acquire',input).catch(()=>this.stopJob(job,'stop',fault(503,'接管指令发送失败，已取消操控')));
     return promise;
+  }
+  hostSnapshot(id){
+    const cap=this.cap(id),host=cap?.hostControl,live=this.live(id);
+    const available=!this.closed&&this.bridge?.enabled&&this.bridge?.brokerConnected&&this.bridge?.controlSubscribed&&live&&!!cap;
+    const busy=this.hostOperations.has(id);
+    const ready=!!(available&&host&&!busy&&!this.jobs.has(id)&&cap.state!==1&&!this.bridge.firmwareLocks?.has(id)&&!this.bridge.pendingParameters?.has(id));
+    const age=host?Math.min(65535,host.ageMs+Math.max(0,this.now()-cap.receivedAt)):null;
+    return {deviceId:id,supported:!!host,ready,busy,online:!!available,reason:cap?.reason??null,
+      message:!available?'等待船端实时状态':!host?'当前固件不支持上位机控制，请先更新单片机固件':busy?'等待单片机确认控制源切换':cap.state===3?(host.valid?'上位机正在控制，遥控器与网页驾驶已屏蔽':REASONS[cap.reason]||'上位机已启用，等待有效目标'):'上位机控制未启用',
+      hostControl:host?{...host,ageMs:age,valid:live&&host.valid&&age<host.timeoutMs}:null};
+  }
+  setHostControl(id,enabled){
+    if(!DEVICE.test(id||'')||typeof enabled!=='boolean')throw fault(400,'无人船或上位机开关格式不正确');
+    this.assertReady(id);const cap=this.cap(id);
+    if(!cap.hostControl)throw fault(409,'当前固件不支持上位机控制，请先更新单片机固件');
+    if(this.hostOperations.has(id)||this.jobs.has(id)||cap.state===1)throw fault(409,'请先停止网页驾驶或航线任务，再切换上位机控制');
+    if(this.bridge.firmwareLocks?.has(id)||this.bridge.pendingParameters?.has(id))throw fault(409,'请等待调参或固件升级完成');
+    if((cap.state===3)===enabled)return Promise.resolve(this.hostSnapshot(id));
+    if(!enabled&&cap.sequence===0xffffffff)throw fault(409,'控制序号已耗尽，请重启船端后切换');
+    if(!this.bridge.controlLocks?.has(id))this.bridge.claimControl(id);
+    const operation={id,enabled,token:cap.token,leaseId:enabled?crypto.randomBytes(8).toString('hex'):cap.leaseId,
+      sequence:enabled?1:cap.sequence+1,startedAt:this.now()};
+    const promise=new Promise((resolve,reject)=>{operation.resolve=resolve;operation.reject=reject;});
+    this.hostOperations.set(id,operation);
+    const uptimeMs=(cap.uptimeMs+Math.max(0,Math.floor(this.now()-cap.receivedAt)))>>>0;
+    this.bridge.publishControl(id,P.command({token:cap.token,uptimeMs,leaseId:operation.leaseId,sequence:operation.sequence,
+      action:enabled?'host_enable':'host_disable',mode:2,throttle:0,turn:0,targetHeading:0,testMode:false}))
+      .catch(()=>this.finishHost(operation,fault(503,'控制源指令发送失败，结果未知，请刷新船端状态确认')));
+    return promise;
+  }
+  finishHost(operation,error){
+    if(this.hostOperations.get(operation.id)!==operation)return;
+    this.hostOperations.delete(operation.id);
+    if(!this.hostLocks.has(operation.id)&&!this.jobs.has(operation.id))this.bridge.releaseControl?.(operation.id);
+    error?operation.reject(error):operation.resolve(this.hostSnapshot(operation.id));
   }
   command(id,owner,clientId,leaseId,sequence,action,input){
     this.assertClient(id,owner,clientId);P.controls(input);
@@ -126,6 +174,8 @@ class ControlService {
   refresh(){
     if(this.closed)return;
     const now=this.now();
+    for(const operation of this.hostOperations.values())if(now-operation.startedAt>=this.ackTimeoutMs)
+      this.finishHost(operation,fault(504,'单片机未确认切换：请确认双电调反馈有效且停稳满1秒；结果未知，请刷新状态确认'));
     for(const job of [...this.jobs.values()]){
       if(job.status==='stopping'){if(now-job.stopAt>=this.stopTimeoutMs)this.drop(job);continue;}
       if(!this.bridge.brokerConnected||!this.live(job.id)||!this.cap(job.id))this.stopJob(job,'stop',fault(503,'驾驶数据已断开，已取消操控'));
@@ -138,6 +188,7 @@ class ControlService {
   }
   close(){
     if(this.closed)return;
+    for(const operation of this.hostOperations.values())this.finishHost(operation,fault(503,'服务正在停止，开关结果未知，请刷新确认'));
     for(const job of [...this.jobs.values()]){this.stopJob(job,'stop',fault(503,'服务正在停止，已取消操控'));this.drop(job);}
     this.closed=true;clearInterval(this.timer);
     this.bridge?.removeListener?.('control-capability',this.onCapability);this.bridge?.removeListener?.('control-state',this.onCapability);this.bridge?.removeListener?.('state',this.onState);this.caps.clear();
